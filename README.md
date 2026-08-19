@@ -1,14 +1,10 @@
----
-
-# 🧠 BrainPress
+## 🧠 BrainPress
 
 **如果 Obsidian 是你的第二大脑，那 BrainPress 就是大脑印刷机。**  
 **If Obsidian is your second brain, then BrainPress is your brain printer.**
 
 用 Obsidian 写笔记，用 BrainPress 印成书。  
 Write with Obsidian, print with BrainPress.
-
----
 
 ## 📖 这是什么？ | What is this?
 
