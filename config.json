@@ -1,0 +1,55 @@
+{
+    "workspace": "\/www\/wwwroot\/docs.dasiwo.com",
+    "session_name": "wmm_panel",
+    "storage": "local",
+    "webdav_user": "test",
+    "webdav_pass": "test",
+    "minio_endpoint": "",
+    "minio_access": "",
+    "minio_secret": "",
+    "minio_bucket": "",
+    "render_webdav": true,
+    "render_minio": false,
+    "password_hash": "$2y$10$hek8pNnummy\/TmIG4mD3TO8gm\/4qYa.K\/.Ni9MHkf6ODi6eqshY2O",
+    "render_custom": false,
+    "custom_path": "",
+    "custom_paths": [
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        }
+    ],
+    "site_title": "BrainPress",
+    "default_light": false,
+    "front_drawer_expanded": false,
+    "home_article": "\/Website-Framework\/Introduction.md",
+    "exclude_paths": [
+        "images"
+    ],
+    "pinned_dir": "",
+    "pinned_articles": [],
+    "expanded_dirs": [],
+    "pinned_dirs": [],
+    "api_token": "",
+    "ai_api_key": "",
+    "ai_model": "deepseek-chat",
+    "ai_mode": "hybrid",
+    "ai_enabled": false,
+    "graph_show_labels": true
+}
