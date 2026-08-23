@@ -1,14 +1,10 @@
----
-
-# 🧠 BrainPress
+## 🧠 BrainPress
 
 **如果 Obsidian 是你的第二大脑，那 BrainPress 就是大脑印刷机。**  
 **If Obsidian is your second brain, then BrainPress is your brain printer.**
 
 用 Obsidian 写笔记，用 BrainPress 印成书。  
 Write with Obsidian, print with BrainPress.
-
----
 
 ## 📖 这是什么？ | What is this?
 
@@ -23,8 +19,6 @@ Write with Obsidian, print with BrainPress.
 It also includes a **PDF reader** and a **WebDAV sync endpoint**, so you can pair it with Obsidian’s Remotely Save plugin.
 
 > The project was originally built for **AI memory visualization**: AI automatically writes down lessons learned, and you monitor its progress through a web interface. Today it works just as well for human users.
-
----
 
 ## ✨ 核心特性 | Core Features
 
@@ -241,4 +235,4 @@ Full details in `vault/guide/api-reference.md`.
 **用 Obsidian 写，用 BrainPress 印。**  
 **Write with Obsidian, print with BrainPress.**
 
----
+---     

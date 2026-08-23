@@ -23,6 +23,18 @@ if (strpos($uri, '/assets/') === 0) {
     fail('Not Found', 404);
 }
 
+// 虚拟页别名路径：访问配置的别名（如 /Visual-Knowledge/admin）→ 302 跳转真实路由（页面本体不变）
+$adminAlias = trim((string)($config['admin_path'] ?? ''), "/ \t");
+if ($adminAlias !== '' && !preg_match('#\.md$#i', $adminAlias) && $uri === '/' . $adminAlias) {
+    header('Location: /admin', true, 302);
+    exit;
+}
+$graphAlias = trim((string)($config['graph_path'] ?? ''), "/ \t");
+if ($graphAlias !== '' && !preg_match('#\.md$#i', $graphAlias) && $uri === '/' . $graphAlias) {
+    header('Location: /graph', true, 302);
+    exit;
+}
+
 // ===== WebDAV 端点：Obsidian Remotely Save 同步（挂载根 = vault/ 目录） =====
 if (strpos($uri, '/dav/') === 0 || $uri === '/dav') {
     // Basic Auth 校验（Remotely Save 必填认证）
@@ -288,47 +300,8 @@ if (strpos($uri, '/api/') === 0) {
             $tree = array_merge($tree, $minioTree);
         }
 
-        // 自定义本地路径（最多 4 条）：目录 → 递归扫描；单个 .md → 只渲染该文件
-        $customPaths = $config['custom_paths'] ?? [];
-        foreach ($customPaths as $cp) {
-            if (empty($cp['on'])) continue;
-            $customPath = trim((string)($cp['path'] ?? ''));
-            if ($customPath === '') continue;
-            $rp = realpath($customPath);
-            if ($rp === false) continue;
-            if (is_file($rp) && is_md($rp)) {
-                $name = basename($rp);
-                if (!isset($seen[$name])) {
-                    $tree[] = ['name' => $name, 'path' => $name, 'type' => 'file'];
-                    $seen[$name] = true;
-                }
-            } elseif (is_dir($rp)) {
-                $customTree = scan_tree($rp);
-                // 同名去重（跳过已在树里的名字）
-                $customTree = array_values(array_filter($customTree, function ($n) use ($seen) {
-                    return !isset($seen[$n['name']]);
-                }));
-                // 记录本次加入的名字（顶层目录/文件 + 第一层文件），供后续路径去重
-                foreach ($customTree as $item) {
-                    $seen[$item['name']] = true;
-                    if ($item['type'] === 'dir') {
-                        foreach (($item['children'] ?? []) as $f) {
-                            if ($f['type'] === 'file') $seen[basename($f['name'])] = true;
-                        }
-                    }
-                }
-                foreach ($customTree as &$n) {
-                    if ($n['type'] === 'dir') {
-                        $children = $n['children'] ?? [];
-                        $n['children'] = array_values(array_filter($children, function ($f) use ($seen) {
-                            return !isset($seen[$f['name']]);
-                        }));
-                    }
-                }
-                unset($n);
-                $tree = array_merge($tree, $customTree);
-            }
-        }
+        // 自定义本地路径（最多 5 条，与主 vault 平权）：目录递归扫描、单 .md 文件作顶层条目，同名主 vault 优先
+        $tree = merge_custom_trees($tree, $config);
 
         ok(['tree' => $tree]);
     }
@@ -417,12 +390,13 @@ if (strpos($uri, '/api/') === 0) {
         $q = trim((string)($_GET['q'] ?? ''));
         if ($q === '') fail('查询词为空', 400);
         $excludes = $config['exclude_paths'] ?? [];
-        $files = [];
-        collect_md_files(PANEL_DIR . '/vault', '', $files);
+        $files = collect_all_md_files($config);
         $results = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
-            $content = (string)@file_get_contents(PANEL_DIR . '/vault/' . $f['path']);
+            $abs = resolve_vault_file($f['path'], $config);
+            if ($abs === null) continue;
+            $content = (string)@file_get_contents($abs);
             $pos = mb_stripos($content, $q);
             $nameHit = mb_stripos($f['name'], $q) !== false;
             if (!$nameHit && $pos === false) continue;
@@ -436,8 +410,7 @@ if (strpos($uri, '/api/') === 0) {
     if ($uri === '/api/graph' && $method === 'GET') {
         $gDir = trim((string)($_GET['dir'] ?? ''));
         $gExcludes = $config['exclude_paths'] ?? [];
-        $gFiles = [];
-        collect_md_files(PANEL_DIR . '/vault', '', $gFiles);
+        $gFiles = collect_all_md_files($config);
         $nodes = []; $links = []; $idMap = []; $gid = 0;
         foreach ($gFiles as $f) {
             if (is_excluded($f['path'], $gExcludes)) continue;
@@ -451,7 +424,9 @@ if (strpos($uri, '/api/') === 0) {
             if (is_excluded($f['path'], $gExcludes)) continue;
             if ($gDir !== '' && strpos($f['path'], $gDir . '/') !== 0) continue;
             if (!isset($idMap[$f['path']])) continue;
-            $content = (string)@file_get_contents(PANEL_DIR . '/vault/' . $f['path']);
+            $gAbs = resolve_vault_file($f['path'], $config);
+            if ($gAbs === null) continue;
+            $content = (string)@file_get_contents($gAbs);
             if ($content === '') continue;
             if (preg_match_all('/\[\[([^\]\|#]+)(?:\|[^\]]*)?\]\]/u', $content, $gm)) {
                 foreach ($gm[1] as $gTarget) {
@@ -483,20 +458,27 @@ if (strpos($uri, '/api/') === 0) {
     if ($uri === '/api/ask' && $method === 'POST') {
         if (empty($config['ai_enabled'] ?? true)) fail('AI disabled', 403);
         $aiKey = (string)($config['ai_api_key'] ?? '');
+        // OpenAI 兼容端点：任意网关（DeepSeek/NewAPI/one-api 等），默认 DeepSeek 官方
+        $aiBase = rtrim(trim((string)($config['ai_api_base'] ?? '')), '/');
+        if ($aiBase === '') $aiBase = 'https://api.deepseek.com';
+        $aiChatUrl = $aiBase . '/chat/completions';
         $aiModel = (string)($config['ai_model'] ?? 'deepseek-chat');
         $aiMode = (string)($config['ai_mode'] ?? 'hybrid');
-        if ($aiKey === '') fail('AI not configured — set the API key in admin → AI', 503);
+        // key 可为空：Ollama/LM Studio 等本地推理服务无需鉴权（有 key 才发 Authorization 头）
+        $aiHeaders = ['Content-Type: application/json'];
+        if ($aiKey !== '') $aiHeaders[] = 'Authorization: Bearer ' . $aiKey;
         $body = json_decode((string)file_get_contents('php://input'), true) ?: [];
         $question = trim((string)($body['question'] ?? ''));
         if ($question === '') fail('Empty question', 400);
         // 1) 检索相关文章（标题加权 + 内容关键词匹配，top 4）
         $excludes = $config['exclude_paths'] ?? [];
-        $files = [];
-        collect_md_files(PANEL_DIR . '/vault', '', $files);
+        $files = collect_all_md_files($config);
         $hits = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
-            $content = (string)@file_get_contents(PANEL_DIR . '/vault/' . $f['path']);
+            $aiAbs = resolve_vault_file($f['path'], $config);
+            if ($aiAbs === null) continue;
+            $content = (string)@file_get_contents($aiAbs);
             if ($content === '') continue;
             $score = 0;
             if (mb_stripos($f['name'], $question) !== false) $score += 5;
@@ -539,16 +521,13 @@ if (strpos($uri, '/api/') === 0) {
                 'temperature' => 0.7,
                 'stream' => false,
             ]);
-            $ch = curl_init('https://api.deepseek.com/chat/completions');
+            $ch = curl_init($aiChatUrl);
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_POST => true,
                 CURLOPT_POSTFIELDS => $payload,
-                CURLOPT_HTTPHEADER => [
-                    'Content-Type: application/json',
-                    'Authorization: Bearer ' . $aiKey,
-                ],
-                CURLOPT_TIMEOUT => 60,
+                CURLOPT_HTTPHEADER => $aiHeaders,
+                CURLOPT_TIMEOUT => 120,
             ]);
             $resp = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -582,16 +561,13 @@ if (strpos($uri, '/api/') === 0) {
             'temperature' => $aiMode === 'strict' ? 0.3 : 0.4,
             'stream' => false,
         ]);
-        $ch = curl_init('https://api.deepseek.com/chat/completions');
+        $ch = curl_init($aiChatUrl);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $aiKey,
-            ],
-            CURLOPT_TIMEOUT => 60,
+            CURLOPT_HTTPHEADER => $aiHeaders,
+            CURLOPT_TIMEOUT => 120,
         ]);
         $resp = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -608,8 +584,7 @@ if (strpos($uri, '/api/') === 0) {
     // 文章清单（轻量）：全部文章路径+名称（隐藏列表不收录）
     if ($uri === '/api/article-list' && $method === 'GET') {
         $excludes = $config['exclude_paths'] ?? [];
-        $files = [];
-        collect_md_files(PANEL_DIR . '/vault', '', $files);
+        $files = collect_all_md_files($config);
         $articles = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
@@ -621,8 +596,7 @@ if (strpos($uri, '/api/') === 0) {
     // LLM 友好清单（llms.txt 规范）：标题 + 简介 + 每篇文章一个链接（隐藏列表不收录）
     if ($uri === '/api/llms.txt' && $method === 'GET') {
         $excludes = $config['exclude_paths'] ?? [];
-        $files = [];
-        collect_md_files(PANEL_DIR . '/vault', '', $files);
+        $files = collect_all_md_files($config);
         $siteBase = 'https://' . ($_SERVER['HTTP_HOST'] ?? 'docs.dasiwo.com');
         header('Content-Type: text/plain; charset=utf-8');
         echo "# " . ($config['site_title'] ?? 'MD2HTML') . " Knowledge Base\n\n";
@@ -646,6 +620,7 @@ if (strpos($uri, '/api/') === 0) {
         $body = json_decode((string)file_get_contents('php://input'), true) ?: [];
         $path = trim((string)($body['path'] ?? ''));
         if ($path === '' || !preg_match('#\.md$#i', $path)) fail('Invalid path (must be a .md file)', 400);
+        // 写 API 仅作用于主 vault（不写自定义挂载目录——外部目录可能只读或属用户私有，避免误写）
         $vaultRoot = realpath(PANEL_DIR . '/vault');
         if ($vaultRoot === false) fail('Vault not found', 500);
         if ($method === 'POST') {
@@ -680,31 +655,28 @@ if (strpos($uri, '/api/') === 0) {
 /* --- 页面 --- */
 
 // 服务端渲染文章：/xxx.md 或 /dir/xxx.md（vault 内文件）→ 读 md 内联到页面（打开即内容，无 JS fetch 等待）
+// 服务端渲染文章/Excalidraw：.md → 内联原文，前端同步渲染（无 fetch 等待）。
+// Excalidraw 判定：扩展名 .excalidraw.md，或内容特征（excalidraw-plugin 标记 + compressed-json 块）——
+// 后者兜底 Obsidian 导出/重命名丢失后缀的绘画文件（否则压缩数据会被当 md 渲染成一屏乱码字母）
 $ssrArticlePath = '';
 $ssrArticleContent = '';
-if (preg_match('#\.md$#i', $uri) && !preg_match('/\.excalidraw\.md$/i', $uri)) {
-    $articleRel = urldecode(ltrim($uri, '/'));
-    $vaultRoot = realpath(PANEL_DIR . '/vault');
-    $articleFull = realpath(PANEL_DIR . '/vault/' . $articleRel);
-    if ($vaultRoot !== false && $articleFull !== false && strpos($articleFull, $vaultRoot) === 0 && is_file($articleFull)) {
-        if (!is_excluded($articleRel, $config['exclude_paths'] ?? [])) {
-            $ssrArticlePath = $articleRel;
-            $ssrArticleContent = (string)@file_get_contents($articleFull);
-        }
-    }
-}
-
-// 服务端渲染 Excalidraw 绘画：.excalidraw.md（Obsidian 插件 compressed-json 格式）→ 内联原文，前端 lz-string 解码 + SVG 渲染
 $ssrExcalidrawPath = '';
 $ssrExcalidrawContent = '';
-if (preg_match('/\.excalidraw\.md$/i', $uri)) {
-    $exRel = urldecode(ltrim($uri, '/'));
-    $vaultRoot = realpath(PANEL_DIR . '/vault');  // md 分支不处理 excalidraw——这里重新定义
-    $exFull = realpath(PANEL_DIR . '/vault/' . $exRel);
-    if ($vaultRoot !== false && $exFull !== false && strpos($exFull, $vaultRoot) === 0 && is_file($exFull)) {
-        if (!is_excluded($exRel, $config['exclude_paths'] ?? [])) {
-            $ssrExcalidrawPath = $exRel;
-            $ssrExcalidrawContent = (string)@file_get_contents($exFull);
+if (preg_match('#\.md$#i', $uri)) {
+    $rel = urldecode(ltrim($uri, '/'));
+    $full = resolve_vault_file($rel, $config);   // 主 vault 或自定义挂载目录
+    if ($full !== null) {
+        if (!is_excluded($rel, $config['exclude_paths'] ?? [])) {
+            $rawContent = (string)@file_get_contents($full);
+            $isExcalidraw = preg_match('/\.excalidraw\.md$/i', $rel)
+                || (strpos($rawContent, 'excalidraw-plugin:') !== false && preg_match('/^```compressed-json\s*$/m', $rawContent));
+            if ($isExcalidraw) {
+                $ssrExcalidrawPath = $rel;
+                $ssrExcalidrawContent = $rawContent;
+            } else {
+                $ssrArticlePath = $rel;
+                $ssrArticleContent = $rawContent;
+            }
         }
     }
 }
@@ -713,9 +685,8 @@ if (preg_match('/\.excalidraw\.md$/i', $uri)) {
 $ssrPdfPath = '';
 if (preg_match('#\.pdf$#i', $uri)) {
     $pdfRel = urldecode(ltrim($uri, '/'));
-    $vaultRoot = realpath(PANEL_DIR . '/vault');
-    $pdfFull = realpath(PANEL_DIR . '/vault/' . $pdfRel);
-    if ($vaultRoot !== false && $pdfFull !== false && strpos($pdfFull, $vaultRoot) === 0 && is_file($pdfFull)) {
+    $pdfFull = resolve_vault_file($pdfRel, $config);
+    if ($pdfFull !== null) {
         if (!is_excluded($pdfRel, $config['exclude_paths'] ?? [])) {
             $ssrPdfPath = $pdfRel;
         }
@@ -734,14 +705,22 @@ header('Content-Type: text/html; charset=utf-8');
 // SSR 页面不缓存（CDN/浏览器）：防旧缓存导致文章/PDF 更新不生效
 header('Cache-Control: no-cache, must-revalidate');
 // 前台侧滑菜单：扫描 vault/ 生成文章目录树（md 嵌套列表，内联零请求；隐藏列表不收录，置顶排最前）
+// 自定义挂载与主 vault 平权：合并进同一棵树（同名主 vault 优先）
 $frontMenuMd = '';
-if (is_dir(PANEL_DIR . '/vault')) {
-    $frontMenuMd = tree_to_md(scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? []));
+$frontTree = is_dir(PANEL_DIR . '/vault')
+    ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [])
+    : [];
+$frontMenuMd = tree_to_md(merge_custom_trees($frontTree, $config));
+// Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
+if (trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
+    $frontMenuMd = rtrim($frontMenuMd) . "\n- [Graph-View](/graph)";
 }
-// Graph View 作为虚拟条目放进文章树顶部（像文章一样可点击，非文件）
-$frontMenuMd = "- [GRAPH-VIEW](/graph)\n" . $frontMenuMd;
 // 站点设置：标题 / 默认日间 / 前台抽屉默认展开 / 首页文章
 $siteTitle = (string)($config['site_title'] ?? 'MD2HTML');
+// 内容区宽度（后台可调，px）：三栏模型的中栏度量，左右轨道 = (视口−内容宽)/2 封顶 600
+$contentW = (int)($config['content_width'] ?? 840);
+if ($contentW < 480) $contentW = 480;
+if ($contentW > 1600) $contentW = 1600;
 // 页面标题：文章/PDF 路径访问时用文件名（去扩展名与数字前缀），否则站点标题
 $pageTitle = $ssrArticlePath !== ''
     ? preg_replace('/^\d+-/', '', preg_replace('/\.md$/i', '', basename($ssrArticlePath))) . ' · ' . $siteTitle
@@ -759,11 +738,10 @@ if ($homeArticle !== '') {
     if ($homeArticle[0] === '/' && @is_file($homeArticle) && is_md($homeArticle)) {
         $homeFile = $homeArticle;
     }
-    // 2) vault/ 相对路径（去掉可能的前导 /，兼容误填）
+    // 2) vault/ 相对路径（去掉可能的前导 /，兼容误填）；含自定义挂载目录回退
     if ($homeFile === '') {
-        $rel = ltrim($homeArticle, '/');
-        $full = @realpath(PANEL_DIR . '/vault/' . $rel);
-        if ($full !== false && @is_file($full) && is_md($full)) $homeFile = $full;
+        $resolved = resolve_vault_file(ltrim($homeArticle, '/'), $config);
+        if ($resolved !== null && is_md($resolved)) $homeFile = $resolved;
     }
     if ($homeFile !== '') {
         $homeMd = (string)@file_get_contents($homeFile);
@@ -886,6 +864,14 @@ body {
 a { color:inherit; text-decoration:none; }
 
 /* 主界面 */
+/* 三栏布局变量：中栏固定阅读度量（后台可调），左右轨道等分剩余空间（先扣两侧留白 gutter）、封顶 600px；
+   超出部分为对称外留白，居中不受影响；--sbw 由 JS 写入（#content 滚动条宽度），用于居中补偿 */
+:root {
+    --vp-content-w:<?php echo $contentW; ?>px;
+    --rail-cap:600px;
+    --gutter:48px;
+    --rail-w:min(calc((100vw - var(--vp-content-w)) / 2 - var(--gutter) - var(--sbw, 0px)), var(--rail-cap));
+}
 #app { display:none; height:100%; }
 #app.show { display:flex; }
 #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; position:relative; }
@@ -987,10 +973,9 @@ body.drawer-open { overflow:hidden; }
     text-decoration:none; outline:none;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
-/* 树顶 Graph view 虚拟条目：与目录项同字号（17px/700——像文件夹一样醒目）；只命中顶层第一个条目 */
-#front-drawer-md > ul > li:first-child > a { font-size:17px; font-weight:700; }
 .drawer-md a:active { color:var(--vp-c-brand); }
 html.dark .drawer-md a:active { color:var(--vp-c-brand); }
+/* Graph view 虚拟条目：文字随目录行字号（覆盖 .drawer-md a 的 15px/600），与文件夹标题完全一致 */
 .drawer-md li.has-children {
     position:relative;
     /* 目录项：比文章项更大更粗（层级感） */
@@ -1043,16 +1028,17 @@ html.dark .vp-icon-btn .theme-moon { display:none; }
 .archive-list-item:hover .archive-title { color:#3451b2; }
 html.dark .archive-list-item:hover .archive-title { color:#a8b1ff; }
 
-/* ===== AI 对话面板（从顶部栏下方展开，问知识库） ===== */
+/* ===== AI 内容块：不是一个独立面板！它被 JS 放进"当前的面板容器"（桌面=左栏 #left-sidebar，窄屏=抽屉 #vp-drawer），
+   顶栏 目录/AI 两个按钮只切换容器渲染哪块内容。窄屏时随抽屉一起滑入，桌面端原地显隐 ===== */
 .ai-view {
-    position:fixed; top:56px; left:0; right:0; z-index:310;
     display:none; flex-direction:column;
-    background:var(--vp-c-bg); border-bottom:1px solid var(--line);
-    box-shadow:0 10px 28px rgba(0,0,0,.14);
-    max-width:760px; margin:0 auto;
-    height:min(72vh,560px);
+    background:var(--vp-c-bg);
+    min-height:0;
 }
-.ai-view.open { display:flex; }
+body.ai-open .ai-view { display:flex; }
+/* 窄屏：填满抽屉（抽屉自带滑入动画），AI 模式下树内容让位 */
+#vp-drawer .ai-view { position:absolute; top:0; left:0; right:0; bottom:0; }
+body.ai-open #vp-drawer .drawer-md { display:none; }
 .ai-header { padding:10px 16px; font-size:13px; font-weight:600; color:var(--vp-c-text-2); border-bottom:1px solid var(--line); flex-shrink:0; }
 .ai-msgs { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; -webkit-overflow-scrolling:touch; }
 .ai-msg { max-width:85%; padding:10px 14px; border-radius:10px; font-size:15px; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
@@ -1062,16 +1048,26 @@ html.dark .ai-user { background:#a8b1ff; color:#111; }
 .ai-src { font-size:12px; color:var(--vp-c-text-3); margin-top:8px; }
 .ai-src a { color:#3451b2; text-decoration:none; }
 html.dark .ai-src a { color:#a8b1ff; }
-.ai-input-wrap { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); flex-shrink:0; }
-.ai-input-wrap input { flex:1; min-height:40px; font-size:16px; padding:0 12px; border:1px solid var(--line); border-radius:6px; background:var(--vp-c-bg); color:var(--vp-c-text-1); -webkit-appearance:none; }
+.ai-input-wrap { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); flex-shrink:0; min-width:0; }
+.ai-input-wrap input { flex:1 1 0; width:0; min-width:0; min-height:40px; font-size:16px; padding:0 12px; border:1px solid var(--line); border-radius:6px; background:var(--vp-c-bg); color:var(--vp-c-text-1); -webkit-appearance:none; }
 .ai-input-wrap input:focus { outline:none; border-color:#3451b2; }
 html.dark .ai-input-wrap input:focus { border-color:#a8b1ff; }
 .ai-send { border:1px solid #3451b2; background:#3451b2; color:#fff; border-radius:6px; padding:0 18px; font-size:15px; cursor:pointer; flex-shrink:0; }
 html.dark .ai-send { border-color:#a8b1ff; background:#a8b1ff; color:#111; }
 .ai-typing { font-size:13px; color:var(--vp-c-text-3); padding:4px 2px; }
-/* 移动端：AI 面板占更高（全屏感） */
-@media (max-width:768px) {
-    .ai-view { height:calc(100vh - 56px); max-width:none; }
+/* 桌面端：AI 内容块作为左栏子元素原地填充（JS 已把它挂进 #left-sidebar）；
+   AI 模式下树的标题条与树体一起让位，AI 自带同款 header */
+@media (min-width:769px) {
+    .ai-view {
+        position:static; height:auto;
+        flex:1 1 0; min-height:0;
+        box-sizing:border-box;
+        padding:0 12px 12px 20px; /* header 紧贴顶部栏下方 */
+        border-right:1px solid var(--line);
+    }
+    /* AI 打开：目录树标题条 + 树体让位 */
+    body.ai-open #left-drawer-md { display:none; }
+    body.ai-open #left-sidebar > .ai-header { display:none; }
 }
 
 /* ===== 搜索面板（从顶部栏下方滑出） ===== */
@@ -1134,6 +1130,8 @@ html.dark .doc-title { color:#dfdfd6; }
 .md img { max-width:100%; height:auto; border-radius:6px; }
 /* 文章目录（右侧 TOC） */
 .toc-panel {
+    /* 默认隐藏：右轨道里文章 TOC 与首页 TOC 互斥，由 JS 显式 display:block 显示（避免两个 CONTENTS 叠加） */
+    display:none;
     width:260px; flex-shrink:0; position:sticky; top:5px;
     border-left:1px solid var(--line); padding-left:18px; margin-top:-12px;
     max-height:calc(100vh - 150px); overflow-y:auto;
@@ -1157,6 +1155,81 @@ html.dark .doc-title { color:#dfdfd6; }
 html.dark .toc-link { color:#98989f; }
 html.dark .toc-link.active { color:#a8b1ff; }
 html.dark .toc-link:hover { color:#a8b1ff; }
+
+/* ===== 桌面三栏布局：左轨道（树/AI 页签） | 中间内容画布（固定度量、永远居中） | 右轨道（TOC 镜像） ===== */
+#left-sidebar {
+    display:none;
+    background:var(--vp-c-bg);
+}
+@media (min-width:769px) {
+    #left-sidebar {
+        display:flex; flex-direction:column; flex:0 0 var(--rail-w); max-width:var(--rail-w);
+        height:100%; min-height:0;
+        overflow:hidden;
+        box-sizing:border-box;
+        border-right:1px solid var(--line);
+        padding:56px 0 0; /* 顶部只让开固定导航栏(56px)，标题条紧贴其下 */
+    }
+    /* 目录树顶部标题：复用 .ai-header（与 AI 面板同款），固定贴住导航栏下沿；目录树在其下独立滚动。
+       边距与 AI 面板容器一致（左 20 / 右 12），文字与分隔线位置完全对齐 */
+    #left-sidebar > .ai-header {
+        flex-shrink:0;
+        margin:0 12px 8px 20px;
+        padding:10px 16px;
+    }
+    #left-drawer-md {
+        flex:1 1 0; min-height:0;
+        overflow-y:auto; overflow-x:hidden;
+        padding:0 12px 60px 20px;
+    }
+    /* 右轨道：与左轨道等宽镜像。TOC 在其内独立排版；无 TOC 时轨道即对称留白（无边框）。
+       注意：分割线挂在 .toc-panel 自己身上——空白态不能出现悬空线 */
+    #right-sidebar {
+        display:flex; flex-direction:column; flex:0 0 var(--rail-w); max-width:var(--rail-w);
+        height:100%; min-height:0;
+        overflow:hidden;
+        box-sizing:border-box;
+        padding:56px 0 0;
+    }
+    #right-sidebar .toc-panel {
+        width:auto; position:static; max-height:none; overflow:visible; margin-top:0;
+        border-left:1px solid var(--line); padding:12px 20px 40px 18px;
+    }
+    /* 桌面端去掉 #content 自身水平 padding——留白改由内容画布自带（gutter），中栏可用宽度不被吃掉 */
+    #content { padding:84px 0 40px; }
+    /* 中栏内容画布：固定阅读度量（默认 840px）+ 两侧 gutter，在主区剩余空间内 margin:auto 精确居中；
+       translate 补偿滚动条宽度（--sbw 由 JS 写入），保证相对整个视口精确居中，
+       且不随任何面板切换/窗口变化而平移 */
+    .doc-wrap {
+        display:flex; gap:0; align-items:flex-start; box-sizing:border-box;
+        width:min(calc(var(--vp-content-w) + 2 * var(--gutter)), 100%);
+        padding:0 var(--gutter);
+        margin:0 auto; max-width:none;
+        translate: calc(var(--sbw, 0px) / 2) 0;
+    }
+    .doc-main { flex:1 1 0; min-width:0; max-width:none; }
+    /* 正文列（.md 基础 max-width:760px）在画布内水平居中，保证阅读列相对视口也居中 */
+    .doc-wrap .md, .archive-flex .md { margin-left:auto; margin-right:auto; }
+    /* 首页同款：归档列同样按固定度量居中（首页 TOC 已移入右轨道） */
+    .archive-flex {
+        display:block; box-sizing:border-box;
+        width:min(calc(var(--vp-content-w) + 2 * var(--gutter)), 100%);
+        padding:0 var(--gutter);
+        margin:0 auto; max-width:none;
+        translate: calc(var(--sbw, 0px) / 2) 0;
+    }
+    .archive-view { max-width:none; }
+    /* Graph 页占中+右：从左轨道右缘铺到视口右边（特异性高于下方基础规则） */
+    #content .graph-view { left:var(--rail-w); }
+}
+
+/* 紧凑桌面（769–1399）：先藏右轨（TOC），左轨固定 280px，内容在剩余空间居中、不够宽则自动压缩。
+   AI 面板与左轨同宽——rail-w 在此区间会随视口缩到负值，必须显式钉死 */
+@media (min-width:769px) and (max-width:1399px) {
+    #right-sidebar { display:none !important; }
+    #left-sidebar { flex:0 0 280px; max-width:280px; }
+}
+
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { color:#3c3c43; }
 /* 夜间模式：正文/标题统一亮色 #dfdfd6 */
 html.dark .md { color:#dfdfd6; }
@@ -1285,6 +1358,7 @@ html.dark .md a:hover { color:#c7cdff; }
 @media (max-width:768px) {
     #content { padding:84px 18px 40px; }
     #main.hide-top #content { padding-top:28px; }
+    #left-sidebar, #right-sidebar { display:none !important; }
     .toc-panel { display:none; }
     .doc-wrap { display:block; }
     .md { max-width:100%; }
@@ -1366,6 +1440,12 @@ html.dark .graph-node circle { fill:#a8b1ff; }
 
 <!-- 主界面 -->
 <div id="app">
+    <!-- 桌面端左侧常驻目录栏（三栏：左树 | 中正文 | 右 TOC）；移动端隐藏，仍走全屏抽屉 -->
+    <aside id="left-sidebar">
+        <!-- 与 AI 面板同款顶部标题条：sticky 紧贴导航栏下沿 -->
+        <div class="ai-header">Contents</div>
+        <div class="drawer-md" id="left-drawer-md"></div>
+    </aside>
     <div id="main">
         <!-- 第一层：VitePress 风格导航栏（外层 wrap 用 transform 平滑推出） -->
         <div id="nav-wrap">
@@ -1402,10 +1482,12 @@ html.dark .graph-node circle { fill:#a8b1ff; }
             <div class="drawer-md" id="front-drawer-md"></div>
         </div>
         <div id="content">
-            <!-- 主页：渲染站点设置中配置的首页文章正文（无配置时显示空状态提示） -->
-            <div class="archive-view" id="archive-view">
-                <h1 class="doc-title" id="home-title" style="display:none"></h1>
-                <div class="md" id="home-md" style="display:none"></div>
+            <!-- 主页：渲染站点设置中配置的首页文章正文（无配置时显示空状态提示）；首页 TOC 在右轨道 -->
+            <div class="archive-flex" id="archive-flex">
+                <div class="archive-view" id="archive-view">
+                    <h1 class="doc-title" id="home-title" style="display:none"></h1>
+                    <div class="md" id="home-md" style="display:none"></div>
+                </div>
             </div>
             <div class="doc-wrap" id="doc-wrap">
                 <div class="doc-main">
@@ -1418,10 +1500,6 @@ html.dark .graph-node circle { fill:#a8b1ff; }
                     <!-- 反向链接（被谁引用） -->
                     <div id="backlinks"></div>
                 </div>
-                <div class="toc-panel" id="toc-panel">
-                    <div class="toc-title">Contents</div>
-                    <div id="toc-list"></div>
-                </div>
             </div>
             <!-- Graph View：独立图谱页（/graph，铺满内容区，只显示所有文章的关系图） -->
             <div class="graph-view" id="graph-view" style="display:none">
@@ -1433,7 +1511,7 @@ html.dark .graph-node circle { fill:#a8b1ff; }
             </div>
             <div class="empty-state" id="empty-state">Select a note to start reading</div>
         </div>
-        <!-- AI 对话面板（从顶部栏下方展开，问知识库 /api/ask） -->
+        <!-- AI 对话面板（顶栏按钮切换：桌面端覆盖左侧目录栏区域，移动端从导航下方弹出；/api/ask） -->
         <div class="ai-view" id="ai-view">
             <div class="ai-header">Ask the knowledge base</div>
             <div class="ai-msgs" id="ai-msgs">
@@ -1451,7 +1529,18 @@ html.dark .graph-node circle { fill:#a8b1ff; }
             </div>
             <div class="search-results" id="search-results"></div>
         </div>
-    </div>
+    </div><!-- /#main -->
+    <!-- 桌面端右侧常驻 TOC 轨道（与左轨道等宽镜像；无目录时轨道即对称留白） -->
+    <aside id="right-sidebar">
+        <div class="toc-panel" id="home-toc-panel">
+            <div class="toc-title">Contents</div>
+            <div id="home-toc-list"></div>
+        </div>
+        <div class="toc-panel" id="toc-panel">
+            <div class="toc-title">Contents</div>
+            <div id="toc-list"></div>
+        </div>
+    </aside>
 </div>
 
 <div id="toast"></div>
@@ -1465,7 +1554,9 @@ var FRONT_MENU_MD = <?php echo json_encode($frontMenuMd); ?>;
 // 前台目录树默认展开状态（后台偏好设置控制）
 var FRONT_DRAWER_EXPANDED = <?php echo $frontDrawerExpanded ? 'true' : 'false'; ?>;
 // 强制展开目录（后台目录管理设置，优先级高于默认展开开关）
-var FRONT_EXPANDED_DIRS = <?php echo json_encode($config['expanded_dirs'] ?? []); ?>;
+var FRONT_EXPANDED_DIRS = <?php echo json_encode(expand_effective_entries($config)); ?>;
+var ADMIN_ALIAS_PATH = <?php echo json_encode(trim((string)($config['admin_path'] ?? ''), "/ \t")); ?>;
+var GRAPH_ALIAS_PATH = <?php echo json_encode(trim((string)($config['graph_path'] ?? ''), "/ \t")); ?>;
 
 // 首页文章（后台站点设置配置，内联零请求；空 = 未配置）
 var HOME_MD = <?php echo json_encode($homeMd); ?>;
@@ -1617,6 +1708,24 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             loadTree();
             return;
         }
+        // 服务端渲染直达（URL 直接访问 /graph）：图谱视图已由下方 SSR 块打开，这里只建索引树；
+        // 不能走默认主页路径——archive-view 复显会联动点亮右轨首页 TOC（图谱页右轨必须留白）
+        if (window.SSR_GRAPH) {
+            state.path = '';
+            loadTree();
+            return;
+        }
+        // 服务端渲染直达（URL 直接访问 .excalidraw.md）：renderExcalidraw 异步切换视图（等字体加载），
+        // 这里同样跳过主页路径；两个 TOC 面板由 renderExcalidraw 显式隐藏
+        if (window.SSR_EXCALIDRAW) {
+            state.path = window.EXCALIDRAW_PATH || '';
+            state.dir = state.path.indexOf('/') > -1 ? state.path.substring(0, state.path.lastIndexOf('/')) : '';
+            state.mode = 'view';
+            $('doc-wrap').style.display = 'none';
+            $('archive-view').style.display = 'none';
+            loadTree();
+            return;
+        }
         // 默认显示首页（渲染首页文章正文）
         $('doc-wrap').style.display = 'none';
         $('archive-view').style.display = '';
@@ -1746,7 +1855,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             $('toc-panel').style.display = 'none';
             return;
         }
-        $('toc-panel').style.display = '';
+        $('toc-panel').style.display = 'block';
         list.innerHTML = '';
         headings.forEach(function (h) {
             var lv = parseInt(h.tagName.charAt(1), 10);
@@ -1763,6 +1872,48 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         });
     }
 
+    // 首页目录：扫描 home-md 的 h2-h4，结构与文章 TOC 一致；随归档视图显隐自动同步
+    function renderHomeToc() {
+        var list = $('home-toc-list');
+        if (!list) return;
+        var headings = $('home-md').querySelectorAll('h2, h3, h4');
+        if (!headings.length) {
+            $('home-toc-panel').style.display = 'none';
+            return;
+        }
+        list.innerHTML = '';
+        headings.forEach(function (h) {
+            var lv = parseInt(h.tagName.charAt(1), 10);
+            var text = h.textContent.trim();
+            if (!text) return;
+            var link = document.createElement('button');
+            link.className = 'toc-link lv-' + lv;
+            link.textContent = text;
+            link.addEventListener('click', function () {
+                var top = h.offsetTop - $('content').offsetTop;
+                $('content').scrollTo({ top: top - 90, behavior: 'smooth' });
+            });
+            list.appendChild(link);
+        });
+        $('home-toc-panel').style.display = 'block';
+    }
+    // 归档视图在多处被切换显隐——用 MutationObserver 监听其内联样式，统一联动首页目录
+    (function () {
+        var av = $('archive-view'), htp = $('home-toc-panel');
+        if (!av || !htp) return;
+        function syncHomeToc() {
+            if (av.style.display === 'none') {
+                htp.style.display = 'none';
+                return;
+            }
+            renderHomeToc();
+        }
+        if (window.MutationObserver) {
+            new MutationObserver(syncHomeToc).observe(av, { attributes: true, attributeFilter: ['style'] });
+        }
+        syncHomeToc();
+    })();
+
     // PDF 阅读器（pdf.js）：翻页/缩放/夜间反转；文件从前端 /vault/ 路径加载（无需下载）
     var pdfDoc = null, pdfPageNum = 1, pdfScale = 1;
     // 像素缓存（主题切换用）：原图 + 夜间处理副本——切换只做 putImageData（快、无遍历、无中间帧闪屏）
@@ -1774,7 +1925,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         s.onload = cb;
         document.head.appendChild(s);
     }
-    // 适配宽度（默认铺满内容区 = 与 md 文章内容同宽）：直接测量 doc-wrap 实际宽度，
+    // 适配宽度（默认铺满内容区 = 与 md 文章内容同宽）：直接测量 doc-main 实际宽度（中栏固定约 1/3），
     // 兜底用窗口宽度减 padding（移动 18×2 / 桌面 48×2）。fit 不做范围限制（限制只属于手动缩放）
     function fitScale(pageWidth) {
         var pv = document.getElementById('pdf-view');
@@ -1783,7 +1934,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         if (isFs) {
             avail = window.innerWidth; // 全屏阅读：铺满整个浏览器宽度
         } else {
-            var dm = document.querySelector('.doc-wrap');
+            var dm = document.querySelector('.doc-main');
             avail = (dm && dm.clientWidth > 100) ? dm.clientWidth : (window.innerWidth - (window.innerWidth <= 768 ? 36 : 96));
         }
         var s = avail / pageWidth;
@@ -1796,6 +1947,15 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             pdfScale = fitScale(page.getViewport({ scale: 1 }).width);
             renderPdfPage();
         });
+    }
+    // 内容画布宽度变化（窗口缩放/后台调整内容宽度）→ PDF 自动重适配
+    if (typeof ResizeObserver !== 'undefined') {
+        var pdfRo = new ResizeObserver(function () {
+            clearTimeout(window.__pdfRoT);
+            window.__pdfRoT = setTimeout(pdfRefit, 120);
+        });
+        var pdfRoEl = document.querySelector('.doc-main');
+        if (pdfRoEl) pdfRo.observe(pdfRoEl);
     }
     function renderPdfPage() {
         if (!pdfDoc) return;
@@ -1839,6 +1999,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         $('archive-view').style.display = 'none';
         $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
+        var tp = $('toc-panel'); if (tp) tp.style.display = 'none';  // PDF 无目录 → 右栏留空
         $('md-view').style.display = 'none';
         // 标题：文件名（去 ID 前缀与 .pdf 扩展名）
         var docName = path.split('/').pop().replace(/^\d+-/, '').replace(/\.pdf$/i, '');
@@ -1970,16 +2131,20 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             openPdf(node.path);
             return;
         }
-        // Excalidraw 绘画：lz-string 解码 compressed-json → SVG 渲染
-        if (/\.excalidraw\.md$/i.test(node.path)) {
-            openExcalidraw(node.path);
-            return;
-        }
         try {
             // 先请求内容并渲染好，再一次性切换视图（避免空白闪烁）
             var data = await api('/api/file?path=' + encodeURIComponent(node.path));
             if (!data || !data.ok) {
                 toast((data && data.error) || 'Failed to read file');
+                return;
+            }
+            // Excalidraw 判定：扩展名或内容特征（真实 frontmatter 标记 + 真实代码围栏——
+            // 宽松的子串匹配会把"介绍 excalidraw 的文档"误判成绘画文件）
+            var raw = data.content || '';
+            if (/\.excalidraw\.md$/i.test(node.path) || (raw.indexOf('excalidraw-plugin:') !== -1 && /^```compressed-json\s*$/m.test(raw))) {
+                window.EXCALIDRAW_PATH = node.path;
+                window.EXCALIDRAW_RAW = raw;
+                renderExcalidraw();
                 return;
             }
             var html = DOMPurify.sanitize(restoreObsidian(marked.parse(protectObsidian(data.content), { gfm: true, breaks: true })));
@@ -2318,24 +2483,18 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     });
 
     /* ---------- 顶部导航 ---------- */
-    // logo 点击：回到文章归档页
+    // logo 点击：回到主页。非首页路径（文章/图谱）或带 hash 时整页跳转 '/'（最可靠的“刷新到主页”）；已在主页则滚回顶部
     $('vp-logo').addEventListener('click', function () {
+        if (location.pathname !== '/' || location.hash) {
+            location.href = '/';
+            return;
+        }
         $('md-view').style.display = 'none';
         $('doc-wrap').style.display = 'none';
-        $('archive-view').style.display = '';
-        $('toc-panel').style.display = 'none';
+        renderHome();
         $('empty-state').style.display = 'none';
         highlightActive(null);
-        // 重置滚动位置（否则保留文章页的滚动位置，归档显示会错位）
         $('content').scrollTop = 0;
-        // URL 归位：路径模式（/xxx.md）pushState 回 /；hash 模式清空 hash（产生历史记录，返回可回到文章）
-        try {
-            if (/\.md$/i.test(location.pathname)) {
-                history.pushState(null, '', '/');
-            } else if (location.hash) {
-                location.hash = '';
-            }
-        } catch (e) {}
     });
     // 主题切换（日间/夜间，localStorage 记忆）
     function applyTheme(dark) {
@@ -2372,11 +2531,14 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     var GNS = 'http://www.w3.org/2000/svg';
     function openGraph() {
         try { setDrawer(false); } catch (e) {}
+        try { setTopHidden(false); } catch (e) {}  // 图谱 fixed 定位不随滚动：强制显示顶栏（否则上方留 56px 空档、图谱贴不到顶栏）
         // 地址栏同步为 /graph（可分享/刷新保持图谱页）
         try { history.pushState(null, '', '/graph'); } catch (e) {}
         // Graph 是独立页面：隐藏文章/首页容器，图谱铺满内容区（不套文章格式）
         $('archive-view').style.display = 'none';
         $('doc-wrap').style.display = 'none';
+        var gtp = $('toc-panel'); if (gtp) gtp.style.display = 'none';
+        var ghtp = $('home-toc-panel'); if (ghtp) ghtp.style.display = 'none';  // 右轨留白（否则首页目录漏到图谱页）
         graphView.style.display = 'flex';
         if (window.console) console.log('GRAPH OPENED');
         loadGraph();
@@ -2887,25 +3049,18 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         svg += '</svg>';
         dv.innerHTML = svg;
         dv.style.display = 'block';  // 显示画布容器（初始 display:none——忘了设置会导致空白）
-        // 视图切换：文章容器显示（excalidraw 在 doc-main 内），md 隐藏
+        // 视图切换：文章容器显示（excalidraw 在 doc-main 内，正常左中右结构、只占中栏），md 隐藏；
+        // 绘画无目录 → 右轨两个 TOC 面板都隐藏（右栏留空）
         $('archive-view').style.display = 'none';
-        $('doc-wrap').style.display = 'block';
+        $('doc-wrap').style.display = 'flex';
+        var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
+        var htp2 = $('home-toc-panel'); if (htp2) htp2.style.display = 'none';
         var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
         var ttl = $('doc-title');
         if (ttl) ttl.textContent = (window.EXCALIDRAW_PATH || '').split('/').pop().replace(/\.excalidraw\.md$/i, '');
     }
     if (window.SSR_EXCALIDRAW) { try { renderExcalidraw(); } catch (e) { if (window.console) console.log('excalidraw err', e); } }
 
-    // 树里点击 .excalidraw.md：fetch 内容 → 解码渲染（不整页跳转）
-    async function openExcalidraw(path) {
-        window.EXCALIDRAW_PATH = path;
-        try {
-            var data = await api('/api/file?path=' + encodeURIComponent(path));
-            if (!data || !data.ok) return;
-            window.EXCALIDRAW_RAW = data.content || '';
-            renderExcalidraw();
-        } catch (e) { if (window.console) console.log('excalidraw open err', e); }
-    }
     // 搜索功能：整页切换，实时过滤文档
     var searchView = $('search-view');
     var searchInput = $('search-input');
@@ -2922,6 +3077,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     }
     function openSearch() {
         // 搜索面板从顶部栏下方滑出 + 按钮图标 morph 为叉子
+        try { toggleAi(false); } catch (e) {}  // AI 面板 z-index 高于搜索层：先关掉避免盖住搜索结果
         $('content').style.display = 'none';
         searchView.classList.add('open');
         $('vp-search-btn').classList.add('open');
@@ -3056,22 +3212,27 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     // 搜索按钮：打开时是叉子（点击关闭），关闭时是放大镜（点击打开）
     // AI 对话：顶栏按钮展开面板，问知识库（/api/ask：检索 + DeepSeek 生成回答）
     // 总开关关闭：隐藏 AI 按钮（面板无入口）
-    if (!window.AI_ENABLED) {
-        var aiBtn = $('vp-ai-btn');
-        if (aiBtn) aiBtn.style.display = 'none';
-    }
+    var aiBtn = $('vp-ai-btn');
+    if (!window.AI_ENABLED && aiBtn) aiBtn.style.display = 'none';
 
     var aiView = $('ai-view');
     var aiMsgs = $('ai-msgs');
     var aiInput = $('ai-input');
+    /* AI = 面板内容的第二种渲染。toggleAi 只切 body.ai-open 模式：
+       桌面端左栏原地换内容；窄屏端把抽屉拉开/收起（抽屉里此刻渲染的是 AI） */
     function toggleAi(open) {
-        if (open === undefined) open = !aiView.classList.contains('open');
-        aiView.classList.toggle('open', open);
-        if (open) {
-            // 与搜索面板互斥
-            if (searchView.classList.contains('open')) closeSearch();
-            setTimeout(function () { aiInput.focus({ preventScroll: true }); }, 100);
-        }
+        if (open === undefined) open = !document.body.classList.contains('ai-open');
+        if (open && searchView.classList.contains('open')) closeSearch();
+        document.body.classList.toggle('ai-open', open);
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        if (!desktop) setFrontDrawer(open);
+        else if (open) setTimeout(function () { aiInput.focus({ preventScroll: true }); }, 100);
+    }
+    /* 把 AI 内容块挂进当前断点对应的面板容器（桌面=左栏 / 窄屏=抽屉） */
+    function placeAi() {
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        var target = desktop ? document.getElementById('left-sidebar') : drawerEl;
+        if (target && aiView.parentNode !== target) target.appendChild(aiView);
     }
     function aiAddMsg(text, role) {
         var d = document.createElement('div');
@@ -3124,7 +3285,18 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     }
     $('vp-ai-btn').addEventListener('click', function (e) {
         e.stopPropagation();
-        toggleAi();
+        // 同级内容切换：桌面端已处于 AI 则保持（幂等）；窄屏端点按钮 = 开/关抽屉（AI 内容）
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        toggleAi(desktop ? true : undefined);
+    });
+    // 跨断点：缩到窄屏且 AI 开着 → 自动关闭只留内容区；容器归属变化时重新挂载
+    window.addEventListener('resize', function () {
+        placeAi();
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        if (!desktop && document.body.classList.contains('ai-open')) {
+            document.body.classList.remove('ai-open');
+            setFrontDrawer(false);
+        }
     });
     $('ai-send').addEventListener('click', aiAsk);
     aiInput.addEventListener('keydown', function (e) {
@@ -3170,6 +3342,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         var nw = document.getElementById('nav-wrap');
         if (nw) nw.classList.toggle('no-blur', open); // 顶部栏实心化防透字
     }
+    placeAi(); // 初始挂载：桌面→左栏 / 窄屏→抽屉
     // 预渲染：PHP 内联的 FRONT_MENU_MD（vault/ 文章目录树）
     if (window.FRONT_MENU_MD) {
         try {
@@ -3247,8 +3420,9 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
                     });
                 })(lis[i]);
             }
-            // 叶子链接：点击打开文章 + 关闭抽屉
+            // Graph view 虚拟条目：保持默认文档链接样式（与普通文章条目一模一样）
             var as = frontDrawerMd.querySelectorAll('a');
+            // 叶子链接：点击打开文章 + 关闭抽屉
             for (var j = 0; j < as.length; j++) {
                 (function (a) {
                     var li = parentLi(a);
@@ -3269,11 +3443,96 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
                     });
                 })(as[j]);
             }
+            // 虚拟页别名条目（admin/graph）：按配置路径深度注入目录树，样式与普通文档完全一致；点击整页跳转（服务端 302 到真实路由）
+            function liName(li) {
+                // 优先用 buildDirPaths 写入的 data-path（目录行首子节点是箭头 SVG，不能取 firstChild）
+                if (li.dataset && li.dataset.path) return li.dataset.path.split('/').pop();
+                var t = '';
+                for (var i = 0; i < li.childNodes.length; i++) {
+                    var nd = li.childNodes[i];
+                    if (nd.nodeType === 1 && nd.tagName === 'UL') break;
+                    if (nd.nodeType === 3) t += nd.textContent;
+                    else if (nd.nodeType === 1 && (nd.tagName === 'A' || nd.tagName === 'SPAN')) t += nd.textContent;
+                }
+                return t.trim();
+            }
+            function injectAliasEntry(rawPath) {
+                var aliasPath = String(rawPath || '').replace(/^\/+|\/+$/g, '');
+                if (!aliasPath || /\.md$/i.test(aliasPath)) return;
+                var segs = aliasPath.split('/');
+                var parentUl = frontDrawerMd.querySelector('ul');
+                for (var si = 0; si < segs.length && parentUl; si++) {
+                    var want = segs[si];
+                    var found = null;
+                    var items = parentUl.children;
+                    for (var ii = 0; ii < items.length; ii++) {
+                        if (liName(items[ii]) === want) { found = items[ii]; break; }
+                    }
+                    if (si === segs.length - 1) {
+                        // 叶子：普通文档样式的 li>a；同名真实文章已存在则跳过防劫持
+                        if (found) {
+                            var exA = found.querySelector('a');
+                            if (exA && /\.md(\?|#|$)/i.test(exA.getAttribute('href') || '')) return;
+                        }
+                        if (!found) {
+                            var leafLi = document.createElement('li');
+                            var leafA = document.createElement('a');
+                            leafA.setAttribute('href', '/' + aliasPath);
+                            leafA.textContent = want;
+                            leafLi.appendChild(leafA);
+                            parentUl.appendChild(leafLi);
+                            found = leafLi;
+                        } else if (!found.querySelector('a')) {
+                            var wrapA = document.createElement('a');
+                            wrapA.setAttribute('href', '/' + aliasPath);
+                            wrapA.textContent = want;
+                            found.insertBefore(wrapA, found.firstChild);
+                        }
+                        (function (target, url) {
+                            target.addEventListener('click', function (ev) {
+                                ev.preventDefault();
+                                ev.stopPropagation();
+                                setFrontDrawer(false);
+                                window.location.href = url;
+                            });
+                        })(found.querySelector('a'), '/' + aliasPath);
+                    } else {
+                        // 中间目录：复用已有文件夹；缺失则创建（文本节点 + 子 UL）
+                        if (!found) {
+                            var dirLi = document.createElement('li');
+                            var dirTxt = document.createElement('span');
+                            dirTxt.textContent = want;
+                            dirLi.appendChild(dirTxt);
+                            var dirUl = document.createElement('ul');
+                            dirLi.appendChild(dirUl);
+                            parentUl.appendChild(dirLi);
+                            found = dirLi;
+                        }
+                        var nextUl = childUl(found);
+                        if (!nextUl) { nextUl = document.createElement('ul'); found.appendChild(nextUl); }
+                        parentUl = nextUl;
+                    }
+                }
+            }
+            injectAliasEntry(window.ADMIN_ALIAS_PATH);
+            injectAliasEntry(window.GRAPH_ALIAS_PATH);
         } catch (e) {}
     }
     $('vp-menu-btn').addEventListener('click', function (e) {
         e.stopPropagation();
-        setFrontDrawer(!drawerEl.classList.contains('open'));
+        // 菜单按钮 = "目录"入口：桌面端切回目录渲染；窄屏打开抽屉并确保里面是目录
+        if (window.matchMedia && window.matchMedia('(min-width:769px)').matches) {
+            if (document.body.classList.contains('ai-open')) toggleAi(false);
+            return;
+        }
+        // 关着→开(目录)；开着但是AI→切回目录(面板保持)；开着且是目录→关闭
+        var open = drawerEl.classList.contains('open');
+        if (!open || document.body.classList.contains('ai-open')) {
+            document.body.classList.remove('ai-open');
+            setFrontDrawer(true);
+        } else {
+            setFrontDrawer(false);
+        }
     });
     // 点击侧滑菜单空白处关闭
     drawerEl.addEventListener('click', function (e) {
@@ -3281,6 +3540,52 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             setFrontDrawer(false);
         }
     });
+
+    /* ---------- 桌面端左侧常驻目录栏：克隆抽屉处理完的 DOM（含箭头/折叠状态），事件用委托 ---------- */
+    (function () {
+        var leftTree = $('left-drawer-md');
+        if (!leftTree || !window.FRONT_MENU_MD || !frontDrawerMd.innerHTML) return;
+        leftTree.innerHTML = frontDrawerMd.innerHTML;
+        function subUl(li) {
+            for (var i = 0; i < li.children.length; i++) {
+                if (li.children[i].tagName === 'UL') return li.children[i];
+            }
+            return null;
+        }
+        leftTree.addEventListener('click', function (ev) {
+            var t = ev.target;
+            var a = t.closest ? t.closest('a') : null;
+            var li = t.closest ? t.closest('li') : null;
+            // 父项标签（非子树内部）→ 折叠/展开
+            if (li) {
+                var sub = subUl(li);
+                if (sub && !sub.contains(t)) {
+                    ev.preventDefault();
+                    li.classList.toggle('collapsed');
+                    return;
+                }
+            }
+            // 叶子链接 → 打开文章（父项链接交给上面的折叠逻辑）
+            if (a) {
+                var n = a.parentNode, isParent = false;
+                while (n && n !== leftTree) {
+                    if (n.tagName === 'LI' && subUl(n)) { isParent = true; break; }
+                    n = n.parentNode;
+                }
+                if (isParent) return;
+                ev.preventDefault();
+                var href = a.getAttribute('href') || '';
+                if (href === '/graph') { openGraph(); return; }  // Graph 虚拟条目（未配置别名时的树末尾入口）
+                // 别名条目（admin/graph）：整页跳转（服务端 302 到真实路由）
+                var aliasP = String(window.ADMIN_ALIAS_PATH || '').replace(/^\/+|\/+$/g, '');
+                var aliasG = String(window.GRAPH_ALIAS_PATH || '').replace(/^\/+|\/+$/g, '');
+                if ((aliasP && href === '/' + aliasP) || (aliasG && href === '/' + aliasG)) { window.location.href = href; return; }
+                var h = href.replace(/^#/, '');
+                if (!h) return;
+                selectFile({ path: decodeURI(h) });
+            }
+        });
+    })();
 
     /* ---------- 浏览器返回/前进：hash 变化时同步视图 ---------- */
     // 站内文章链接（/xxx.md）：SPA 切换（无刷新）+ pushState 路径化 URL；刷新/直达走服务端渲染
@@ -3350,6 +3655,19 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         // 已移除访问密码，直接进入（URL hash 直达在 loadTree 完成后处理）
         enterApp();
     })();
+})();
+
+// 滚动条宽度测量：#content 内部滚动条的宽度写入 CSS 变量 --sbw，
+// 供 .doc-wrap/.archive-flex translate 补偿（否则滚动条会让居中偏左约半个滚动条宽）
+(function () {
+    var ce = document.getElementById('content');
+    if (!ce) return;
+    function measureSbw() {
+        var s = Math.max(0, ce.offsetWidth - ce.clientWidth);
+        document.documentElement.style.setProperty('--sbw', s + 'px');
+    }
+    measureSbw();
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureSbw).observe(ce);
 })();
 </script>
 </body>

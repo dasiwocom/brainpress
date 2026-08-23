@@ -29,12 +29,16 @@ if (strpos($uri, '/api/admin/') === 0) {
             'expanded_dirs' => $config['expanded_dirs'] ?? [],
             'site_title' => $config['site_title'] ?? 'MD2HTML',
             'home_article' => $config['home_article'] ?? '',
+            'content_width' => (int)($config['content_width'] ?? 840),
+            'admin_path' => $config['admin_path'] ?? '',
             'api_token' => $config['api_token'] ?? '',
+            'ai_api_base' => $config['ai_api_base'] ?? '',
             'ai_api_key' => $config['ai_api_key'] ?? '',
             'ai_model' => $config['ai_model'] ?? 'deepseek-chat',
             'ai_mode' => $config['ai_mode'] ?? 'hybrid',
             'ai_enabled' => $config['ai_enabled'] ?? true,
             'graph_show_labels' => $config['graph_show_labels'] ?? false,
+            'graph_path' => $config['graph_path'] ?? '',
             'default_light' => $config['default_light'] ?? false,
             'front_drawer_expanded' => $config['front_drawer_expanded'] ?? true,
             'minio' => [
@@ -96,12 +100,18 @@ if (strpos($uri, '/api/admin/') === 0) {
         // 站点设置：标题 + 首页文章（密码走独立 /api/admin/password 接口）
         $config['site_title'] = trim((string)($body['site_title'] ?? '')) !== '' ? trim((string)$body['site_title']) : ($config['site_title'] ?? 'MD2HTML');
         $config['home_article'] = trim((string)($body['home_article'] ?? ''));
+        // 内容宽度：空 = 保持现值；数值则夹到 480–1600
+        $rawW = trim((string)($body['content_width'] ?? ''));
+        $config['content_width'] = ($rawW === '') ? (int)($config['content_width'] ?? 840) : max(480, min(1600, (int)$rawW));
+        $config['admin_path'] = trim((string)($body['admin_path'] ?? ''), "/ \t");
         $config['api_token'] = trim((string)($body['api_token'] ?? ''));
+        $config['ai_api_base'] = trim((string)($body['ai_api_base'] ?? ''));
         $config['ai_api_key'] = trim((string)($body['ai_api_key'] ?? ''));
         $config['ai_model'] = trim((string)($body['ai_model'] ?? '')) !== '' ? trim((string)$body['ai_model']) : 'deepseek-chat';
         $config['ai_mode'] = !empty($body['ai_mode']) ? 'hybrid' : 'strict';
         $config['ai_enabled'] = !empty($body['ai_enabled']);
         $config['graph_show_labels'] = !empty($body['graph_show_labels']);
+        $config['graph_path'] = trim((string)($body['graph_path'] ?? ''), "/ \t");
         $config['default_light'] = !empty($body['default_light']);
         $config['front_drawer_expanded'] = !empty($body['front_drawer_expanded']);
         if (file_put_contents(CONFIG_FILE, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) {
@@ -236,7 +246,6 @@ if ($uri === '/admin') {
         . "  - [Site](#view=site)\n"
         . "  - [AI](#view=ai)\n"
         . "  - [Graph](#view=graph)\n"
-        . "  - [Hide](#view=hidden)\n"
         . "  - [Tree](#view=tree)\n";
     ?>
     <!DOCTYPE html>
@@ -353,52 +362,81 @@ if ($uri === '/admin') {
             <p class="desc">Site identity, home page article and admin password. Paths are relative to vault/ (e.g. knowledge/article/note.md). Title and article save on blur; new password saves on blur after verifying current password.</p>
             <div class="field-row"><span class="field-label">Site title</span><input type="text" id="site-title" placeholder="MD2HTML"></div>
             <div class="field-row"><span class="field-label">Home article</span><input type="text" id="home-article" placeholder="knowledge/article/your-note.md"></div>
-            <div class="field-row"><span class="field-label">API token</span><input type="text" id="api-token" placeholder="Empty = write API disabled (e.g. openssl rand -hex 32)"></div>
+            <div class="field-row"><span class="field-label">Content width</span><input type="text" id="content-width" placeholder="840 (px) — reading column width; side rails auto-balance"></div>
+            <div class="field-row"><span class="field-label">Admin path alias</span><input type="text" id="admin-path" placeholder="e.g. Visual-Knowledge/admin — tree entry + 302 to /admin; empty = none"></div>
             <div class="field-row"><span class="field-label">Current password</span><input type="password" id="site-password-old" placeholder="Enter current password" autocomplete="current-password"></div>
             <div class="field-row"><span class="field-label">New password</span><input type="password" id="site-password" placeholder="Min 4 chars, blur to save" autocomplete="new-password"></div>
             <div class="msg" id="msg-site"></div>
         </div>
 
-        <!-- 视图：AI（对话接入设置：API key + model + 连接测试） -->
+        <!-- 视图：AI（双档选择栏：Chat Model 模型接入 / Agent API 接入信息） -->
         <div id="view-ai" style="display:none">
-            <p class="desc">AI chat integration. The DeepSeek API key enables the ask button on the front site (retrieval + answer with sources). The key is stored in config.json only — never exposed to visitors. Fields save on blur.</p>
-            <div class="field-row"><span class="field-label">AI API key</span><input type="text" id="ai-api-key" placeholder="Empty = AI chat disabled (DeepSeek key, platform.deepseek.com)"></div>
-            <div class="field-row"><span class="field-label">AI model</span><input type="text" id="ai-model" placeholder="deepseek-chat"></div>
+        <div class="toggle two" id="toggle-ai">
+            <div class="toggle-thumb" id="toggle-ai-thumb"></div>
+            <div class="toggle-opt active" data-tab="chat">Chat Model</div>
+            <div class="toggle-opt" data-tab="agent">Agent API</div>
+        </div>
+
+        <!-- 档位一：Chat（OpenAI 兼容端点 + key + model + 连接测试） -->
+        <div class="section" id="panel-ai-chat">
+            <p class="desc">AI chat integration — any OpenAI-compatible chat endpoint works. Cloud gateways: DeepSeek, NewAPI / one-api, OpenRouter... Local inference: Ollama (base http://127.0.0.1:11434/v1), LM Studio, llama.cpp, vLLM — API key can be left empty for local services. The endpoint powers the ask button on the front site. The key is stored in config.json only. Fields save on blur.</p>
+            <div class="field-row"><span class="field-label">API base URL</span><input type="text" id="ai-api-base" placeholder="https://api.deepseek.com · http://127.0.0.1:11434/v1"></div>
+            <div class="field-row"><span class="field-label">API key</span><input type="text" id="ai-api-key" placeholder="Empty = AI chat disabled"></div>
+            <div class="field-row"><span class="field-label">Model</span><input type="text" id="ai-model" placeholder="deepseek-chat"></div>
             <div class="render-row"><span class="render-label">AI enabled</span><button class="switch" id="switch-ai-enabled" aria-label="toggle AI enabled"></button></div>
             <div class="render-row"><span class="render-label">Hybrid mode</span><button class="switch" id="switch-ai-mode" aria-label="toggle AI hybrid mode"></button></div>
-            <p class="desc">AI enabled: master switch — off hides the ask button and rejects /api/ask. Hybrid mode: on = knowledge base first with general fallback, off (strict) = answers only from the knowledge base.</p>
+            <p class="desc">The full chat URL is {base URL}/chat/completions. AI enabled: master switch — off hides the ask button and rejects /api/ask. Hybrid mode: on = knowledge base first with general fallback, off (strict) = answers only from the knowledge base.</p>
             <div class="render-row"><button class="btn" id="btn-ai-test">Test connection</button></div>
             <div class="msg" id="msg-ai"></div>
         </div>
 
-        <!-- 视图：Graph（知识图谱设置：文件名显示等） -->
+        <!-- 档位二：Agent（外部 Agent 接入知识库的 API 信息；Bearer token 在此编辑） -->
+        <div class="section" id="panel-ai-agent" style="display:none">
+            <p class="desc">Hand these details to an AI agent or script to operate this knowledge base remotely. Read endpoints are public; write access requires the Bearer token below (sent as the Authorization header; empty = write API disabled). Token saves on blur.</p>
+            <div class="field-row"><span class="field-label">Base URL</span><code id="agent-base-url" style="flex:1;font-size:12px;"></code><button class="btn" id="btn-agent-copy-url">Copy</button></div>
+            <div class="field-row"><span class="field-label">Bearer token</span><input type="text" id="api-token" placeholder="Empty = write API disabled (e.g. openssl rand -hex 32)"></div>
+            <div class="section-title">Endpoints</div>
+            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/list</code><span style="font-size:12px;color:var(--vp-c-text-2)">full directory tree (public)</span></div>
+            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/article-list</code><span style="font-size:12px;color:var(--vp-c-text-2)">all articles path+name (public)</span></div>
+            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/file?path=X</code><span style="font-size:12px;color:var(--vp-c-text-2)">read one note (public)</span></div>
+            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/search?q=X</code><span style="font-size:12px;color:var(--vp-c-text-2)">keyword search (public)</span></div>
+            <div class="field-row"><code style="font-size:12px;">POST&nbsp;&nbsp;/api/ask</code><span style="font-size:12px;color:var(--vp-c-text-2)">RAG Q&amp;A {"question":"..."} (needs AI enabled)</span></div>
+            <div class="field-row"><code style="font-size:12px;">POST&nbsp;&nbsp;/api/note</code><span style="font-size:12px;color:var(--vp-c-text-2)">create/update note — Bearer auth</span></div>
+            <div class="field-row"><code style="font-size:12px;">DELETE&nbsp;&nbsp;/api/note</code><span style="font-size:12px;color:var(--vp-c-text-2)">delete note — Bearer auth</span></div>
+            <div class="section-title">Examples</div>
+            <p class="desc" style="margin-bottom:4px">Write a note (Bearer token required):</p>
+            <pre id="agent-example-write" style="font-size:11.5px;background:var(--vp-c-bg-soft);padding:10px 12px;border-radius:8px;overflow-x:auto;white-space:pre;margin:0 0 8px;"></pre>
+            <p class="desc" style="margin-bottom:4px">Ask the knowledge base:</p>
+            <pre id="agent-example-ask" style="font-size:11.5px;background:var(--vp-c-bg-soft);padding:10px 12px;border-radius:8px;overflow-x:auto;white-space:pre;margin:0;"></pre>
+            <div class="msg" id="msg-agent"></div>
+        </div>
+        </div>
+
+        <!-- 视图：Graph（知识图谱设置：文件名显示 + 访问路径别名） -->
         <div id="view-graph" style="display:none">
             <p class="desc">Knowledge graph view settings. Show file names controls whether node labels are always visible or only on hover.</p>
             <div class="render-row"><span class="render-label">Show file names</span><button class="switch" id="switch-graph-labels" aria-label="toggle graph file name labels"></button></div>
+            <div class="field-row"><span class="field-label">Graph path alias</span><input type="text" id="graph-path" placeholder="e.g. Visual-Knowledge/graph — tree entry + 302 to /graph; empty = bottom entry"></div>
             <div class="msg" id="msg-graph"></div>
         </div>
 
-        <!-- View: Hide (paths hidden from the frontend) -->
-        <div id="view-hidden" style="display:none">
-            <p class="desc">Hidden from the frontend: enter a directory name to hide the whole directory, or an exact file path to hide one file. Removed from tree, search and direct access.</p>
-            <div class="field-row"><input type="text" id="exclude-input" placeholder="draft or private/secret.md"><button class="btn" id="btn-exclude-add">Add</button></div>
-            <div id="exclude-list"></div>
-            <div class="msg" id="msg-hidden"></div>
-        </div>
-
-        <!-- 视图：Tree（目录管理：默认展开 + 置顶 + 强制展开） -->
+        <!-- 视图：Tree（目录管理：默认展开 + 置顶 + 强制展开 + 隐藏路径） -->
         <div id="view-tree" style="display:none">
-            <p class="desc">Front drawer behavior: default expand, pinned directory on top, pinned articles first in their directory, and directories forced expanded regardless of the default toggle.</p>
+            <p class="desc">Front drawer behavior: default expand, pinned directory on top, pinned articles first in their directory, and directories forced expanded regardless of the default toggle. All four lists below support two notations: a relative path (or bare name) targets the main vault only; an absolute path (/...) targets an entry inside a custom mount directory.</p>
             <div class="render-row"><span class="render-label">Front drawer expanded</span><button class="switch" id="switch-drawer" aria-label="toggle front drawer expanded"></button></div>
             <div class="section-title">Pinned dirs</div>
-            <div class="field-row"><input type="text" id="pinned-dir-input" placeholder="draft (top of the tree)"><button class="btn" id="btn-pinned-dir-add">Add</button></div>
+            <div class="field-row"><input type="text" id="pinned-dir-input" placeholder="draft or /mnt/vault/Mechanic"><button class="btn" id="btn-pinned-dir-add">Add</button></div>
             <div id="pinned-dir-list"></div>
             <div class="section-title">Pinned articles</div>
-            <div class="field-row"><input type="text" id="pinned-article-input" placeholder="knowledge/article/note.md"><button class="btn" id="btn-pinned-article-add">Add</button></div>
+            <div class="field-row"><input type="text" id="pinned-article-input" placeholder="knowledge/a.md or /mnt/vault/Prompts/note.md"><button class="btn" id="btn-pinned-article-add">Add</button></div>
             <div id="pinned-article-list"></div>
             <div class="section-title">Expanded dirs</div>
-            <div class="field-row"><input type="text" id="expanded-dir-input" placeholder="draft (always expanded)"><button class="btn" id="btn-expanded-dir-add">Add</button></div>
+            <div class="field-row"><input type="text" id="expanded-dir-input" placeholder="draft or /mnt/vault/Mechanic/sub"><button class="btn" id="btn-expanded-dir-add">Add</button></div>
             <div id="expanded-dir-list"></div>
+            <div class="section-title">Hidden paths</div>
+            <p class="desc" style="margin-bottom:8px">Hidden from the frontend: a bare name hides that name in the main vault; an exact main-vault path hides one file there; an absolute path hides one file (or a whole subtree) inside a custom mount. Removed from tree, search and direct access.</p>
+            <div class="field-row"><input type="text" id="exclude-input" placeholder="draft, private/secret.md or /mnt/vault/tmp/"><button class="btn" id="btn-exclude-add">Add</button></div>
+            <div id="exclude-list"></div>
             <div class="msg" id="msg-tree"></div>
         </div>
     </div>
@@ -406,7 +444,7 @@ if ($uri === '/admin') {
     // 侧滑菜单内容：服务端内联的 _admin-menu.md（零额外请求）
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260814b"></script>
+    <script src="/assets/admin.js?v=20260823f"></script>
     </body>
     </html>
     <?php

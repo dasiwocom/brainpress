@@ -10,12 +10,12 @@
     "minio_bucket": "",
     "render_webdav": true,
     "render_minio": false,
-    "password_hash": "$2y$10$hek8pNnummy\/TmIG4mD3TO8gm\/4qYa.K\/.Ni9MHkf6ODi6eqshY2O",
+    "password_hash": "",
     "render_custom": false,
     "custom_path": "",
     "custom_paths": [
         {
-            "path": "",
+            "path": "\/home\/debian\/Everything\/vault",
             "on": false
         },
         {
@@ -36,12 +36,13 @@
         }
     ],
     "site_title": "BrainPress",
-    "default_light": false,
-    "front_drawer_expanded": false,
-    "home_article": "\/Website-Framework\/Introduction.md",
-    "exclude_paths": [
-        "images"
-    ],
+    "default_light": true,
+    "front_drawer_expanded": true,
+    "home_article": "BrainPress\/introduction.md",
+    "admin_path": "BrainPress\/dashboard",
+    "graph_path": "BrainPress\/graphview",
+    "content_width": 840,
+    "exclude_paths": [],
     "pinned_dir": "",
     "pinned_articles": [],
     "expanded_dirs": [],
@@ -50,6 +51,7 @@
     "ai_api_key": "",
     "ai_model": "deepseek-chat",
     "ai_mode": "hybrid",
-    "ai_enabled": false,
-    "graph_show_labels": true
+    "ai_enabled": true,
+    "graph_show_labels": true,
+    "ai_api_base": ""
 }

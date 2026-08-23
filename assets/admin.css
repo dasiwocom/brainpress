@@ -61,6 +61,9 @@ body { min-height:100vh; }
 }
 .toggle-thumb.mid { transform:translateX(100%); }
 .toggle-thumb.right { transform:translateX(200%); }
+/* 双档变体（AI 视图：Chat / Agent） */
+.toggle.two .toggle-thumb { width:calc(50% - 4px); }
+.toggle.two .toggle-thumb.right { transform:translateX(100%); }
 /* 顶部栏（与主站完全一致：固定定位 + 玻璃拟态 + 底部分割线） */
 #nav-wrap {
     position:fixed; top:0; left:0; right:0; z-index:400;

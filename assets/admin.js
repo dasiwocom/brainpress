@@ -29,8 +29,23 @@ function setMode(mode) {
     $('panel-minio').style.display = mode === 'minio' ? '' : 'none';
     $('panel-custom').style.display = mode === 'custom' ? '' : 'none';
 }
-document.querySelectorAll('.toggle-opt').forEach(function (el) {
+document.querySelectorAll('#toggle .toggle-opt').forEach(function (el) {
     el.addEventListener('click', function () { setMode(el.dataset.mode); });
+});
+// AI 视图双档选择栏：Chat Model / Agent API（与 Mounts 滑块同款交互）
+var aiTab = 'chat';
+function setAiTab(tab) {
+    aiTab = tab;
+    var opts = document.querySelectorAll('#toggle-ai .toggle-opt');
+    for (var i = 0; i < opts.length; i++) {
+        opts[i].classList.toggle('active', opts[i].dataset.tab === tab);
+    }
+    $('toggle-ai-thumb').classList.toggle('right', tab === 'agent');
+    $('panel-ai-chat').style.display = tab === 'chat' ? '' : 'none';
+    $('panel-ai-agent').style.display = tab === 'agent' ? '' : 'none';
+}
+document.querySelectorAll('#toggle-ai .toggle-opt').forEach(function (el) {
+    el.addEventListener('click', function () { setAiTab(el.dataset.tab); });
 });
 // 渲染开关（多选：可同时开，点击即自动保存）
 function bindSwitch(btnId) {
@@ -74,11 +89,16 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (d.ai_mode !== 'strict') $('switch-ai-mode').classList.add('on'); } catch (e) {}
     try { if (d.ai_enabled !== false) $('switch-ai-enabled').classList.add('on'); } catch (e) {}
     try { if (d.graph_show_labels) $('switch-graph-labels').classList.add('on'); } catch (e) {}
+    try { $('graph-path').value = d.graph_path || ''; } catch (e) {}
     try { $('site-title').value = d.site_title || 'MD2HTML'; } catch (e) {}
     try { $('home-article').value = d.home_article || ''; } catch (e) {}
+    try { $('content-width').value = d.content_width || 840; } catch (e) {}
+    try { $('admin-path').value = d.admin_path || ''; } catch (e) {}
     try { $('api-token').value = d.api_token || ''; } catch (e) {}
+    try { $('ai-api-base').value = d.ai_api_base || ''; } catch (e) {}
     try { $('ai-api-key').value = d.ai_api_key || ''; } catch (e) {}
     try { $('ai-model').value = d.ai_model || 'deepseek-chat'; } catch (e) {}
+    try { fillAgentView(); } catch (e) {}
     // 隐藏列表：原地合并服务器已有值（保持数组引用，避免闭包绑定失效）
     try {
         (d.exclude_paths || []).forEach(function (p) {
@@ -271,7 +291,9 @@ function curMsg() {
     if (currentMode === 'minio') return $('msg');
     if (document.getElementById('view-prefs').style.display !== 'none') return $('msg-prefs');
     if (document.getElementById('view-site').style.display !== 'none') return $('msg-site');
-    if (document.getElementById('view-hidden').style.display !== 'none') return $('msg-hidden');
+    if (document.getElementById('view-ai').style.display !== 'none') {
+        return aiTab === 'agent' ? $('msg-agent') : $('msg-ai');
+    }
     if (document.getElementById('view-tree').style.display !== 'none') return $('msg-tree');
     return $('msg-webdav');
 }
@@ -306,9 +328,13 @@ function saveConfig() {
         ai_mode: $('switch-ai-mode').classList.contains('on'),
         ai_enabled: $('switch-ai-enabled').classList.contains('on'),
         graph_show_labels: $('switch-graph-labels').classList.contains('on'),
+        graph_path: $('graph-path').value.trim(),
         site_title: $('site-title').value.trim(),
         home_article: $('home-article').value.trim(),
+        content_width: parseInt($('content-width').value, 10) || '',
+        admin_path: $('admin-path').value.trim(),
         api_token: $('api-token').value.trim(),
+        ai_api_base: $('ai-api-base').value.trim(),
         ai_api_key: $('ai-api-key').value.trim(),
         ai_model: $('ai-model').value.trim()
     };
@@ -359,11 +385,13 @@ $('site-password').addEventListener('blur', function () {
     });
 });
 // pinned-dir 已改为列表式（输入框 + Add），无失焦保存逻辑
-var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'site-title', 'home-article', 'api-token', 'ai-api-key', 'ai-model'];
+var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'site-title', 'home-article', 'content-width', 'admin-path', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
 for (var bi = 1; bi <= CUSTOM_COUNT; bi++) blurIds.push('custom-path-' + bi);
 blurIds.forEach(function (id) {
     $(id).addEventListener('blur', saveConfig);
 });
+// token 失焦：保存后同步刷新 Agent 视图里的 curl 示例
+$('api-token').addEventListener('blur', fillAgentView);
 // AI 接入：测试连接（发一个测试问题给 /api/ask，验证 key 与检索链路）
 $('btn-ai-test').addEventListener('click', function () {
     var msg = $('msg-ai');
@@ -403,9 +431,27 @@ bindThemeBtn('vp-theme-btn-m');
 $('vp-home-btn').addEventListener('click', function () {
     window.location.href = '/';
 });
-// 视图切换：挂载设置 / 偏好设置 / 站点设置 / AI 接入 / 图谱设置 / 隐藏管理 / 目录管理
+// Agent 接入视图：填充 base URL / 示例（token 从输入框实时读取，失焦后重新生成）
+function fillAgentView() {
+    try {
+        var base = location.origin;
+        var tok = $('api-token').value.trim();
+        $('agent-base-url').textContent = base;
+        $('agent-example-write').textContent =
+            'curl -X POST ' + base + '/api/note \\\n' +
+            '  -H "Authorization: Bearer ' + (tok || 'YOUR_TOKEN') + '" \\\n' +
+            '  -H "Content-Type: application/json" \\\n' +
+            '  -d \'{"path":"notes/example.md","content":"# Example\\n\\nWritten by an agent."}\'';
+        $('agent-example-ask').textContent =
+            'curl -X POST ' + base + '/api/ask \\\n' +
+            '  -H "Content-Type: application/json" \\\n' +
+            '  -d \'{"question":"Summarize what this knowledge base covers."}\'';
+    } catch (e) { console.log('fill agent:', e); }
+}
+$('btn-agent-copy-url').addEventListener('click', function () { fallbackCopy($('agent-base-url').textContent); });
+// 视图切换：挂载设置 / 偏好设置 / 站点设置 / AI（Chat+Agent 双档） / 图谱设置 / 目录管理
 function showView(name) {
-    var views = ['mounts', 'prefs', 'site', 'ai', 'graph', 'hidden', 'tree'];
+    var views = ['mounts', 'prefs', 'site', 'ai', 'graph', 'tree'];
     for (var i = 0; i < views.length; i++) {
         $('view-' + views[i]).style.display = views[i] === name ? '' : 'none';
     }

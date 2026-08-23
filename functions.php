@@ -23,7 +23,7 @@ $storage = $config['storage'] ?? 'local';
 // MinIO 连接配置（S3 API 直连，不走 mc/exec——FPM 禁用了 exec；可从 /admin 配置）
 $minioEndpoint = $config['minio_endpoint'] ?? 'http://127.0.0.1:19000';
 $minioAccess   = $config['minio_access'] ?? 'minio';
-$minioSecret   = $config['minio_secret'] ?? 'bnRPEmtSC8Z4E8NK';
+$minioSecret   = $config['minio_secret'] ?? '';
 $minioBucket   = $config['minio_bucket'] ?? 'vault';
 
 // 路由解析（两个入口共用）
@@ -306,6 +306,205 @@ function collect_md_files(string $dir, string $relPrefix = '', array &$out = [])
         }
     }
     return $out;
+}
+
+/* ---------- 自定义挂载（Custom Path）：与主 vault 平权的内容源 ---------- */
+
+/** 设置条目是否为绝对路径形式（/ 开头或 Windows 盘符）——Tree 页四个列表的"双写法"判据：
+    相对路径/名字 = 只作用于主 vault；绝对路径 = 作用于自定义挂载目录里的对应条目 */
+function setting_is_absolute(string $e): bool {
+    $e = trim($e);
+    if ($e === '') return false;
+    return $e[0] === '/' || (bool)preg_match('/^[A-Za-z]:[\/\\\\]/', $e);
+}
+
+/** 绝对条目是否命中绝对路径（精确或目录前缀=整棵子树）；两侧统一正斜杠比较 */
+function abs_entry_hits(string $abs, array $entries): bool {
+    $a = rtrim(str_replace('\\', '/', $abs), '/');
+    foreach ($entries as $e) {
+        if (!is_string($e) || !setting_is_absolute($e)) continue;
+        $n = rtrim(str_replace('\\', '/', trim($e)), '/');
+        if ($n === '') continue;
+        if ($a === $n || strpos($a, $n . '/') === 0) return true;
+    }
+    return false;
+}
+
+/** 绝对路径落在根内则返回其相对形式；恰好等于根返回 ''；不属于该根返回 null */
+function abs_under_root(string $abs, string $root): ?string {
+    $a = rtrim(str_replace('\\', '/', $abs), '/');
+    $r = rtrim(str_replace('\\', '/', $root), '/');
+    if ($a === $r) return '';
+    if (strpos($a, $r . '/') === 0) return substr($a, strlen($r) + 1);
+    return null;
+}
+
+/** 启用的自定义挂载点：realpath 规范化；isFile = 挂载目标是单个 .md 文件而非目录；无效路径静默跳过 */
+function custom_mount_roots(array $config): array {
+    $out = [];
+    foreach (($config['custom_paths'] ?? []) as $cp) {
+        if (empty($cp['on'])) continue;
+        $p = trim((string)($cp['path'] ?? ''));
+        if ($p === '') continue;
+        $rp = realpath($p);
+        if ($rp === false) continue;
+        $out[] = ['root' => $rp, 'isFile' => is_file($rp)];
+    }
+    return $out;
+}
+
+/** 解析 vault 相对路径 → 绝对文件路径。顺序：主 vault → 自定义挂载目录 → 单文件挂载（rel == 文件名）；找不到 null */
+function resolve_vault_file(string $rel, array $config): ?string {
+    $rel = str_replace('\\', '/', ltrim(trim($rel), '/'));
+    if ($rel === '') return null;
+    $mainRoot = realpath(PANEL_DIR . '/vault');
+    if ($mainRoot !== false) {
+        $full = realpath($mainRoot . '/' . $rel);
+        if ($full !== false && strpos($full, $mainRoot . '/') === 0 && is_file($full)) return $full;
+    }
+    foreach (custom_mount_roots($config) as $m) {
+        if ($m['isFile']) {
+            if ($rel === basename($m['root'])) return $m['root'];
+            continue;
+        }
+        $full = realpath($m['root'] . '/' . $rel);
+        if ($full !== false && strpos($full, $m['root'] . '/') === 0 && is_file($full)) return $full;
+    }
+    return null;
+}
+
+/** 按绝对隐藏条目递归过滤挂载树（命中目录=整棵子树移除） */
+function filter_abs_hidden(array $items, string $mountRoot, array $absExcludes): array {
+    if (!$absExcludes) return $items;
+    $rootN = rtrim(str_replace('\\', '/', $mountRoot), '/');
+    $out = [];
+    foreach ($items as $it) {
+        if (abs_entry_hits($rootN . '/' . str_replace('\\', '/', (string)$it['path']), $absExcludes)) continue;
+        if (($it['type'] ?? '') === 'dir' && isset($it['children'])) {
+            $it['children'] = filter_abs_hidden($it['children'], $mountRoot, $absExcludes);
+        }
+        $out[] = $it;
+    }
+    return $out;
+}
+
+/** 把启用的自定义挂载扫描成树并合并进 $tree（主树同名优先）：目录递归扫描、单 .md 文件作顶层条目。
+    去重只针对"先前已占用的名字"（主树 + 更早的挂载）——不能把挂载自己的子文件过滤掉。
+    Tree 页双写法：隐藏/置顶的相对条目不作用于挂载；绝对条目换算成挂载内相对坐标生效
+    （置顶沿用 scan_tree 的"本层排最前"语义） */
+function merge_custom_trees(array $tree, array $config): array {
+    // 占用名字初始化：主树顶层 + 主树各目录的第一层文件（与 /api/list 本地优先口径一致）
+    $seen = [];
+    foreach ($tree as $t) {
+        $seen[$t['name']] = true;
+        if (($t['type'] ?? '') === 'dir') {
+            foreach (($t['children'] ?? []) as $f) {
+                if (($f['type'] ?? '') === 'file') $seen[basename($f['name'])] = true;
+            }
+        }
+    }
+    // 隐藏/置顶的绝对条目（作用于挂载）；相对条目只属于主 vault，不传入挂载扫描
+    $absEx = [];
+    foreach (($config['exclude_paths'] ?? []) as $e) if (is_string($e) && setting_is_absolute($e)) $absEx[] = $e;
+    $absPinDirs = [];
+    foreach (($config['pinned_dirs'] ?? []) as $e) if (is_string($e) && setting_is_absolute($e)) $absPinDirs[] = $e;
+    $absPinArticles = [];
+    foreach (($config['pinned_articles'] ?? []) as $e) if (is_string($e) && setting_is_absolute($e)) $absPinArticles[] = $e;
+
+    foreach (custom_mount_roots($config) as $m) {
+        if ($m['isFile']) {
+            if (abs_entry_hits($m['root'], $absEx)) continue;   // 整个单文件挂载被隐藏
+            $name = basename($m['root']);
+            if (!isset($seen[$name])) {
+                $tree[] = ['name' => $name, 'path' => $name, 'type' => 'file'];
+                $seen[$name] = true;
+            }
+            continue;
+        }
+        if (!is_dir($m['root'])) continue;
+        // 置顶绝对条目 → 挂载内相对坐标，交给 scan_tree 原生排序
+        $relPinDirs = []; $relPinArticles = [];
+        foreach ($absPinDirs as $a) {
+            $rel = abs_under_root($a, $m['root']);
+            if ($rel !== null && $rel !== '' && is_dir($m['root'] . '/' . $rel)) $relPinDirs[] = $rel;
+        }
+        foreach ($absPinArticles as $a) {
+            $rel = abs_under_root($a, $m['root']);
+            if ($rel !== null && $rel !== '' && is_file($m['root'] . '/' . $rel)) $relPinArticles[] = $rel;
+        }
+        $customTree = scan_tree($m['root'], '', [], $relPinDirs, $relPinArticles);
+        $customTree = filter_abs_hidden($customTree, $m['root'], $absEx);
+        // 仅过滤"之前已占用"的顶层名；本挂载自己的子节点不参与去重
+        $customTree = array_values(array_filter($customTree, function ($n) use ($seen) {
+            return !isset($seen[$n['name']]);
+        }));
+        // 本挂载占用的名字 → 供后续挂载去重
+        foreach ($customTree as $item) {
+            $seen[$item['name']] = true;
+            if ($item['type'] === 'dir') {
+                foreach (($item['children'] ?? []) as $f) {
+                    if (($f['type'] ?? '') === 'file') $seen[basename($f['name'])] = true;
+                }
+            }
+        }
+        $tree = array_merge($tree, $customTree);
+    }
+    return $tree;
+}
+
+/** 多根收集全部 md 文件：主 vault + 各目录型挂载（主 vault 同名相对路径优先）+ 单文件挂载条目。
+    隐藏双写法在此统一生效：相对条目只滤主 vault 结果；绝对条目滤挂载结果 */
+function collect_all_md_files(array $config): array {
+    $out = [];
+    $seenPaths = [];
+    $absEx = [];
+    foreach (($config['exclude_paths'] ?? []) as $e) if (is_string($e) && setting_is_absolute($e)) $absEx[] = $e;
+    $roots = [];
+    $mainRoot = realpath(PANEL_DIR . '/vault');
+    if ($mainRoot !== false && is_dir($mainRoot)) $roots[] = $mainRoot;
+    foreach (custom_mount_roots($config) as $m) {
+        if (!$m['isFile'] && is_dir($m['root'])) $roots[] = $m['root'];
+    }
+    foreach ($roots as $i => $root) {
+        $files = [];
+        collect_md_files($root, '', $files);
+        foreach ($files as $f) {
+            if (isset($seenPaths[$f['path']])) continue;
+            // 挂载来源（$i>0）：按绝对条目判定隐藏；主 vault 来源沿用调用处的相对匹配
+            if ($i > 0 && abs_entry_hits($root . '/' . str_replace('\\', '/', (string)$f['path']), $absEx)) continue;
+            $seenPaths[$f['path']] = true;
+            $out[] = $f;
+        }
+    }
+    foreach (custom_mount_roots($config) as $m) {
+        if ($m['isFile'] && is_md($m['root']) && !isset($seenPaths[basename($m['root'])])
+            && !abs_entry_hits($m['root'], $absEx)) {
+            $name = basename($m['root']);
+            $seenPaths[$name] = true;
+            $out[] = ['path' => $name, 'name' => preg_replace('/\.md$/i', '', $name), 'mtime' => (int)filemtime($m['root'])];
+        }
+    }
+    return $out;
+}
+
+/** 展开目录的有效条目（供前端抽屉匹配）：相对条目原样；绝对条目换算成所属根内的相对坐标
+    （抽屉里展示的节点相对路径唯一，换算后前端逻辑零改动） */
+function expand_effective_entries(array $config): array {
+    $out = [];
+    $mainRoot = realpath(PANEL_DIR . '/vault');
+    foreach (($config['expanded_dirs'] ?? []) as $d) {
+        $d = trim((string)$d);
+        if ($d === '') continue;
+        if (!setting_is_absolute($d)) { $out[] = $d; continue; }
+        $roots = [];
+        if ($mainRoot !== false) $roots[] = $mainRoot;
+        foreach (custom_mount_roots($config) as $m) if (!$m['isFile']) $roots[] = $m['root'];
+        foreach ($roots as $r) {
+            $rel = abs_under_root($d, $r);
+            if ($rel !== null && $rel !== '') { $out[] = $rel; break; }
+        }
+    }
+    return array_values(array_unique($out));
 }
 
 /** 路径是否命中隐藏列表（精确路径 / 目录前缀 / 文件名），命中返回 true（前台不可见） */
