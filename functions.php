@@ -15,7 +15,7 @@ const CONFIG_FILE = PANEL_DIR . '/config.json';
 const DEFAULT_WORKSPACE = '/root/.hermes/workspace';
 const MAX_FILE_SIZE = 1048576; // 1MB
 
-$config = json_decode((string)file_get_contents(CONFIG_FILE), true) ?: [];
+$config = json_decode((string)@file_get_contents(CONFIG_FILE), true) ?: [];
 $workspace = $config['workspace'] ?? DEFAULT_WORKSPACE;
 // 存储后端：minio（读 Obsidian 存储桶）/ local（读本地 posts/）
 $storage = $config['storage'] ?? 'local';
