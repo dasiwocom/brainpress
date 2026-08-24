@@ -320,7 +320,7 @@ if (strpos($uri, '/api/') === 0) {
             if ($customPath === '') continue;
             $rp = realpath($customPath);
             if ($rp === false) continue;
-            if (is_file($rp) && is_md($rp) && $rel === basename($rp)) {
+            if (is_file($rp) && (is_md($rp) || is_canvas($rp)) && $rel === basename($rp)) {
                 $content = @file_get_contents($rp);
                 if ($content === false) fail('文件不可读');
                 if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -331,8 +331,9 @@ if (strpos($uri, '/api/') === 0) {
                     'size' => strlen($content),
                 ]);
             } elseif (is_dir($rp)) {
+                // 目录挂载与主 vault 同级平权：rel 直接落在挂载根内解析（无前缀包装）
                 $full = realpath($rp . '/' . $rel);
-                if ($full !== false && strpos($full, $rp . '/') === 0 && is_file($full) && is_md($full)) {
+                if ($full !== false && strpos($full, $rp . '/') === 0 && is_file($full) && (is_md($full) || is_canvas($full))) {
                     $content = @file_get_contents($full);
                     if ($content === false) fail('文件不可读');
                     if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -358,7 +359,7 @@ if (strpos($uri, '/api/') === 0) {
         if ($isLocal) {
             if (!$renderWebdav) fail('文件不存在');
             $full = $localFull;
-            if (!is_file($full) || !is_md($full)) fail('文件不存在');
+            if (!is_file($full) || (!is_md($full) && !is_canvas($full))) fail('文件不存在');
             $content = @file_get_contents($full);
             if ($content === false) fail('文件不可读');
             if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -693,10 +694,24 @@ if (preg_match('#\.pdf$#i', $uri)) {
     }
 }
 
+// 服务端渲染 Canvas：/xxx.canvas（Obsidian Canvas 白板，JSON 格式）→ 内联原文，前端渲染画布
+$ssrCanvasPath = '';
+$ssrCanvasContent = '';
+if (preg_match('#\.canvas$#i', $uri)) {
+    $canvasRel = urldecode(ltrim($uri, '/'));
+    $canvasFull = resolve_vault_file($canvasRel, $config);
+    if ($canvasFull !== null) {
+        if (!is_excluded($canvasRel, $config['exclude_paths'] ?? [])) {
+            $ssrCanvasPath = $canvasRel;
+            $ssrCanvasContent = (string)@file_get_contents($canvasFull);
+        }
+    }
+}
+
 // 服务端渲染 Graph View：/graph 或 /graph?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）
 $ssrGraph = preg_match('#^/graph(/|\\?|$)#', $uri) ? true : false;
 
-if ($uri !== '/' && $uri !== '/index.php' && $ssrArticlePath === '' && $ssrPdfPath === '' && $ssrExcalidrawPath === '' && !$ssrGraph) {
+if ($uri !== '/' && $uri !== '/index.php' && $ssrArticlePath === '' && $ssrPdfPath === '' && $ssrExcalidrawPath === '' && $ssrCanvasPath === '' && !$ssrGraph) {
     http_response_code(404);
     exit;
 }
@@ -706,8 +721,9 @@ header('Content-Type: text/html; charset=utf-8');
 header('Cache-Control: no-cache, must-revalidate');
 // 前台侧滑菜单：扫描 vault/ 生成文章目录树（md 嵌套列表，内联零请求；隐藏列表不收录，置顶排最前）
 // 自定义挂载与主 vault 平权：合并进同一棵树（同名主 vault 优先）
+// 主 vault 受「WebDAV 渲染」开关控制（与 /api/list、/api/file 同一开关）：关=目录不显示（挂载目录走各自开关不受影响）
 $frontMenuMd = '';
-$frontTree = is_dir(PANEL_DIR . '/vault')
+$frontTree = (($config['render_webdav'] ?? true) && is_dir(PANEL_DIR . '/vault'))
     ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [])
     : [];
 $frontMenuMd = tree_to_md(merge_custom_trees($frontTree, $config));
@@ -756,10 +772,10 @@ if ($homeArticle !== '') {
 ?><!DOCTYPE html>
 <!-- 服务端预告主题（cookie 由 JS 切换主题时同步写入）：Firefox 刷新时首帧即夜间，避免先白后黑闪屏；cookie 代表用户实际选择（手动夜间优先于 default_light） -->
 <html lang="zh-CN" class="<?php echo (($_COOKIE['vp-theme'] ?? '') === 'dark') ? 'dark' : ''; ?>">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title><?php echo htmlspecialchars($pageTitle); ?></title>
+ <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title><?php echo htmlspecialchars($pageTitle); ?></title>
 <script>
 /* 提前应用主题：HTML 渲染前读取 localStorage 加 dark 类，避免夜间模式刷新闪屏；默认日间模式开启时强制日间 */
 var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
@@ -996,6 +1012,13 @@ html.dark .drawer-md a:active { color:var(--vp-c-brand); }
     border-left:1px solid var(--line); /* 树形竖线 */
 }
 .drawer-md li.collapsed > ul { display:none; }
+/* 虚拟入口（Dashboard/Graph-View 等）位于树根层级时：与一级目录行同款字号字重，
+   但不插入折叠箭头（无子级可折叠）；内链去掉自身 padding/字号，由 li 统一提供，缩进对齐目录行 */
+.drawer-md li.alias-dir {
+    font-size:17px; font-weight:700; color:var(--vp-c-text-1);
+    padding:2px 10px;
+}
+.drawer-md li.alias-dir > a { padding:0; font-size:inherit; font-weight:inherit; }
 
 /* 主题切换：日间显示月亮（点击进夜间），夜间显示太阳 */
 .vp-icon-btn .theme-sun { display:none; }
@@ -1297,6 +1320,37 @@ html.dark .md pre .code-copy.copied {
 }
 .md th { background:var(--hover); font-weight:600; white-space:nowrap; }
 .md tr:nth-child(2n) td { background:var(--vp-c-bg-soft); }
+/* GFM 对齐语法 |:---|:---:|---:|：marked 输出 align 属性，显式覆盖默认 text-align:left */
+.md th[align="center"], .md td[align="center"] { text-align:center; }
+.md th[align="right"], .md td[align="right"] { text-align:right; }
+.md th[align="left"], .md td[align="left"] { text-align:left; }
+/* 任务列表项隐藏无序列表圆点（Obsidian 同款：只留复选框）+ 品牌色勾选框 */
+.md li:has(> input[type="checkbox"]) { list-style:none; }
+.md li:has(> input[type="checkbox"])::marker { content:''; }
+.md input[type="checkbox"] { accent-color:var(--vp-c-brand); }
+/* Obsidian 高亮 ==文字== */
+.md mark { background:#fff3a3; color:inherit; padding:0 2px; border-radius:2px; }
+html.dark .md mark { background:#6b6000; color:#fdfdc9; }
+/* Obsidian Callout 提示块：类型色卡片（颜色经 --callout-color 注入） */
+.md .callout {
+    --callout-color:#086ddd;
+    margin:12px 0; border-radius:8px; overflow:hidden;
+    background:color-mix(in srgb, var(--callout-color) 8%, transparent);
+}
+html.dark .md .callout { background:color-mix(in srgb, var(--callout-color) 14%, transparent); }
+.md .callout-title {
+    display:flex; align-items:center; gap:8px;
+    padding:10px 14px; color:var(--callout-color); font-weight:600; font-size:15px;
+}
+.md .callout-title svg { width:17px; height:17px; flex:none; }
+.md .callout-title span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.md .callout-content { padding:0 14px 10px; }
+.md .callout-content > :first-child { margin-top:0; }
+.md .callout-content > :last-child { margin-bottom:0; }
+.md .callout-foldable .callout-title { cursor:pointer; user-select:none; }
+.md .callout-foldable.is-collapsed .callout-content { display:none; }
+/* 数学公式：块级公式居中独占一行；行内随文本流 */
+.md .ob-math-block { display:block; text-align:center; margin:12px 0; overflow-x:auto; }
 .md hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
 /* 折叠手风琴（details/summary）VitePress 风格 */
 .md details {
@@ -1332,9 +1386,23 @@ html.dark .md a:hover { color:#c7cdff; }
 .md a.ob-tag { color:var(--vp-c-brand); text-decoration:none; font-weight:500; font-size:.9em; padding:1px 6px; background:rgba(100,108,255,.1); border-radius:4px; margin:0 2px; }
 .md a.ob-tag:hover { background:rgba(100,108,255,.2); }
 /* Obsidian 嵌入 */
+/* 嵌入：加载中轻提示；完成后无缝内联（贴合 Obsidian：笔记/块嵌入无边框） */
 .md .ob-embed { display:block; border:1px solid var(--line); border-left:3px solid var(--vp-c-brand); border-radius:6px; padding:12px 16px; margin:12px 0; background:var(--vp-c-bg-soft); font-size:14px; color:var(--vp-c-text-2); }
-.md .ob-embed-missing { color:#c0392b; }
+.md .ob-embed.loaded { border:none; border-radius:0; padding:0; margin:12px 0; background:transparent; color:inherit; font-size:inherit; }
+.md .ob-embed-missing { color:var(--vp-c-text-3); font-weight:400; background:transparent; border:none; border-bottom:1px dashed var(--vp-c-text-3); padding:0 1px; }
 .md .ob-embed-inner { color:var(--vp-c-text-1); }
+/* 脚注（GFM 扩展）：上标引用点击滚动到底部定义 */
+.md sup.fn-ref { cursor:pointer; color:var(--vp-c-brand); font-size:.75em; margin-left:2px; user-select:none; }
+.md sup.fn-ref:hover { text-decoration:underline; }
+.md .fn-def { font-size:.85em; color:var(--vp-c-text-2); margin:4px 0; }
+.md .fn-def .fn-mark { color:var(--vp-c-text-3); margin-right:8px; font-weight:600; user-select:none; }
+/* 音视频嵌入（![[xxx.mp4]] / ![[xxx.mp3]]） */
+.md video.ob-embed-media, .md audio.ob-embed-media { display:block; width:100%; max-width:100%; margin:12px 0; border-radius:6px; background:var(--vp-c-bg-soft); outline:none; }
+/* 媒体/图片包在嵌入容器内时去掉自身外边距，避免与容器间距叠加 */
+.md .ob-embed.loaded > video.ob-embed-media, .md .ob-embed.loaded > audio.ob-embed-media, .md .ob-embed.loaded > img.ob-embed-img { margin:0; }
+/* 画布嵌入（![[x.canvas]]：复用白板场景 SVG，等比缩放） */
+.md .ob-embed-canvas { border:1px solid var(--line); border-radius:6px; overflow:hidden; margin:12px 0; background:var(--vp-c-bg); }
+.md .ob-embed-canvas svg { width:100%; height:auto; display:block; }
 /* 反向链接（Obsidian 风格：区块 + 条目列表 + 引用上下文） */
 #backlinks { margin-top:56px; padding-top:28px; border-top:1px solid var(--line); }
 .backlinks-head {
@@ -1383,32 +1451,109 @@ html.dark .md a:hover { color:#c7cdff; }
     font-size:13px; opacity:0; pointer-events:none; transition:opacity .25s; z-index:200;
 }
 
-/* PDF 阅读器（pdf.js）：工具栏/画布/日夜反转 */
-.pdf-toolbar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--vp-c-bg); z-index:10; }
-.pdf-btn { border:1px solid var(--line); background:transparent; color:var(--vp-c-text-1); border-radius:4px; min-width:30px; height:30px; font-size:16px; cursor:pointer; line-height:1; }
-.pdf-btn:hover { border-color:#3451b2; color:#3451b2; }
-html.dark .pdf-btn:hover { border-color:#a8b1ff; color:#a8b1ff; }
-.pdf-btn.active { background:#3451b2; color:#fff; border-color:#3451b2; }
-html.dark .pdf-btn.active { background:#a8b1ff; color:#111; border-color:#a8b1ff; }
-.pdf-info { font-size:13px; color:var(--vp-c-text-mute); min-width:56px; text-align:center; }
-.pdf-sep { width:1px; height:18px; background:var(--line); }
-.pdf-canvas-wrap { flex:1; overflow:auto; padding:16px 0; display:flex; justify-content:flex-start; align-items:flex-start; }
-.pdf-canvas-wrap canvas { box-shadow:0 1px 6px rgba(0,0,0,.2); margin:0 auto; display:block; flex:0 0 auto; transition:filter .25s ease; }
-/* 全屏阅读：pdf-view 铺满浏览器（工具栏在顶，画布滚动区占满）——原生全屏 + CSS 模拟（手机/iOS 无 Fullscreen API 时） */
-#pdf-view:fullscreen { width:100vw; height:100vh; display:flex; flex-direction:column; background:var(--vp-c-bg); padding:0; }
-#pdf-view:fullscreen .pdf-toolbar { position:static; }
-#pdf-view:fullscreen .pdf-canvas-wrap { flex:1; min-height:0; }
-#pdf-view:-webkit-full-screen { width:100vw; height:100vh; display:flex; flex-direction:column; background:var(--vp-c-bg); padding:0; }
-#pdf-view.fs { position:fixed; top:0; left:0; right:0; bottom:0; z-index:9999; display:flex; flex-direction:column; background:var(--vp-c-bg); padding:0; }
-#pdf-view.fs .pdf-toolbar { position:static; }
-#pdf-view.fs .pdf-canvas-wrap { flex:1; min-height:0; }
-/* 夜间主题：PDF 自动反转（透明底 → 页面背景透出，文字变白） */
-html.dark #pdf-canvas { filter:invert(1) hue-rotate(180deg); }
+/* ====== PDF 阅读器组件（pdf.js）：笔记嵌入与 URL 直开共用同一 Obsidian 式结构 ======
+   工具栏钉顶 + 页面铺满框体零间距纵向滚动；深色模式保持白纸不反色 */
+#pdf-view { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+#pdf-view > * { min-height:0; }
+/* 嵌入语境：与 .md .ob-embed.loaded 同权重且靠后，保证框体样式生效 */
+.ob-pdf,
+.md .ob-embed.ob-pdf {
+    display:flex; flex-direction:column;
+    height:clamp(480px, 78vh, 920px);
+    border:1px solid var(--line); border-radius:10px; overflow:hidden;
+    background:var(--vp-c-bg); position:relative;
+}
+/* 直开整页模式：吃满视口高度（导航+标题约占 140px）做框内滚动阅读器，无边框圆角 */
+.ob-pdf-full, .ob-pdf-full.ob-pdf {
+    height:calc(100vh - 140px); min-height:480px;
+    flex:none; border:none; border-radius:0;
+}
+.md .ob-embed.ob-pdf.loaded.fs,
+.ob-pdf.fs { position:fixed; inset:0; z-index:9999; height:auto; border-radius:0; }
+.ob-pdf-toolbar {
+    display:flex; align-items:center; gap:2px; flex:none;
+    padding:4px 8px; border-bottom:1px solid var(--line);
+    background:var(--vp-c-bg-soft);
+}
+.ob-pdf-toolbar .sp { flex:1; }
+.ob-pdf-btn {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:26px; height:26px; padding:0; border:none; border-radius:5px;
+    background:transparent; color:var(--vp-c-text-2); cursor:pointer;
+}
+.ob-pdf-btn:hover { background:var(--hover); color:var(--vp-c-text-1); }
+.ob-pdf-btn svg { width:15px; height:15px; }
+.ob-pdf-btn[hidden] { display:none; }
+.ob-pdf-sep { width:1px; height:16px; background:var(--line); margin:0 6px; }
+.ob-pdf-pageinp {
+    width:3.4ch; text-align:right; padding:2px 3px;
+    border:1px solid var(--line); border-radius:4px;
+    background:transparent; color:var(--vp-c-text-1); font-size:12.5px;
+}
+.ob-pdf-pageinp:focus { outline:none; border-color:var(--vp-c-brand); }
+.ob-pdf-total { font-size:12.5px; color:var(--vp-c-text-mute); margin:0 6px 0 3px; white-space:nowrap; }
+.ob-pdf-zoomsel {
+    appearance:none; -webkit-appearance:none; max-width:110px;
+    border:none; border-radius:5px; padding:3px 16px 3px 6px; font-size:12.5px;
+    background-color:transparent; color:var(--vp-c-text-2); cursor:pointer;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 2px center; background-size:11px;
+}
+.ob-pdf-zoomsel:hover { background-color:var(--hover); color:var(--vp-c-text-1); }
+html.dark .ob-pdf-zoomsel option { color:#ddd; background:#1e1e22; }
+/* 页面区：铺满框体零间距，页间仅一条细缝线 */
+.ob-pdf-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
+.ob-pdf-pages { display:flex; flex-direction:column; gap:0; }
+.ob-pdf-page { position:relative; width:100%; background:#fff; border-bottom:1px solid rgba(0,0,0,.09); }
+.ob-pdf-page:last-child { border-bottom:none; }
+html.dark .ob-pdf-page { border-bottom-color:rgba(255,255,255,.07); }
+.ob-pdf-page canvas { display:block; width:100%; height:auto; }
+/* 文档大纲抽屉：容器左缘滑出，覆盖页面之上 */
+.ob-pdf-outline {
+    position:absolute; top:35px; left:0; bottom:0; width:min(300px,62%);
+    background:var(--vp-c-bg); border-right:1px solid var(--line);
+    overflow-y:auto; padding:10px 8px; z-index:5;
+    transform:translateX(-101%); transition:transform .18s ease;
+}
+.ob-pdf.outline-open .ob-pdf-outline { transform:none; box-shadow:8px 0 24px rgba(0,0,0,.14); }
+.ob-pdf-outline ul { list-style:none; margin:0; padding-left:14px; }
+.ob-pdf-outline > ul { padding-left:2px; }
+.ob-pdf-outline a {
+    display:block; padding:3px 6px; border-radius:4px; font-size:13px;
+    color:var(--vp-c-text-1); text-decoration:none; cursor:pointer;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.ob-pdf-outline a:hover { background:var(--hover); }
 
 /* Excalidraw 绘画渲染（.excalidraw.md：SVG 画布自适应） */
 .excalidraw-view { padding:24px 8px 40px; }
 .excalidraw-canvas svg { max-width:100%; height:auto; display:block; border-radius:8px; box-shadow:0 1px 8px rgba(0,0,0,.12); }
 html.dark .excalidraw-canvas svg { box-shadow:0 1px 8px rgba(0,0,0,.4); }
+
+/* Obsidian Canvas 白板渲染（.canvas：SVG 节点/连线，颜色跟随日夜主题） */
+.canvas-view { padding:24px 8px 40px; }
+.canvas-board { width:100%; overflow-x:auto; }
+.canvas-board svg { min-width:100%; height:auto; display:block; }
+.cv-node { fill:var(--vp-c-bg); stroke:var(--line); stroke-width:1.2; }
+.cv-group { fill:transparent; stroke:#98981d; stroke-width:1.2; stroke-dasharray:5 4; }
+html.dark .cv-group { stroke:#b8b857; }
+.cv-edge { fill:none; stroke:var(--vp-c-text-3); stroke-width:1.6; }
+.cv-arrow { fill:var(--vp-c-text-3); }
+.cv-label rect { fill:var(--vp-c-bg); stroke:var(--line); }
+.cv-label text { fill:var(--vp-c-text-1); font-size:12px; }
+.cv-content { box-sizing:border-box; padding:10px 14px; font-size:14px; line-height:1.55; color:var(--vp-c-text-1); overflow:hidden; width:100%; height:100%; word-break:break-word; }
+.cv-content p { margin:0 0 .5em; } .cv-content p:last-child { margin-bottom:0; }
+.cv-content h1,.cv-content h2,.cv-content h3,.cv-content h4 { margin:.2em 0 .35em; font-size:1.05em; }
+.cv-content ul,.cv-content ol { margin:.2em 0 .4em; padding-left:1.3em; }
+.cv-content code { background:var(--vp-c-bg-mute); padding:0 4px; border-radius:3px; font-size:.9em; }
+.cv-content a { color:var(--vp-c-accent); }
+.cv-glabel { fill:var(--vp-c-text-2); font-size:13px; font-weight:600; }
+.cv-content img { max-width:100%; }
+.cv-filecard { display:flex; align-items:center; gap:8px; height:100%; padding:10px 14px; color:var(--vp-c-text-1); text-decoration:none; font-size:14px; }
+.cv-filecard:hover { color:var(--vp-c-accent); }
+.cv-linkcard { display:flex; align-items:center; gap:8px; height:100%; padding:10px 14px; color:var(--vp-c-accent); text-decoration:none; font-size:14px; overflow:hidden; }
+.cv-icon { flex:0 0 auto; font-size:16px; }
+.cv-fname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* ===== Graph View：知识图谱（SVG 力导向） ===== */
 /* fixed 铺满视口（导航下方）：不依赖 content 布局/父级高度——任何情况下都有确定尺寸 */
@@ -1422,11 +1567,10 @@ html.dark .excalidraw-canvas svg { box-shadow:0 1px 8px rgba(0,0,0,.4); }
 html.dark .graph-link { stroke:#3a3a4a; }
 .graph-link-hot { opacity:1; stroke-width:2; }
 .graph-link-dim { opacity:.06; }
-.graph-label { font-family:'Nunito',sans-serif; font-size:17px; font-weight:700; line-height:28.9px; fill:var(--vp-c-text-1); pointer-events:none; text-rendering:optimizeLegibility; }
-.graph-node { cursor:pointer; transition:opacity .2s ease; }
+.graph-label { font-family:'Nunito',sans-serif; font-size:10.5px; font-weight:600; line-height:1.2; fill:var(--vp-c-text-2); paint-order:stroke; stroke:var(--vp-c-bg); stroke-width:3px; stroke-linejoin:round; pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .18s ease; }
+.graph-node { cursor:pointer; transition:opacity .2s ease; will-change:transform; }
 .graph-node circle { fill:#3451b2; transition:transform .2s ease; transform-box:fill-box; transform-origin:center; }
 html.dark .graph-node circle { fill:#a8b1ff; }
-.graph-node text { fill:var(--vp-c-text-1); font-size:11px; pointer-events:none; }
 .graph-node:hover circle { transform:scale(1.3); }
 /* hover 高亮：非邻居淡化（class 切换——轻量） */
 .graph-dim { opacity:.15; }
@@ -1497,6 +1641,8 @@ html.dark .graph-node circle { fill:#a8b1ff; }
                     <div id="pdf-view" style="display:none"></div>
                     <!-- Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → SVG） -->
                     <div id="excalidraw-view" style="display:none"><div class="excalidraw-canvas" id="excalidraw-canvas"></div></div>
+                    <!-- Obsidian Canvas 白板渲染（.canvas：JSON → SVG 节点/连线画布） -->
+                    <div id="canvas-view" style="display:none"><div class="canvas-board" id="canvas-board"></div></div>
                     <!-- 反向链接（被谁引用） -->
                     <div id="backlinks"></div>
                 </div>
@@ -1548,6 +1694,8 @@ html.dark .graph-node circle { fill:#a8b1ff; }
 <script src="/assets/marked.min.js"></script>
 <script src="/assets/purify.min.js"></script>
 <script src="/assets/lunr.min.js"></script>
+<link rel="stylesheet" href="/assets/katex.min.css">
+<script src="/assets/katex.min.js"></script>
 <script>
 // 前台侧滑菜单：PHP 扫描生成的文章目录树（md 嵌套列表，内联零请求）
 var FRONT_MENU_MD = <?php echo json_encode($frontMenuMd); ?>;
@@ -1575,6 +1723,10 @@ var GRAPH_SHOW_LABELS = <?php echo !empty($config['graph_show_labels']) ? 'true'
 var SSR_EXCALIDRAW = <?php echo $ssrExcalidrawPath !== '' ? 'true' : 'false'; ?>;
 var EXCALIDRAW_PATH = <?php echo $ssrExcalidrawPath !== '' ? json_encode($ssrExcalidrawPath) : '""'; ?>;
 var EXCALIDRAW_RAW = <?php echo $ssrExcalidrawPath !== '' ? json_encode($ssrExcalidrawContent) : '""'; ?>;
+// Obsidian Canvas 白板直达（.canvas）：内联 JSON——前端渲染节点/连线画布
+var SSR_CANVAS = <?php echo $ssrCanvasPath !== '' ? 'true' : 'false'; ?>;
+var CANVAS_PATH = <?php echo $ssrCanvasPath !== '' ? json_encode($ssrCanvasPath) : '""'; ?>;
+var CANVAS_JSON = <?php echo $ssrCanvasPath !== '' ? json_encode($ssrCanvasContent) : '""'; ?>;
 // 首页大标题（从文章第一个标题提取）
 var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
 </script>
@@ -1583,6 +1735,14 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     'use strict';
     var state = { authed: false, csrf: null, path: null, dir: null, mode: 'view', tree: [] };
     var $ = function (id) { return document.getElementById(id); };
+    // 内容视图互斥：切换前隐藏全部特殊视图（PDF/Excalidraw/Canvas/Graph）——
+    // 各渲染器只藏自己认识的容器会导致上一个画布残留（如 canvas 与 excalidraw 同页，需刷新才消失）
+    function hideSpecialViews() {
+        ['pdf-view', 'excalidraw-view', 'canvas-view', 'graph-view'].forEach(function (id) {
+            var e = $(id);
+            if (e) e.style.display = 'none';
+        });
+    }
 
     /* ---------- 基础 ---------- */
     function toast(msg) {
@@ -1620,25 +1780,127 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     }
 
     /* ---------- Obsidian 语法保护：marked 渲染前占位，渲染后还原 ---------- */
-    // marked 会把 ![[xxx.png]] 里的 [[xxx]] 误判为链接（尤其 www 开头），先替换成占位符
+    // marked 会把 ![[xxx.png]] 里的 [[xxx]] 误判为链接（尤其 www 开头），先替换成占位符；
+    // 数学公式同理——$ 内的 *_[] 等会被 marked 吃掉，先摘出，还原为 .ob-math 空元素（tex 走 base64 存 data-tex）
+    // 占位符 payload 用无填充 base64url：标准 base64 的 == 尾巴会被 ==高亮== 扩展误认成定界符
+    function b64e(s) {
+        return btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function b64d(s) {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        return decodeURIComponent(escape(atob(s)));
+    }
     function protectObsidian(text) {
         return text
+            // 块级公式先替换，避免内联正则吃掉 $$ 的定界符；I/D 标记行内/块级
+            .replace(/\$\$([\s\S]+?)\$\$/g, function (m, inner) {
+                if (!inner.trim()) return m;
+                return '%%OBS_MATH%%D:' + b64e(inner) + '%%END%%';
+            })
+            .replace(/\$(?!\s)((?:[^$\n\\]|\\.)+?)\$/g, function (m, inner) {
+                if (!inner.trim()) return m;
+                return '%%OBS_MATH%%I:' + b64e(inner) + '%%END%%';
+            })
             .replace(/!\[\[([^\]]+)\]\]/g, function (m, inner) {
-                return '%%OBS_EMBED%%' + btoa(unescape(encodeURIComponent(inner))) + '%%END%%';
+                return '%%OBS_EMBED%%' + b64e(inner) + '%%END%%';
             })
             .replace(/\[\[([^\]]+)\]\]/g, function (m, inner) {
-                return '%%OBS_LINK%%' + btoa(unescape(encodeURIComponent(inner))) + '%%END%%';
+                return '%%OBS_LINK%%' + b64e(inner) + '%%END%%';
             });
     }
     function restoreObsidian(html) {
         return html
-            .replace(/%%OBS_EMBED%%([A-Za-z0-9+/=]+)%%END%%/g, function (m, b64) {
-                return '![[' + decodeURIComponent(escape(atob(b64))) + ']]';
+            .replace(/%%OBS_MATH%%([ID]):([A-Za-z0-9_-]+)%%END%%/g, function (m, mode, b64) {
+                return '<span class="ob-math" data-display="' + (mode === 'D' ? '1' : '0') + '" data-tex="' + b64 + '"></span>';
             })
-            .replace(/%%OBS_LINK%%([A-Za-z0-9+/=]+)%%END%%/g, function (m, b64) {
-                return '[[' + decodeURIComponent(escape(atob(b64))) + ']]';
+            .replace(/%%OBS_EMBED%%([A-Za-z0-9_-]+)%%END%%/g, function (m, b64) {
+                return '![[' + b64d(b64) + ']]';
+            })
+            .replace(/%%OBS_LINK%%([A-Za-z0-9_-]+)%%END%%/g, function (m, b64) {
+                return '[[' + b64d(b64) + ']]';
             });
     }
+
+    /* Obsidian 注释 %%...%%（预览不可见）：渲染前剥离；可跨行；```/~~~ 围栏内不剥（防破坏代码示例） */
+    function stripObsidianComments(text) {
+        if (text.indexOf('%%') === -1) return text;
+        var lines = text.split('\n'), out = [], fence = null, inComment = false;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (fence) {
+                out.push(line);
+                var t = line.trim();
+                if (t.charAt(0) === fence.ch && RegExp('^' + fence.ch + '{' + fence.len + '}\\s*$').test(t)) fence = null;
+                continue;
+            }
+            var fm = /^\s*(`{3,}|~{3,})/.exec(line);
+            if (fm) { fence = { ch: fm[1].charAt(0), len: fm[1].length }; out.push(line); continue; }
+            var res = '', j = 0;
+            while (j < line.length) {
+                if (inComment) {
+                    var end = line.indexOf('%%', j);
+                    if (end === -1) { j = line.length; }   // 整行都在注释内
+                    else { inComment = false; j = end + 2; }
+                } else {
+                    var st = line.indexOf('%%', j);
+                    if (st === -1) { res += line.slice(j); j = line.length; }
+                    else { res += line.slice(j, st); j = st + 2; inComment = true; }
+                }
+            }
+            out.push(res);
+        }
+        return out.join('\n');
+    }
+
+    /* 统一 md 渲染管线：注释剥离 → Obsidian 占位保护 → marked → 还原 → 消毒（所有渲染出口共用） */
+    function mdToHtml(raw) {
+        return DOMPurify.sanitize(restoreObsidian(marked.parse(protectObsidian(stripObsidianComments(String(raw || ''))), { gfm: true, breaks: true })));
+    }
+
+    /* GFM 脚注扩展（marked 原生不支持）：[^id] 上标引用 / [^id]: 定义。
+       引用不用 href 锚点——hash 变化会触发 handleHash 误当文章路径导航，改为 JS 点击滚动 */
+    marked.use({
+        extensions: [
+            {
+                name: 'footnoteDef', level: 'block',
+                start: function (src) { var i = src.search(/^\[\^/m); return i === -1 ? undefined : i; },
+                tokenizer: function (src) {
+                    var m = /^\[\^([^\]\s]+)\]:[ \t]*(.*)\n?/.exec(src);
+                    if (!m) return undefined;
+                    return { type: 'footnoteDef', raw: m[0], id: m[1], tokens: this.lexer.inlineTokens(m[2]) };
+                },
+                renderer: function (token) {
+                    return '<div class="fn-def" data-fnid="' + esc(token.id) + '"><span class="fn-mark">' + esc(token.id) + '.</span>' + this.parser.parseInline(token.tokens) + '</div>';
+                }
+            },
+            {
+                name: 'footnoteRef', level: 'inline',
+                start: function (src) { var i = src.indexOf('[^'); return i === -1 ? undefined : i; },
+                tokenizer: function (src) {
+                    var m = /^\[\^([^\]\s]+)\](?!:)/.exec(src);
+                    if (!m) return undefined;
+                    return { type: 'footnoteRef', raw: m[0], id: m[1] };
+                },
+                renderer: function (token) {
+                    return '<sup class="fn-ref" data-fnid="' + esc(token.id) + '">' + esc(token.id) + '</sup>';
+                }
+            },
+            {
+                /* Obsidian 高亮 ==文字== → <mark>（不与加粗/斜体冲突：== 前后需非等号边界） */
+                name: 'obHighlight', level: 'inline',
+                start: function (src) { var i = src.indexOf('=='); return i === -1 ? undefined : i; },
+                tokenizer: function (src) {
+                    var m = /^==(?!\s)([\s\S]+?)==(?!=)/.exec(src);
+                    if (!m || !m[1].trim()) return undefined;
+                    return { type: 'obHighlight', raw: m[0], tokens: this.lexer.inlineTokens(m[1]) };
+                },
+                renderer: function (token) {
+                    return '<mark>' + this.parser.parseInline(token.tokens) + '</mark>';
+                }
+            }
+        ]
+    });
 
     /* ---------- 界面切换 ---------- */
     // 首页：渲染站点设置配置的首页文章正文（复用文章渲染管线；幂等——只渲染一次，避免二次渲染重排抽搐）
@@ -1657,7 +1919,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             return;
         }
         try {
-            var html = DOMPurify.sanitize(restoreObsidian(marked.parse(protectObsidian(window.HOME_MD), { gfm: true, breaks: true })));
+            var html = mdToHtml(window.HOME_MD);
             md.innerHTML = html;
             try {
                 md.querySelectorAll('pre code').forEach(function (el) { hljs.highlightElement(el); });
@@ -1693,7 +1955,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             state.path = window.SSR_PATH;
             state.dir = window.SSR_PATH.indexOf('/') > -1 ? window.SSR_PATH.substring(0, window.SSR_PATH.lastIndexOf('/')) : '';
             state.mode = 'view';
-            var shtml = DOMPurify.sanitize(restoreObsidian(marked.parse(protectObsidian(window.SSR_MD), { gfm: true, breaks: true })));
+            var shtml = mdToHtml(window.SSR_MD);
             showArticle(shtml, window.SSR_PATH);
             loadTree();
             return;
@@ -1726,6 +1988,17 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             loadTree();
             return;
         }
+        // 服务端渲染直达（URL 直接访问 .canvas）：同步渲染画布并切换视图（同 SSR_PDF 模式——
+        // 底部独立触发器会先于 init() 执行、被本分支重新隐藏，故必须在分支内调用）
+        if (window.SSR_CANVAS) {
+            state.path = window.CANVAS_PATH || '';
+            state.dir = state.path.indexOf('/') > -1 ? state.path.substring(0, state.path.lastIndexOf('/')) : '';
+            state.mode = 'view';
+            $('archive-view').style.display = 'none';
+            renderCanvas();
+            loadTree();
+            return;
+        }
         // 默认显示首页（渲染首页文章正文）
         $('doc-wrap').style.display = 'none';
         $('archive-view').style.display = '';
@@ -1738,11 +2011,13 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             if (h.indexOf('/') > -1 || /\.md$/i.test(h)) {
                 selectFile({ path: h });
             } else {
+                hideSpecialViews();
                 $('archive-view').style.display = 'none';
                 $('doc-wrap').style.display = 'none';
             }
         } else {
             // 主页：先隐藏内容区，渲染完成后再显示（避免渲染/加载过程的跳动）
+            hideSpecialViews();
             $('archive-view').style.display = 'none';
             renderHome();
             $('archive-view').style.display = '';
@@ -1751,10 +2026,55 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     }
 
     /* ---------- 文件树 ---------- */
+    // 构建名字映射（数字 ID / 显示名 → 完整路径）：双链、嵌入、反向链接、hash 直达共用。
+    // 此前只有死代码 renderTree 会建它且从未被调用——树加载后 _docMap 恒为空，
+    // 所有按名解析的 [[双链]]/![[嵌入]] 都落进 not-found 分支
+    function buildDocMap(nodes) {
+        window._docMap = window._docMap || {};
+        (function walk(list) {
+            list.forEach(function (node) {
+                if (node.type === 'dir') {
+                    walk(node.children || []);
+                } else if (node.type === 'file' && /\.md$/i.test(node.name)) {
+                    var m = node.name.match(/^(\d+)-/);
+                    if (m) window._docMap[m[1]] = node.path;
+                    // 显示名（去 ID 前缀、去 .md）也映射，双链 [[名]] 可匹配无 ID 文章
+                    window._docMap[node.name.replace(/^\d+-/, '').replace(/\.md$/i, '')] = node.path;
+                }
+            });
+        })(nodes);
+    }
+    // 树（_docMap）晚于正文渲染到达时的补救：升级渲染瞬间因查不到名字而标 missing 的双链/嵌入
+    function retryObsidian() {
+        var root = $('md-view');
+        if (!root) return;
+        var touched = false;
+        root.querySelectorAll('a.ob-link.ob-link-missing[data-link]').forEach(function (a) {
+            var target = findNote(a.dataset.link);
+            if (!target) return;
+            a.classList.remove('ob-link-missing');
+            a.href = '#' + encodeURI(target);
+            a.title = target;
+            a.dataset.path = target;
+            if (a.dataset.sub) a.addEventListener('click', function () { window._pendingAnchor = a.dataset.sub; });
+            touched = true;
+        });
+        root.querySelectorAll('.ob-embed.ob-embed-missing[data-name]').forEach(function (el) {
+            var nm = el.dataset.name;
+            el.classList.remove('ob-embed-missing');
+            el.textContent = 'Loading embed: ' + nm + '...';
+            mountEmbed(el, nm, el.dataset.sub || null);
+            touched = true;
+        });
+        if (touched) renderBacklinks();
+    }
     async function loadTree() {
         try {
             var data = await api('/api/list');
             state.tree = data.tree;
+            buildDocMap(state.tree);
+            // SSR 直达/快速点击时正文先于树渲染：补一次按名解析（双链/嵌入/反向链接）
+            if (state.path) retryObsidian();
             // 主页已由 PHP 服务端渲染最新文章列表，树只用于搜索索引 + hash 直达
             // 文件树就绪后，处理 URL hash（数字 ID、完整路径或纯文件名直达）
             var h = location.hash.replace(/^#/, '');
@@ -1914,10 +2234,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         syncHomeToc();
     })();
 
-    // PDF 阅读器（pdf.js）：翻页/缩放/夜间反转；文件从前端 /vault/ 路径加载（无需下载）
-    var pdfDoc = null, pdfPageNum = 1, pdfScale = 1;
-    // 像素缓存（主题切换用）：原图 + 夜间处理副本——切换只做 putImageData（快、无遍历、无中间帧闪屏）
-    var pdfImgOrig = null, pdfImgDark = null;
+    // PDF 渲染前置：按需加载 pdf.min.js（不拖慢首页）；文件从前端 /vault/ 路径加载
     function loadPdfJs(cb) {
         if (window.pdfjsLib) { cb(); return; }
         var s = document.createElement('script');
@@ -1925,77 +2242,244 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         s.onload = cb;
         document.head.appendChild(s);
     }
-    // 适配宽度（默认铺满内容区 = 与 md 文章内容同宽）：直接测量 doc-main 实际宽度（中栏固定约 1/3），
-    // 兜底用窗口宽度减 padding（移动 18×2 / 桌面 48×2）。fit 不做范围限制（限制只属于手动缩放）
-    function fitScale(pageWidth) {
-        var pv = document.getElementById('pdf-view');
-        var isFs = document.fullscreenElement || (pv && pv.classList.contains('fs'));
-        var avail;
-        if (isFs) {
-            avail = window.innerWidth; // 全屏阅读：铺满整个浏览器宽度
-        } else {
-            var dm = document.querySelector('.doc-main');
-            avail = (dm && dm.clientWidth > 100) ? dm.clientWidth : (window.innerWidth - (window.innerWidth <= 768 ? 36 : 96));
+    /* ===== PDF 阅读器共享组件：笔记嵌入与 URL 直开同构（Obsidian 式工具栏 + 框内滚动） ===== */
+    function pdfIcon(d) {
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+    }
+    // opts.full    直开整页模式：吃满 #pdf-view、键盘翻页常驻（嵌入模式仅全屏时响应）
+    // opts.sub     嵌入语法 #page=N 子定位；opts.initPage 直开初始页
+    function buildPdfPane(el, doc, opts) {
+        opts = opts || {};
+        el.classList.add('ob-pdf');
+        if (opts.full) el.classList.add('ob-pdf-full');
+        var st = { mode: 'auto', pct: 100, scale: 0, page: 1, dpr: Math.min((window.devicePixelRatio || 1) * 1.5, 3) };
+        var w1 = 612, h1 = 792;   // 首页基准尺寸（加载后修正）
+
+        /* ---- 骨架：工具栏 + 内部滚动区 ---- */
+        var bar = document.createElement('div');
+        bar.className = 'ob-pdf-toolbar';
+        bar.innerHTML =
+            '<button type="button" class="ob-pdf-btn ob-tocbtn" title="Outline" hidden>' + pdfIcon('M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01') + '</button>' +
+            '<span class="ob-pdf-sep"></span>' +
+            '<button type="button" class="ob-pdf-btn ob-prev" title="Previous page">' + pdfIcon('m15 18-6-6 6-6') + '</button>' +
+            '<input type="text" inputmode="numeric" class="ob-pdf-pageinp" value="1" title="Page number">' +
+            '<span class="ob-pdf-total">/ ' + doc.numPages + '</span>' +
+            '<button type="button" class="ob-pdf-btn ob-next" title="Next page">' + pdfIcon('m9 18 6-6-6-6') + '</button>' +
+            '<span class="ob-pdf-sep"></span>' +
+            '<button type="button" class="ob-pdf-btn ob-zout" title="Zoom out">' + pdfIcon('M5 12h14') + '</button>' +
+            '<select class="ob-pdf-zoomsel" title="Zoom">' +
+                '<option value="auto" selected>Automatic</option>' +
+                '<option value="page-fit">Page Fit</option>' +
+                '<option value="page-width">Page Width</option>' +
+                '<option value="50">50%</option><option value="75">75%</option>' +
+                '<option value="100">100%</option><option value="125">125%</option>' +
+                '<option value="150">150%</option><option value="200">200%</option>' +
+                '<option value="300">300%</option><option value="400">400%</option>' +
+            '</select>' +
+            '<button type="button" class="ob-pdf-btn ob-zin" title="Zoom in">' + pdfIcon('M5 12h14M12 5v14') + '</button>' +
+            '<span class="sp"></span>' +
+            '<button type="button" class="ob-pdf-btn ob-fs" title="Fullscreen">' + pdfIcon('M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3') + '</button>';
+        el.appendChild(bar);
+        var body = document.createElement('div');
+        body.className = 'ob-pdf-body';
+        var box = document.createElement('div');
+        box.className = 'ob-pdf-pages';
+        body.appendChild(box);
+        el.appendChild(body);
+        var inp = bar.querySelector('.ob-pdf-pageinp');
+        var sel = bar.querySelector('.ob-pdf-zoomsel');
+
+        /* ---- 页槽与懒渲染 ---- */
+        var io = null, rendered = {};
+        function clearPages() {
+            rendered = {};
+            [].forEach.call(box.children, function (slot) {
+                [].forEach.call(slot.querySelectorAll('canvas'), function (c) { c.remove(); });
+                slot.classList.remove('done');
+            });
         }
-        var s = avail / pageWidth;
-        return Math.max(0.05, s); // 下限 0.05 仅防除零/极小
-    }
-    // 全屏后重新适配宽度（进入/退出都调用）
-    function pdfRefit() {
-        if (!pdfDoc) return;
-        pdfDoc.getPage(pdfPageNum).then(function (page) {
-            pdfScale = fitScale(page.getViewport({ scale: 1 }).width);
-            renderPdfPage();
-        });
-    }
-    // 内容画布宽度变化（窗口缩放/后台调整内容宽度）→ PDF 自动重适配
-    if (typeof ResizeObserver !== 'undefined') {
-        var pdfRo = new ResizeObserver(function () {
-            clearTimeout(window.__pdfRoT);
-            window.__pdfRoT = setTimeout(pdfRefit, 120);
-        });
-        var pdfRoEl = document.querySelector('.doc-main');
-        if (pdfRoEl) pdfRo.observe(pdfRoEl);
-    }
-    function renderPdfPage() {
-        if (!pdfDoc) return;
-        pdfDoc.getPage(pdfPageNum).then(function (page) {
-            // 超采样渲染：屏幕密度（DPR）× 1.5 系数——以更高分辨率绘制再缩小显示，抗锯齿更优、文字更锐利。
-            // 代价：像素增多（渲染/内存略增），画质优先
-            var dpr = (window.devicePixelRatio || 1) * 1.5;
-            var viewport = page.getViewport({ scale: pdfScale * dpr });
-            var canvas = $('pdf-canvas');
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            canvas.style.width = Math.round(viewport.width / dpr) + 'px';
-            canvas.style.height = Math.round(viewport.height / dpr) + 'px';
-            page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport, background: 'transparent' }).promise.then(function () {
-                $('pdf-pageinfo').textContent = pdfPageNum + ' / ' + pdfDoc.numPages;
-                $('pdf-zoominfo').textContent = Math.round(pdfScale * 100) + '%';
-                // 缓存原图 + 生成夜间处理副本（白→透明）；后续主题切换只 putImageData，不遍历、不闪
-                pdfImgOrig = null; pdfImgDark = null;
-                try { pdfImgOrig = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height); } catch (e) {}
-                if (document.documentElement.classList.contains('dark')) {
-                    pdfImgDark = makePdfDarkCopy(pdfImgOrig);
-                    if (pdfImgDark) { try { canvas.getContext('2d').putImageData(pdfImgDark, 0, 0); } catch (e) {} }
-                }
+        function renderSlot(slot) {
+            var n = parseInt(slot.dataset.page, 10);
+            if (rendered[n]) return;
+            rendered[n] = 1;
+            doc.getPage(n).then(function (page) {
+                var vp = page.getViewport({ scale: st.scale * st.dpr });
+                var cv = document.createElement('canvas');
+                cv.width = Math.round(vp.width);
+                cv.height = Math.round(vp.height);
+                slot.appendChild(cv);   // 显示尺寸由 CSS width:100% 控制，铺满框体
+                // 像素渲染：pdf.js 绘入画布（缺失则整页空白）
+                page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise
+                    .then(function () { slot.classList.add('done'); })
+                    .catch(function () { rendered[n] = 0; });
+            });
+        }
+        function observeSlots() {
+            if (io) io.disconnect();
+            io = ('IntersectionObserver' in window) ? new IntersectionObserver(function (ents) {
+                ents.forEach(function (en) {
+                    if (!en.isIntersecting) return;
+                    io.unobserve(en.target);
+                    renderSlot(en.target);
+                });
+            }, { root: body, rootMargin: '300px' }) : null;
+            [].forEach.call(box.children, function (slot) {
+                var n = parseInt(slot.dataset.page, 10);
+                if (rendered[n]) return;
+                if (io) io.observe(slot);
+                else renderSlot(slot);
+            });
+        }
+
+        /* ---- 缩放：Automatic/Page Width=适配框宽；Page Fit=整页入框；其余为绝对百分比 ---- */
+        function applyMode() {
+            var availW = body.clientWidth || 600;   // 页面铺满框体，无内边距
+            if (st.mode === 'auto' || st.mode === 'page-width') st.scale = availW / w1;
+            else if (st.mode === 'page-fit') st.scale = Math.min(availW / w1, (body.clientHeight - 2) / h1);
+            else st.scale = st.pct / 100;
+            st.scale = Math.max(0.05, st.scale);
+            [].forEach.call(box.children, function (slot) {
+                slot.style.minHeight = Math.round(h1 * st.scale) + 'px';
+            });
+            clearPages();
+            observeSlots();
+        }
+
+        /* ---- 翻页与滚动跟随（rect 相对坐标，不依赖 offsetParent） ---- */
+        function relTop(node) {
+            return node.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+        }
+        function goPage(n, scroll) {
+            n = Math.min(Math.max(1, n), doc.numPages);
+            st.page = n;
+            inp.value = n;
+            if (scroll !== false) {
+                var s = box.querySelector('[data-page="' + n + '"]');
+                if (s) body.scrollTo({ top: Math.max(0, relTop(s)), behavior: 'smooth' });
+            }
+        }
+        var ticking = false;
+        body.addEventListener('scroll', function () {
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(function () {
+                ticking = false;
+                var cur = 1;
+                [].forEach.call(box.children, function (slot) {
+                    if (relTop(slot) <= body.scrollTop + 20) cur = parseInt(slot.dataset.page, 10);
+                });
+                if (document.activeElement !== inp && cur !== st.page) { st.page = cur; inp.value = cur; }
             });
         });
-    }
-    // 生成夜间处理副本：接近白色的像素 → 透明（配合 CSS invert：深色文字变白、图片负片）
-    function makePdfDarkCopy(img) {
-        if (!img) return null;
-        try {
-            var d = new Uint8ClampedArray(img.data);
-            for (var i = 0; i < d.length; i += 4) {
-                if (d[i] > 235 && d[i + 1] > 235 && d[i + 2] > 235) {
-                    d[i + 3] = 0;
-                }
+
+        /* ---- 工具栏交互 ---- */
+        bar.querySelector('.ob-prev').addEventListener('click', function () { goPage(st.page - 1); });
+        bar.querySelector('.ob-next').addEventListener('click', function () { goPage(st.page + 1); });
+        inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { goPage(parseInt(inp.value, 10) || 1); inp.blur(); }
+        });
+        inp.addEventListener('blur', function () { inp.value = st.page; });
+        // 缩放步进沿下拉列表方向：越往下百分比越大（pdf.js 同序）
+        bar.querySelector('.ob-zout').addEventListener('click', function () {
+            if (sel.selectedIndex > 0) { sel.selectedIndex -= 1; sel.dispatchEvent(new Event('change')); }
+        });
+        bar.querySelector('.ob-zin').addEventListener('click', function () {
+            if (sel.selectedIndex < sel.options.length - 1) { sel.selectedIndex += 1; sel.dispatchEvent(new Event('change')); }
+        });
+        sel.addEventListener('change', function () {
+            var v = sel.value;
+            if (v === 'auto' || v === 'page-fit' || v === 'page-width') { st.mode = v; }
+            else { st.mode = 'pct'; st.pct = parseInt(v, 10); }
+            applyMode();
+        });
+        bar.querySelector('.ob-fs').addEventListener('click', function () {
+            if (document.fullscreenElement === el) {
+                if (document.exitFullscreen) document.exitFullscreen();
+            } else if (el.classList.contains('fs')) {
+                el.classList.remove('fs');   // CSS 模拟全屏退出
+            } else {
+                var fn = el.requestFullscreen || el.webkitRequestFullscreen;
+                if (fn) { try { fn.call(el); } catch (e) { el.classList.add('fs'); } }
+                else el.classList.add('fs');
             }
-            return new ImageData(d, img.width, img.height);
-        } catch (e) { return null; }
+            setTimeout(applyMode, 120);
+        });
+        // 键盘翻页：直开模式常驻；嵌入模式仅全屏时响应
+        document.addEventListener('keydown', function pdfKey(e) {
+            if (!el.isConnected) { document.removeEventListener('keydown', pdfKey); return; }
+            if (!opts.full && document.fullscreenElement !== el && !el.classList.contains('fs')) return;
+            if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+            if (e.key === 'ArrowLeft' || e.key === 'PageUp') goPage(st.page - 1);
+            else if (e.key === 'ArrowRight' || e.key === 'PageDown') goPage(st.page + 1);
+        });
+
+        /* ---- 文档大纲（getOutline → 抽屉；无大纲隐藏按钮） ---- */
+        try {
+            doc.getOutline().then(function (ol) {
+                if (!ol || !ol.length) return;
+                var tocBtn = bar.querySelector('.ob-tocbtn');
+                tocBtn.hidden = false;
+                var drawer = document.createElement('div');
+                drawer.className = 'ob-pdf-outline';
+                function build(items) {
+                    var ul = document.createElement('ul');
+                    items.forEach(function (it) {
+                        var li = document.createElement('li');
+                        var a = document.createElement('a');
+                        a.textContent = it.title || '—';
+                        a.addEventListener('click', function () {
+                            Promise.resolve(typeof it.dest === 'string' ? doc.getDestination(it.dest) : it.dest)
+                                .then(function (d) { return d ? doc.getPageIndex(d[0]) : null; })
+                                .then(function (idx) { if (idx != null) goPage(idx + 1); })
+                                .catch(function () {});
+                        });
+                        li.appendChild(a);
+                        if (it.items && it.items.length) li.appendChild(build(it.items));
+                        ul.appendChild(li);
+                    });
+                    return ul;
+                }
+                drawer.appendChild(build(ol));
+                el.appendChild(drawer);
+                tocBtn.addEventListener('click', function () { el.classList.toggle('outline-open'); });
+            });
+        } catch (e) {}
+
+        /* ---- 尺寸自适应：窗口/容器变化时按模式重新适配（防抖） ---- */
+        var rt;
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(function () {
+                clearTimeout(rt);
+                rt = setTimeout(function () {
+                    if (!el.isConnected) return;
+                    if (st.mode === 'auto' || st.mode === 'page-width' || st.mode === 'page-fit') applyMode();
+                }, 160);
+            }).observe(body);
+        }
+
+        /* ---- 初始化：首页定基准 → 建槽 → 应用缩放 → 初始页跳转 ---- */
+        doc.getPage(1).then(function (p1) {
+            w1 = p1.getViewport({ scale: 1 }).width;
+            h1 = p1.getViewport({ scale: 1 }).height;
+            for (var i = 1; i <= doc.numPages; i++) {
+                (function (i) {
+                    var slot = document.createElement('div');
+                    slot.className = 'ob-pdf-page';
+                    slot.dataset.page = i;
+                    slot.style.minHeight = Math.round(body.clientWidth * h1 / w1) + 'px';
+                    box.appendChild(slot);
+                })(i);
+            }
+            applyMode();
+            var pm = /^page=(\d+)$/i.exec((opts.sub || '').trim());
+            var start = parseInt(pm ? pm[1] : (opts.initPage || 1), 10);
+            if (start > 1) setTimeout(function () { goPage(start); }, 120);
+        });
     }
-    function openPdf(path) {
+
+    // URL 直开 PDF（/xxx.pdf SSR 路径）：视图切换后复用同一阅读器组件
+    function openPdf(path, initPage) {
+        hideSpecialViews();
         $('archive-view').style.display = 'none';
         $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
@@ -2007,81 +2491,14 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         try { document.title = docName + ' · ' + (window.SITE_TITLE || 'MD2HTML'); } catch (e) {}
         var pv = $('pdf-view');
         pv.style.display = '';
-        pv.innerHTML = '';
-        var bar = document.createElement('div');
-        bar.className = 'pdf-toolbar';
-        bar.innerHTML = [
-            '<button type="button" class="pdf-btn" id="pdf-prev" title="Previous page">‹</button>',
-            '<span class="pdf-info" id="pdf-pageinfo">– / –</span>',
-            '<button type="button" class="pdf-btn" id="pdf-next" title="Next page">›</button>',
-            '<span class="pdf-sep"></span>',
-            '<button type="button" class="pdf-btn" id="pdf-zoom-out" title="Zoom out">−</button>',
-            '<span class="pdf-info" id="pdf-zoominfo">fit</span>',
-            '<button type="button" class="pdf-btn" id="pdf-zoom-in" title="Zoom in">+</button>',
-            '<span class="pdf-sep"></span>',
-            '<button type="button" class="pdf-btn" id="pdf-fullscreen" title="Fullscreen">⛶</button>'
-        ].join('');
-        pv.appendChild(bar);
-        var cw = document.createElement('div');
-        cw.className = 'pdf-canvas-wrap';
-        var canvas = document.createElement('canvas');
-        canvas.id = 'pdf-canvas';
-        cw.appendChild(canvas);
-        pv.appendChild(cw);
-        // 缩放步进：相对 20%（0.3 ~ 3 倍），点击重渲染新分辨率（像素级清晰）
-        var zoomBtn = function (btn, factor) {
-            btn.addEventListener('click', function () {
-                var next = Math.round(pdfScale * factor * 10) / 10;
-                if (next >= 0.3 && next <= 3) { pdfScale = next; renderPdfPage(); }
-            });
-        };
-        $('pdf-prev').addEventListener('click', function () { if (pdfPageNum > 1) { pdfPageNum--; renderPdfPage(); } });
-        $('pdf-next').addEventListener('click', function () { if (pdfDoc && pdfPageNum < pdfDoc.numPages) { pdfPageNum++; renderPdfPage(); } });
-        zoomBtn($('pdf-zoom-in'), 1.2);
-        zoomBtn($('pdf-zoom-out'), 1 / 1.2);
-        // 全屏阅读：优先浏览器原生全屏（桌面），手机/iOS 无 Fullscreen API 时用 CSS 模拟（fixed 铺满）
-        $('pdf-fullscreen').addEventListener('click', function () {
-            var pv = document.getElementById('pdf-view');
-            if (document.fullscreenElement || pv.classList.contains('fs')) {
-                // 退出全屏
-                if (document.exitFullscreen) document.exitFullscreen();
-                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-                pv.classList.remove('fs');
-                pdfRefit();
-            } else {
-                // 进入全屏：优先原生
-                var fn = pv.requestFullscreen || pv.webkitRequestFullscreen;
-                if (fn) {
-                    try { fn.call(pv); } catch (e) { pv.classList.add('fs'); pdfRefit(); }
-                } else {
-                    // 手机/WebView：CSS 模拟全屏
-                    pv.classList.add('fs');
-                    pdfRefit();
-                }
-            }
-        });
-        // 原生全屏状态变化（桌面进入/退出 Esc）：重新适配宽度
-        document.addEventListener('fullscreenchange', function () {
-            if (pdfDoc) pdfRefit();
-        });
-        // 键盘翻页（阅读器内）
-        var keyHandler = function (e) {
-            if (e.key === 'ArrowLeft') { if (pdfPageNum > 1) { pdfPageNum--; renderPdfPage(); } }
-            else if (e.key === 'ArrowRight') { if (pdfDoc && pdfPageNum < pdfDoc.numPages) { pdfPageNum++; renderPdfPage(); } }
-        };
-        document.addEventListener('keydown', keyHandler);
-        // 加载 PDF（按需加载 pdf.min.js，不拖慢首页）
+        pv.innerHTML = '<div style="margin:auto;color:var(--vp-c-text-mute);font-size:13px;">Loading…</div>';
         loadPdfJs(function () {
             pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/pdfjs/pdf.worker.min.js';
             pdfjsLib.getDocument('/vault/' + path).promise.then(function (doc) {
-                pdfDoc = doc;
-                pdfPageNum = 1;
-                $('pdf-pageinfo').textContent = '1 / ' + doc.numPages;
-                // 初始适配宽度：铺满内容区（按窗口宽度计算）
-                pdfDoc.getPage(1).then(function (page) {
-                    pdfScale = fitScale(page.getViewport({ scale: 1 }).width);
-                    renderPdfPage();
-                });
+                pv.innerHTML = '';
+                var host = document.createElement('div');
+                pv.appendChild(host);
+                buildPdfPane(host, doc, { full: true, initPage: initPage });
             }).catch(function (err) {
                 pv.innerHTML = '<div style="padding:48px;text-align:center;color:var(--vp-c-text-mute);">Failed to load PDF: ' + ((err && err.message) || 'unknown error') + '</div>';
             });
@@ -2108,18 +2525,24 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         $('doc-title').textContent = docName;
         delete $('doc-title').dataset.orig;
         // 视图切换：内容就绪后一次性显示
+        hideSpecialViews();  // 清掉可能残留的 PDF/画布/图谱（互斥）
         $('archive-view').style.display = 'none';
         $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
         $('md-view').style.display = '';
-        $('pdf-view').style.display = 'none';
-        $('excalidraw-view').style.display = 'none';  // 切换文章时隐藏 Excalidraw 画布（否则上次的绘图残留文章底部）
-        $('graph-view').style.display = 'none';
         $('content').scrollTop = 0;
         renderToc();
         addCodeCopy();
         processObsidian();
+        // 树可能先于文章就绪（retry 已在空视图上跑过）：渲染完成后补一次解析，双保险且幂等
+        if (state.tree && state.tree.length) retryObsidian();
         highlightActive(nodePath);
+        // 跨笔记锚点定位（[[笔记#标题 / #^块ID]]）：文章渲染完成后滚动到位
+        if (window._pendingAnchor) {
+            var pa = window._pendingAnchor;
+            window._pendingAnchor = null;
+            setTimeout(function () { jumpToAnchor(pa); }, 80);
+        }
     }
 
     async function selectFile(node) {
@@ -2129,6 +2552,17 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         // PDF 文件：走阅读器（pdf.js），不走 md 渲染管线
         if (/\.pdf$/i.test(node.path)) {
             openPdf(node.path);
+            return;
+        }
+        // Canvas 白板：读原文 → 画布渲染（不走 md 管线）
+        if (/\.canvas$/i.test(node.path)) {
+            try {
+                var cdata = await api('/api/file?path=' + encodeURIComponent(node.path));
+                if (!cdata || !cdata.ok) { toast((cdata && cdata.error) || 'Failed to read file'); return; }
+                window.CANVAS_PATH = node.path;
+                window.CANVAS_JSON = cdata.content || '';
+                renderCanvas();
+            } catch (e) { toast(e.message); }
             return;
         }
         try {
@@ -2147,7 +2581,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
                 renderExcalidraw();
                 return;
             }
-            var html = DOMPurify.sanitize(restoreObsidian(marked.parse(protectObsidian(data.content), { gfm: true, breaks: true })));
+            var html = mdToHtml(data.content);
             showArticle(html, node.path);
             // 更新地址栏：SPA 点击已 pushState 路径 URL 时不重复设 hash（避免 /path#path 冗余）
             try {
@@ -2224,32 +2658,299 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         }
         return null;
     }
+    // 拆 [[目标#子定位|别名]]：子定位 = 标题 或 ^块ID；别名可能写在 # 之后（[[a#b|c]]）
+    function splitRef(ref) {
+        var alias = null, pipe = ref.indexOf('|');
+        if (pipe > -1) { alias = ref.slice(pipe + 1).trim(); ref = ref.slice(0, pipe); }
+        ref = ref.trim();
+        var hash = ref.indexOf('#');
+        if (hash > -1) return { target: ref.slice(0, hash).trim(), sub: ref.slice(hash + 1).trim(), alias: alias };
+        return { target: ref, sub: '', alias: alias };
+    }
+    // 树内严格按文件名查找（不猜路径）：存在返回路径，不存在返回 null（链接/嵌入判定"未解析"用）
+    function findAsset(name) {
+        var found = null;
+        (function walk(nodes) {
+            nodes.forEach(function (n) {
+                if (found) return;
+                if (n.type === 'file' && n.name === name) found = n.path;
+                else if (n.children) walk(n.children);
+            });
+        })(state.tree);
+        return found;
+    }
+    // 资产路径解析（嵌入图片/音视频/画布/PDF）：树内精确文件名 → 当前笔记同目录兜底 → vault 根
+    function resolveAsset(name) {
+        var found = findAsset(name);
+        if (found) return found;
+        if (state.path && state.path.indexOf('/') > -1) {
+            return state.path.slice(0, state.path.lastIndexOf('/') + 1) + name;
+        }
+        return name;
+    }
+    /* ===== Obsidian Callout 提示块：> [!type] 标题 → 官方风格彩色卡片 ===== */
+    // 类型 → [颜色, 图标path]；颜色取 Obsidian 官方色板近似值，图标为 Lucide 线条路径
+    var CALLOUT_TYPES = {
+        note: ['#086ddd', 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'],
+        info: ['#086ddd', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10Zm0-14v8m0-12h.01'],
+        todo: ['#086ddd', 'm9 11 3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'],
+        abstract: ['#00bfbc', 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+        summary: ['#00bfbc', 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+        tldr: ['#00bfbc', 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+        tip: ['#00bdd0', 'M9 18h6m-5 4h4m-3.09-8c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14Z'],
+        hint: ['#00bdd0', 'M9 18h6m-5 4h4m-3.09-8c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14Z'],
+        important: ['#00bdd0', 'M9 18h6m-5 4h4m-3.09-8c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14Z'],
+        success: ['#08b94e', 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3'],
+        check: ['#08b94e', 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3'],
+        done: ['#08b94e', 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3'],
+        question: ['#ec7500', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10ZM9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m0 3h.01'],
+        help: ['#ec7500', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10ZM9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m0 3h.01'],
+        faq: ['#ec7500', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10ZM9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m0 3h.01'],
+        warning: ['#e0ac00', 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4m0 4h.01'],
+        caution: ['#e0ac00', 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4m0 4h.01'],
+        attention: ['#e0ac00', 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4m0 4h.01'],
+        danger: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        error: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        failure: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        fail: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        missing: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        bug: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        example: ['#7852ee', 'm7.5 4.27 9 5.15M21 8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 8V6a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 6Z'],
+        quote: ['#808080', '']
+    };
+    function transformCallouts(root) {
+        [].forEach.call(root.querySelectorAll('blockquote'), function (bq) {
+            var firstP = bq.querySelector('p');
+            if (!firstP || !firstP.firstChild) return;
+            var tn = firstP.firstChild.nodeType === 3 ? firstP.firstChild : null;
+            if (!tn) return;
+            // 头部形如 [!type]± 标题（- 默认折叠 / + 默认展开；官方标记在 ] 前，此处兼容 ] 后写法）
+            var m = /^\s*\[!([\w-]+?)([+-]?)\][ \t]*/.exec(tn.nodeValue);
+            if (!m) return;
+            var type = m[1].toLowerCase();
+            var cfg = CALLOUT_TYPES[type] || CALLOUT_TYPES.note;
+            var fold = m[2];
+            var title = tn.nodeValue.slice(m[0].length).trim();
+            // 容错：] 后缀折叠标记（后随空白才认定，避免误吃 "-xxx" 正文）
+            if (!fold && /^[+-][ \t]/.test(title)) {
+                fold = title.charAt(0);
+                title = title.slice(1).trim();
+            }
+            if (!title) title = type.charAt(0).toUpperCase() + type.slice(1);
+            // 首行整行是标题（Obsidian：正文从下一行开始）——标记连同标题文本一起摘除，
+            // 否则标题会在内容区重复出现；随后的 <br> 一并清掉，避免留空行
+            tn.nodeValue = '';
+            var nbr = tn.nextSibling;
+            if (nbr && nbr.nodeType === 1 && nbr.tagName === 'BR') nbr.parentNode.removeChild(nbr);
+            var div = document.createElement('div');
+            div.className = 'callout callout-' + type + (fold === '-' ? ' is-collapsed' : '');
+            div.style.setProperty('--callout-color', cfg[0]);
+            var head = document.createElement('div');
+            head.className = 'callout-title';
+            var icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            icon.setAttribute('viewBox', '0 0 24 24');
+            icon.setAttribute('fill', 'none');
+            icon.setAttribute('stroke', 'currentColor');
+            icon.setAttribute('stroke-width', '2');
+            icon.setAttribute('stroke-linecap', 'round');
+            icon.setAttribute('stroke-linejoin', 'round');
+            icon.innerHTML = '<path d="' + cfg[1] + '"/>';
+            head.appendChild(icon);
+            var ttl = document.createElement('span');
+            ttl.textContent = title;
+            head.appendChild(ttl);
+            div.appendChild(head);
+            var content = document.createElement('div');
+            content.className = 'callout-content';
+            while (bq.firstChild) content.appendChild(bq.firstChild);
+            // 单行 callout（只有标题没有正文）：清掉搬进来的空 <p>
+            [].forEach.call(content.querySelectorAll('p'), function (p) {
+                if (!p.textContent.trim() && !p.querySelector('img,video,audio,input,iframe,svg')) p.parentNode.removeChild(p);
+            });
+            div.appendChild(content);
+            bq.parentNode.replaceChild(div, bq);
+            if (fold !== '') {
+                div.classList.add('callout-foldable');
+                head.addEventListener('click', function () { div.classList.toggle('is-collapsed'); });
+            }
+        });
+    }
+    // 块 ID：块级元素末尾 " ^id" 是不可见元数据——摘除文本并在元素上挂 data-block-id 锚点（供 [[..#^id]] 定位/嵌入）。
+    // 相邻行会被 marked 合并进同一 <p>（中间仅 <br>），故扫描块内所有文本节点，命中首个 "行尾 ^id" 即止
+    function applyBlockIds(scope) {
+        scope.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote').forEach(function (el) {
+            if (el.dataset.blockId) return;
+            var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+            var tn;
+            while ((tn = walker.nextNode())) {
+                var host = tn.parentElement;
+                if (host && host.closest && host.closest('pre, code, .ob-math')) continue;
+                // \u2011（不换行连字符）与 '-' 同义：Obsidian 粘贴的块ID 可能带它
+                var m = /[ \t]\^([\w\u2011-]+)[ \t]*$/.exec(tn.nodeValue);
+                if (!m) continue;
+                tn.nodeValue = tn.nodeValue.slice(0, m.index);
+                el.dataset.blockId = m[1].replace(/\u2011/g, '-');
+                break;
+            }
+        });
+    }
+    // 滚动容器内精确定位：用视口相对坐标换算（offsetTop 受定位祖先影响不可靠）
+    function scrollMdTo(el, off) {
+        var c = $('content');
+        var top = el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop - (off || 90);
+        c.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    }
+    // 锚点定位：#^块ID → data-block-id 元素；#标题 → 标题文本匹配；命中则平滑滚动
+    function jumpToAnchor(sub) {
+        var view = $('md-view');
+        if (!view) return false;
+        var el = null;
+        if (sub.charAt(0) === '^') {
+            // U+2011（不换行连字符）视作普通 '-'：Obsidian 输入法/粘贴可能产生
+            var bid = sub.slice(1).replace(/\u2011/g, '-').replace(/[^\w-]/g, '');
+            if (bid) el = view.querySelector('[data-block-id="' + bid + '"]');
+        } else {
+            var want = sub.toLowerCase();
+            view.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(function (h) {
+                if (!el && h.textContent.trim().toLowerCase() === want) el = h;
+            });
+        }
+        if (!el) return false;
+        scrollMdTo(el);
+        return true;
+    }
+    // 画布嵌入：拉取 .canvas JSON，复用 renderCanvasScene 渲染为内嵌 SVG 场景
+    function embedCanvas(el, name) {
+        api('/api/file?path=' + encodeURIComponent(resolveAsset(name))).then(function (data) {
+            var scene;
+            try { scene = JSON.parse(data.content || '{}'); }
+            catch (e) { throw new Error('invalid'); }
+            el.innerHTML = '';
+            var box = document.createElement('div');
+            box.className = 'ob-embed-canvas';
+            el.appendChild(box);
+            renderCanvasScene(scene, box);
+            el.classList.add('loaded');
+        }).catch(function () {
+            embedFail(el, name);
+        });
+    }
+    // 嵌入失败兜底：按 Obsidian 官方样式显示未解析链接文本；带 data-name 供 retryObsidian 二次修复。
+    // 树若已就绪（失败回调晚于一次性重试），立刻排一次重试闭环；树未就绪则等 loadTree 后统一重试
+    function embedFail(el, name) {
+        var miss = document.createElement('span');
+        miss.className = 'ob-embed ob-embed-missing';
+        miss.dataset.name = name;
+        miss.textContent = '![[' + name + ']]';
+        miss.title = 'Embed target not found';
+        el.replaceWith(miss);
+        if (state.tree && state.tree.length) setTimeout(retryObsidian, 0);
+    }
+    // 嵌入统一挂载：按扩展名分派 图片/视频/音频/画布/笔记（含块引用提取）。
+    // 树未就绪时 resolveAsset 只能同目录兜底猜路径 → 失败落成 missing[data-name]，loadTree 后统一重试
+    function mountEmbed(el, name, sub) {
+        if (/\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(name)) {
+            var img = document.createElement('img');
+            img.className = 'ob-embed-img';
+            img.src = '/vault/' + encodeURI(resolveAsset(name));
+            img.alt = name;
+            // 不用 lazy：离屏图片不发起请求，onerror 永不触发，缺失兜底与重试机制会失效
+            img.onerror = function () { embedFail(img, name); };  // 树未就绪猜错路径 → 落 missing 等重试
+            el.innerHTML = '';
+            el.classList.add('loaded');
+            el.appendChild(img);
+        } else if (/\.(mp4|webm|ogv|mov|m4v)$/i.test(name)) {
+            var vid = document.createElement('video');
+            vid.className = 'ob-embed-media';
+            vid.controls = true;
+            vid.preload = 'metadata';
+            vid.src = '/vault/' + encodeURI(resolveAsset(name));
+            vid.onerror = function () { embedFail(vid, name); };
+            el.innerHTML = '';
+            el.classList.add('loaded');
+            el.appendChild(vid);
+        } else if (/\.(mp3|wav|ogg|m4a|flac|aac|opus)$/i.test(name)) {
+            var aud = document.createElement('audio');
+            aud.className = 'ob-embed-media';
+            aud.controls = true;
+            aud.preload = 'metadata';
+            aud.src = '/vault/' + encodeURI(resolveAsset(name));
+            aud.onerror = function () { embedFail(aud, name); };
+            el.innerHTML = '';
+            el.classList.add('loaded');
+            el.appendChild(aud);
+        } else if (/\.canvas$/i.test(name)) {
+            embedCanvas(el, name);
+        } else if (/\.pdf$/i.test(name)) {
+            mountPdfEmbed(el, name, sub);
+        } else {
+            loadEmbed(el, name, sub);
+        }
+    }
+    /* ===== Obsidian 式 PDF 内嵌：复用共享阅读器组件 buildPdfPane =====
+       工具栏：大纲 | ‹ 页码/N › | 缩放下拉 −/+ | 全屏；正文懒渲染（IntersectionObserver）；
+       深色模式保持白纸不反色（Obsidian 同款）；#page=N 打开即跳转 */
+    function mountPdfEmbed(el, name, sub) {
+        loadPdfJs(function () {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/pdfjs/pdf.worker.min.js';
+            pdfjsLib.getDocument('/vault/' + encodeURI(resolveAsset(name))).promise.then(function (doc) {
+                el.innerHTML = '';
+                el.classList.add('loaded');
+                buildPdfPane(el, doc, { sub: sub });
+            }).catch(function () {
+                embedFail(el, name);  // 树未就绪猜错路径 → 落 missing 等重试
+            });
+        });
+    }
+    /* 数学公式：还原阶段生成 .ob-math 空元素（data-tex 存 base64），此处统一 KaTeX 渲染 */
+    function renderMath(root) {
+        if (!window.katex) return;
+        root.querySelectorAll('span.ob-math').forEach(function (el) {
+            if (el.dataset.rendered) return;
+            el.dataset.rendered = '1';
+            var tex;
+            try { tex = b64d(el.dataset.tex); } catch (e) { return; }
+            try {
+                katex.render(tex, el, { displayMode: el.dataset.display === '1', throwOnError: false });
+                if (el.dataset.display === '1') el.classList.add('ob-math-block');
+            } catch (e) { el.textContent = tex; }
+        });
+    }
     function processObsidian() {
         var root = $('md-view');
         if (!root) return;
-        // 遍历文本节点，处理 [[双链]]、![[嵌入]]、#标签
+        renderMath(root);      // 先渲染公式，避免 $ 内文本进入下方扫描
+        applyBlockIds(root);   // 先摘块 ID，避免 ^id 文本进入下方双链/标签扫描
+        transformCallouts(root);  // Obsidian Callout：> [!type] 转彩色卡片（须在文本扫描前替换节点）
+        // 遍历文本节点，处理 [[双链]]、![[嵌入]]、#标签；跳过代码块/行内代码与已渲染公式（内部 # 等是内容不是语法）
         var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
         var nodes = [];
-        while (walker.nextNode()) nodes.push(walker.currentNode);
+        while (walker.nextNode()) {
+            var host = walker.currentNode.parentElement;
+            if (host && host.closest && host.closest('pre, code, .ob-math')) continue;
+            nodes.push(walker.currentNode);
+        }
         nodes.forEach(function (textNode) {
             var text = textNode.nodeValue;
             if (!text) return;
             var out = [];
             var last = 0;
-            var re = /(!?)\[\[([^\[\]]+)\]\]|(^|\s)#([\u4e00-\u9fa5\w-]+)/g;
+            // 标签允许嵌套层级（Obsidian：#父/子/孙）；嵌入/双链分支才持有 m[2]，标签走 m[4]，
+            // splitRef 不能提到分支外——标签命中时 m[2] 为 undefined 会抛错中断整个遍历
+            var re = /(!?)\[\[([^\[\]]+)\]\]|(^|\s)#([\u4e00-\u9fa5\w-]+(?:\/[\u4e00-\u9fa5\w-]+)*)/g;
             var m;
             while ((m = re.exec(text)) !== null) {
                 if (m.index > last) out.push(text.slice(last, m.index));
                 if (m[1] === '!') {
-                    // 嵌入 ![[名字]]
-                    var parts = m[2].split('|');
-                    out.push({ embed: parts[0].trim() });
+                    // 嵌入 ![[名字]] / ![[名字#^块ID]]
+                    var er = splitRef(m[2]);
+                    out.push({ embed: er.target, sub: er.sub });
                 } else if (m[2]) {
-                    // 双链 [[名字]] 或 [[名字|别名]]
-                    var parts2 = m[2].split('|');
-                    out.push({ link: parts2[0].trim(), alias: parts2[1] ? parts2[1].trim() : null });
+                    // 双链 [[名字]] / [[名字|别名]] / [[#标题|别名]] / [[名字#^块ID]]
+                    var lr = splitRef(m[2]);
+                    out.push({ link: lr.target, sub: lr.sub, alias: lr.alias });
                 } else if (m[4]) {
-                    // 标签 #标签
+                    // 标签 #标签 / #嵌套/标签
                     out.push({ tag: m[4], leading: m[3] });
                 }
                 last = m.index + m[0].length;
@@ -2261,47 +2962,83 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             out.forEach(function (item) {
                 if (typeof item === 'string') {
                     frag.appendChild(document.createTextNode(item));
-                } else if (item.link) {
-                    var a = document.createElement('a');
-                    a.className = 'ob-link';
-                    var target = findNote(item.link);
-                    a.textContent = item.alias || item.link;
-                    if (target) {
-                        // 用完整路径做 hash（encodeURI 保留斜杠），无 ID 文章也能直达
-                        a.href = '#' + encodeURI(target);
-                        a.title = target;
-                        a.dataset.path = target;
-                    } else {
-                        a.classList.add('ob-link-missing');
-                        a.title = 'Note not found: ' + item.link;
-                    }
-                    frag.appendChild(a);
-                } else if (item.embed) {
-                    // 图片嵌入 ![[xxx.png]] → <img>；否则按笔记嵌入
+                } else if (item.embed !== undefined) {
+                    // 嵌入分支：自引用块就地克隆；其余统一交给 mountEmbed（可被 retryObsidian 重试）
                     var embedName = item.embed;
-                    if (/\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(embedName)) {
-                        var img = document.createElement('img');
-                        img.className = 'ob-embed-img';
-                        // 从文件树找图片实际路径（可能在子目录）；找不到回退 vault/ 根
-                        var imgPath = null;
-                        (function walk(nodes) {
-                            nodes.forEach(function (n) {
-                                if (imgPath) return;
-                                if (n.type === 'file' && n.name === embedName) imgPath = n.path;
-                                else if (n.children) walk(n.children);
-                            });
-                        })(state.tree);
-                        img.src = '/vault/' + (imgPath ? encodeURI(imgPath) : encodeURI(embedName));
-                        img.alt = embedName;
-                        img.loading = 'lazy';
-                        frag.appendChild(img);
+                    if (!embedName && /^\^/.test(item.sub)) {
+                        // 自引用块嵌入 ![[#^id]]：克隆本文已挂锚点的块
+                        var bid0 = item.sub.slice(1).replace(/\u2011/g, '-').replace(/[^\w-]/g, '');
+                        var blk0 = bid0 ? root.querySelector('[data-block-id="' + bid0 + '"]') : null;
+                        var em0 = document.createElement('span');
+                        em0.className = 'ob-embed';
+                        if (blk0) {
+                            var inn0 = document.createElement('div');
+                            inn0.className = 'ob-embed-inner';
+                            inn0.appendChild(blk0.cloneNode(true));
+                            em0.appendChild(inn0);
+                            em0.classList.add('loaded');
+                        } else {
+                            // 未解析嵌入：按 Obsidian 官方样式显示原文链接文本
+                            em0.textContent = '![[' + item.sub + ']]';
+                            em0.title = 'Unresolved embed';
+                            em0.classList.add('ob-embed-missing');
+                        }
+                        frag.appendChild(em0);
                     } else {
                         var span = document.createElement('span');
                         span.className = 'ob-embed';
                         span.dataset.name = embedName;
+                        if (item.sub) span.dataset.sub = item.sub;
                         span.textContent = 'Loading embed: ' + embedName + '...';
                         frag.appendChild(span);
-                        loadEmbed(span, embedName);
+                        mountEmbed(span, embedName, item.sub);
+                    }
+                } else if (item.link !== undefined) {
+                    var a = document.createElement('a');
+                    a.className = 'ob-link';
+                    if (!item.link && item.sub) {
+                        // 页内定位 [[#标题]] / [[#^块ID|别名]]
+                        a.textContent = item.alias || item.sub.replace(/^\^/, '');
+                        a.href = '#';
+                        a.addEventListener('click', function (e) {
+                            e.preventDefault();
+                            if (!jumpToAnchor(item.sub)) toast('Anchor not found: ' + item.sub);
+                        });
+                        frag.appendChild(a);
+                    } else {
+                        var target = findNote(item.link);
+                        a.textContent = item.alias || item.link;
+                        a.dataset.link = item.link;
+                        if (item.sub) a.dataset.sub = item.sub;
+                        if (!target && /\.pdf$/i.test(item.link)) {
+                            // PDF 链接：树内找到 → 打开阅读器（#page=N 直达页）；找不到按未解析处理
+                            var pdfPath = findAsset(item.link);
+                            if (pdfPath) {
+                                var pg = /^page=(\d+)$/i.exec((item.sub || '').trim());
+                                a.title = 'Open PDF: ' + item.link;
+                                a.href = '#';
+                                a.addEventListener('click', function (e) {
+                                    e.preventDefault();
+                                    openPdf(pdfPath, pg ? parseInt(pg[1], 10) : 1);
+                                });
+                                frag.appendChild(a);
+                                return;
+                            }
+                        }
+                        if (target) {
+                            // 用完整路径做 hash（encodeURI 保留斜杠），无 ID 文章也能直达
+                            a.href = '#' + encodeURI(target);
+                            a.title = target;
+                            a.dataset.path = target;
+                            if (item.sub) {
+                                // 跨笔记定位 [[笔记#标题/#^块]]：目标文章渲染完成后滚动到位
+                                a.addEventListener('click', function () { window._pendingAnchor = item.sub; });
+                            }
+                        } else {
+                            a.classList.add('ob-link-missing');
+                            a.title = 'Note not found: ' + item.link;
+                        }
+                        frag.appendChild(a);
                     }
                 } else if (item.tag) {
                     var t = document.createElement('a');
@@ -2322,6 +3059,17 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             });
             textNode.parentNode.replaceChild(frag, textNode);
         });
+        // 脚注引用点击：滚动到对应定义（不能用 href 锚点——hash 变化会触发文章路由 handleHash）
+        root.querySelectorAll('sup.fn-ref[data-fnid]').forEach(function (s) {
+            s.addEventListener('click', function () {
+                var id = s.dataset.fnid;
+                var def = null;
+                root.querySelectorAll('.fn-def[data-fnid]').forEach(function (d) {
+                    if (!def && d.dataset.fnid === id) def = d;
+                });
+                if (def) scrollMdTo(def);
+            });
+        });
         renderBacklinks();
     }
     // 获取笔记的 ID
@@ -2331,21 +3079,36 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         }
         return '';
     }
-    // 加载嵌入内容
-    function loadEmbed(el, name) {
+    // 加载嵌入内容（name 支持块引用 sub=^id：只保留被引用的块）
+    function loadEmbed(el, name, sub) {
         var path = findNote(name);
         if (!path) {
-            el.textContent = 'Embed failed: note not found: ' + name;
+            el.textContent = '![[' + name + (sub || '') + ']]';
+            el.title = 'Unresolved embed';
             el.classList.add('ob-embed-missing');
             return;
         }
         api('/api/file?path=' + encodeURIComponent(path)).then(function (data) {
-            var html = DOMPurify.sanitize(restoreObsidian(marked.parse(protectObsidian(data.content), { gfm: true, breaks: true })));
+            var html = mdToHtml(data.content);
             // 去掉第一个 h1
             var tmp = document.createElement('div');
             tmp.innerHTML = html;
             var h1 = tmp.querySelector('h1');
             if (h1) h1.remove();
+            applyBlockIds(tmp);
+            // 块引用嵌入 ![[笔记#^id]]：整篇渲染后只保留被引用的块
+            if (sub && sub.charAt(0) === '^') {
+                var bid = sub.slice(1).replace(/[^\w-]/g, '');
+                var blk = bid ? tmp.querySelector('[data-block-id="' + bid + '"]') : null;
+                tmp.innerHTML = '';
+                if (blk) tmp.appendChild(blk);
+                else {
+                    el.textContent = '![[' + name + sub + ']]';
+                    el.title = 'Block not found';
+                    el.classList.add('ob-embed-missing');
+                    return;
+                }
+            }
             // 嵌入内容代码高亮
             try {
                 tmp.querySelectorAll('pre code').forEach(function (el) {
@@ -2490,31 +3253,15 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             return;
         }
         $('md-view').style.display = 'none';
+        hideSpecialViews();  // 清掉可能残留的 PDF/画布/图谱（互斥）
         $('doc-wrap').style.display = 'none';
         renderHome();
         $('empty-state').style.display = 'none';
-        highlightActive(null);
-        $('content').scrollTop = 0;
+        highlightActive(null);        $('content').scrollTop = 0;
     });
     // 主题切换（日间/夜间，localStorage 记忆）
     function applyTheme(dark) {
-        // PDF 阅读器：主题切换用像素副本切换（先恢复/处理像素，再切 CSS 类——无中间帧、不闪屏）
-        if (typeof pdfDoc !== 'undefined' && pdfDoc && document.getElementById('pdf-canvas')) {
-            var pvCanvas = document.getElementById('pdf-canvas');
-            var pvCtx = pvCanvas.getContext('2d');
-            if (dark) {
-                // 切夜：先换像素（白→透明，invert 未生效——视觉一致），再加 CSS（filter 平滑渐变，与背景同步）
-                if (!pdfImgDark && pdfImgOrig) { pdfImgDark = makePdfDarkCopy(pdfImgOrig); }
-                if (pdfImgDark) { try { pvCtx.putImageData(pdfImgDark, 0, 0); } catch (e) {} }
-                document.documentElement.classList.add('dark');
-            } else {
-                // 切日：先移除 CSS（filter 平滑渐变），再恢复原图（invert 已无——视觉一致）
-                document.documentElement.classList.remove('dark');
-                if (pdfImgOrig) { try { pvCtx.putImageData(pdfImgOrig, 0, 0); } catch (e) {} }
-            }
-            try { localStorage.setItem('vp-theme', dark ? 'dark' : 'light'); document.cookie = 'vp-theme=' + (dark ? 'dark' : 'light') + '; path=/'; } catch (e) {}
-            return;
-        }
+        // PDF 阅读器保持白纸不反色（Obsidian 同款），主题切换走通用逻辑
         document.documentElement.classList.toggle('dark', dark);
         try { localStorage.setItem('vp-theme', dark ? 'dark' : 'light'); document.cookie = 'vp-theme=' + (dark ? 'dark' : 'light') + '; path=/'; } catch (e) {}
     }
@@ -2535,6 +3282,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         // 地址栏同步为 /graph（可分享/刷新保持图谱页）
         try { history.pushState(null, '', '/graph'); } catch (e) {}
         // Graph 是独立页面：隐藏文章/首页容器，图谱铺满内容区（不套文章格式）
+        hideSpecialViews();
         $('archive-view').style.display = 'none';
         $('doc-wrap').style.display = 'none';
         var gtp = $('toc-panel'); if (gtp) gtp.style.display = 'none';
@@ -2582,10 +3330,14 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         dirKeys.forEach(function (d, i) {
             graphColors[d] = document.documentElement.classList.contains('dark') ? GRAPH_DARK_PALETTE[i % GRAPH_DARK_PALETTE.length] : GRAPH_PALETTE[i % GRAPH_PALETTE.length];
         });
-        // 度数（仅信息用）
+        // 度数（节点大小 + 标签分级显示用：缩小时只标注高连接度的枢纽文章，避免满屏糊字）
         var degree = {};
         nodes.forEach(function (n) { degree[n.id] = 0; });
-        links.forEach(function (l) { degree[l.source] = (degree[l.source] || 0) + 1; degree[l.target] = (degree[l.target] || 0) + 1; });
+        links.forEach(function (l) {
+            degree[l.source] = (degree[l.source] || 0) + 1;
+            degree[l.target] = (degree[l.target] || 0) + 1;
+        });
+        nodes.forEach(function (n) { n.deg = degree[n.id] || 0; });
         // 初始位置：目录分区（同目录节点初始聚在同一扇区——布局成簇、避免对称死锁）
         var dirGroups = {};
         nodes.forEach(function (n) { (dirGroups[n.dir] = dirGroups[n.dir] || []).push(n); });
@@ -2615,8 +3367,12 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
                 }
             }
         });
-        // 快速初排（30 轮同步，避免打开时长时间空白）
-        for (var iter = 0; iter < 220; iter++) stepOnce();
+        // 快速初排（45 轮同步，带 alpha 衰减——避免打开时长时间空白，又保留可见的舒展动画）
+        simAlpha = 1; simAlphaTarget = 0;
+        for (var iter = 0; iter < 45; iter++) {
+            stepOnce();
+            simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
+        }
         // 渲染 SVG（缓存元素引用——每帧直接更新，不 querySelectorAll）
         graphSvgG = document.createElementNS(GNS, 'g');
         graphSvg.appendChild(graphSvgG);
@@ -2649,9 +3405,10 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             node.appendChild(c);
             var t = document.createElementNS(GNS, 'text');
             t.setAttribute('text-anchor', 'middle');
-            t.setAttribute('dy', r + 12);
             t.setAttribute('class', 'graph-label');
             t.setAttribute('opacity', window.GRAPH_SHOW_LABELS ? '1' : '0');  // 后台开关：默认显示 / hover 显示
+            // 屏幕等大：transform 平移到节点下方再反缩放（applyGraphTransform 每次缩放同步更新）
+            t.setAttribute('transform', 'translate(0,' + (r + 11) + ') scale(' + (1 / graphTransform.k) + ')');
             t.textContent = n.name;  // 完整名字（hover 展开不省略）
             node.appendChild(t);
             node.addEventListener('click', function (ev) {
@@ -2663,37 +3420,30 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             // hover：显示标签 + 高亮邻居（class 切换——轻量）
             node.addEventListener('mouseenter', function () { t.setAttribute('opacity', '1'); highlightNode(n.id); });
             node.addEventListener('mouseleave', function () { t.setAttribute('opacity', '0'); highlightNode(-1); });
-            // 节点拖拽：锁定位置 + 持续模拟（其他节点跟随）；移动超 5px 视为拖拽（抑制 click 跳转）
+            // 节点拖拽：锁定位置 + alphaTarget=0.3 再加热（邻居实时跟随，松手自然冷却）；
+            // 移动超 5px 视为拖拽（抑制 click 跳转）
             node.addEventListener('pointerdown', function (ev) {
                 ev.preventDefault(); ev.stopPropagation();
                 var svgRect = graphSvg.getBoundingClientRect();
                 var sx = ev.clientX, sy = ev.clientY;
-                var movePending = false, lastX = ev.clientX, lastY = ev.clientY;
                 n.fixed = true;
                 n._dragged = false;
-                stopSim();
+                simDragging = true;
+                heatSim(simAlpha < 0.05 ? 0.15 : null, 0.3);  // 冷图拖拽快速起热；热图保持当前能量
                 highlightNode(n.id);  // 拖拽聚焦：被拖节点+相连的线/节点高亮，其余淡化（与 hover 一致，手机也生效）
                 function move(ev2) {
                     if (!n._dragged && (Math.abs(ev2.clientX - sx) + Math.abs(ev2.clientY - sy) > 5)) n._dragged = true;
-                    lastX = ev2.clientX; lastY = ev2.clientY;
-                    if (movePending) return;  // rAF 节流：多次 pointermove 合并到一帧一次（手机不卡）
-                    movePending = true;
-                    requestAnimationFrame(function () {
-                        movePending = false;
-                        n.x = (lastX - svgRect.left - graphTransform.x) / graphTransform.k;
-                        n.y = (lastY - svgRect.top - graphTransform.y) / graphTransform.k;
-                        node.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
-                        // 拖拽联动：每帧跑一步力模拟（被拖点排斥/拉动其他节点）+ 只更新在移动的节点（轻量）
-                        stepOnce();
-                        updateMovingEls();
-                    });
+                    // 直接写坐标——渲染由常驻 sim tick 完成（每帧全图更新，邻居丝滑跟随）
+                    n.x = (ev2.clientX - svgRect.left - graphTransform.x) / graphTransform.k;
+                    n.y = (ev2.clientY - svgRect.top - graphTransform.y) / graphTransform.k;
                 }
                 function up() {
                     n.fixed = false;
+                    simDragging = false;
+                    simAlphaTarget = 0;  // 松手 → 自然冷却收敛
                     highlightNode(-1);  // 恢复全部亮度
                     window.removeEventListener('pointermove', move);
                     window.removeEventListener('pointerup', up);
-                    startSim();
                 }
                 window.addEventListener('pointermove', move);
                 window.addEventListener('pointerup', up);
@@ -2768,63 +3518,71 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         window.addEventListener('pointerup', onPtrUp);
         window.addEventListener('pointercancel', onPtrUp);
         applyGraphTransform();
-        // 持续力导向模拟（Obsidian 风格：节点缓缓到位后静止，拖拽/交互时重新激活）
-        startSim();
+        // 满能量开局：可见的有机舒展动画（alpha 1→0 约 3 秒缓缓收敛静止）
+        heatSim(1, 0);
     }
-    // ---- 持续力导向模拟（rAF 每帧一步；收敛后静止；拖拽/交互重新激活） ----
-    var simRaf = null, simRunning = false;
+    // ---- 力导向模拟（Quartz/Obsidian 丝滑感的核心：d3-force 同款 alpha 能量衰减驱动）----
+    // 每帧 alpha 向 target 衰减（约 3 秒从 1 → 0），所有力乘 alpha——开局有生命力的舒展动画、缓缓收敛静止；
+    // 拖拽时抬高 alphaTarget=0.3 再加热（邻居实时跟随），松手后自然冷却。不再用"最多 N 帧硬停"的土办法
+    var simRaf = null;
+    var simAlpha = 0, simAlphaTarget = 0, simDragging = false;
+    var ALPHA_DECAY = 1 - Math.pow(0.001, 1 / 300);  // ≈0.023/帧（d3 默认曲线：300 帧衰减到千分之一）
     var simEls = [], simLineEls = [], clusterPairs = [], linkAdj = {};
     var W = 800, H = 500, cx = 400, cy = 250;
     function stepOnce() {
         var nodes = graphNodes;
-        if (!nodes.length) return;
-        var REP = 3500, SPRING = 0.01, REST = 100, DAMP = 0.9;
+        if (!nodes.length || simAlpha <= 0) return;
+        var a = simAlpha;
+        var REP = 3300, SPRING = 0.06, REST = 105;
+        // 多体斥力（O(n²) 直接累加——vault 级节点量最优解，无需四叉树）
         for (var i = 0; i < nodes.length; i++) {
             if (nodes[i].fixed) continue;
             for (var j = i + 1; j < nodes.length; j++) {
                 if (nodes[j].fixed) continue;
                 var dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
                 var d2 = dx * dx + dy * dy + 1;
-                var f = REP / d2;
+                var f = (REP / d2) * a;
                 var d = Math.sqrt(d2);
                 nodes[i].vx += (dx / d) * f; nodes[i].vy += (dy / d) * f;
                 nodes[j].vx -= (dx / d) * f; nodes[j].vy -= (dy / d) * f;
             }
         }
+        // 链接弹簧（胡克定律：拉到理想长度 REST）
         graphLinks.forEach(function (l) {
-            var a = nodes[l.source], b = nodes[l.target];
-            if (!a || !b) return;
-            var dx = b.x - a.x, dy = b.y - a.y;
+            var an = nodes[l.source], bn = nodes[l.target];
+            if (!an || !bn) return;
+            var dx = bn.x - an.x, dy = bn.y - an.y;
             var d = Math.sqrt(dx * dx + dy * dy) || 1;
-            var f = (d - REST) * SPRING;
-            if (!a.fixed) { a.vx += (dx / d) * f; a.vy += (dy / d) * f; }
-            if (!b.fixed) { b.vx -= (dx / d) * f; b.vy -= (dy / d) * f; }
+            var f = (d - REST) * SPRING * a;
+            if (!an.fixed) { an.vx += (dx / d) * f; an.vy += (dy / d) * f; }
+            if (!bn.fixed) { bn.vx -= (dx / d) * f; bn.vy -= (dy / d) * f; }
         });
-        // 同目录弱吸引（聚类不画线——强度约为真实链接的 1/5，距离 130 内互相靠近）
+        // 同目录弱吸引（聚类不画线——距离 130 内互相靠近）
         for (var cp = 0; cp < clusterPairs.length; cp++) {
             var ca = nodes[clusterPairs[cp][0]], cb = nodes[clusterPairs[cp][1]];
             if (!ca || !cb || ca.fixed || cb.fixed) continue;
             var cdx = cb.x - ca.x, cdy = cb.y - ca.y;
             var cd = Math.sqrt(cdx * cdx + cdy * cdy) || 1;
-            if (cd > 130) continue;
-            var cf = (cd - 130) * 0.002;
+            if (cd > 140) continue;
+            var cf = (cd - 140) * 0.003 * a;
             ca.vx += (cdx / cd) * cf; ca.vy += (cdy / cd) * cf;
             cb.vx -= (cdx / cd) * cf; cb.vy -= (cdy / cd) * cf;
         }
+        // 积分：中心引力 + 阻尼（velocityDecay 0.6=d3 默认）+ 位移
         nodes.forEach(function (n) {
             if (n.fixed) return;
-            n.vx += (cx - n.x) * 0.015;
-            n.vy += (cy - n.y) * 0.015;
-            n.vx *= DAMP; n.vy *= DAMP;
-            // 速度钳制：防节点弹飞
-            if (n.vx > 2.5) n.vx = 2.5; if (n.vx < -2.5) n.vx = -2.5;
-            if (n.vy > 2.5) n.vy = 2.5; if (n.vy < -2.5) n.vy = -2.5;
+            n.vx += (cx - n.x) * 0.02 * a;
+            n.vy += (cy - n.y) * 0.02 * a;
+            n.vx *= 0.6; n.vy *= 0.6;
+            // 安全钳制（正常物理下到不了这个值——只防极端情况弹飞）
+            if (n.vx > 12) n.vx = 12; if (n.vx < -12) n.vx = -12;
+            if (n.vy > 12) n.vy = 12; if (n.vy < -12) n.vy = -12;
             n.x += n.vx; n.y += n.vy;
-            // 软边界约束：越界慢慢拉回（不硬反弹——动画自然）；5px 硬兜底防完全出界
-            if (n.x < 20) n.vx += (20 - n.x) * 0.08;
-            if (n.x > W - 20) n.vx -= (n.x - (W - 20)) * 0.08;
-            if (n.y < 20) n.vy += (20 - n.y) * 0.08;
-            if (n.y > H - 20) n.vy -= (n.y - (H - 20)) * 0.08;
+            // 软边界：越界温和拉回（不硬反弹）
+            if (n.x < 20) n.vx += (20 - n.x) * 0.08 * a;
+            if (n.x > W - 20) n.vx -= (n.x - (W - 20)) * 0.08 * a;
+            if (n.y < 20) n.vy += (20 - n.y) * 0.08 * a;
+            if (n.y > H - 20) n.vy -= (n.y - (H - 20)) * 0.08 * a;
             if (n.x < 5) n.x = 5;
             if (n.x > W - 5) n.x = W - 5;
             if (n.y < 5) n.y = 5;
@@ -2869,55 +3627,43 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             simLineEls[j].setAttribute('y2', b.y.toFixed(1));
         }
     }
-    function updateLinkEls(id) {
-        // 只更新与指定节点相连的线（拖拽时——手机上快）
-        var idxs = linkAdj[id] || [];
-        for (var k = 0; k < idxs.length; k++) {
-            var j = idxs[k];
-            var l = graphLinks[j];
-            var a = graphNodes[l.source], b = graphNodes[l.target];
-            if (!a || !b) continue;
-            simLineEls[j].setAttribute('x1', a.x.toFixed(1));
-            simLineEls[j].setAttribute('y1', a.y.toFixed(1));
-            simLineEls[j].setAttribute('x2', b.x.toFixed(1));
-            simLineEls[j].setAttribute('y2', b.y.toFixed(1));
-        }
-    }
-    function startSim() {
+    function resumeSim() {
         if (simRaf) return;
-        var simFrames = 0;
         function tick() {
-            simFrames++;
-            stepOnce();  // 每帧模拟（60fps 位置更新——丝滑）
-            var totalV = 0;
-            for (var i = 0; i < graphNodes.length; i++) {
-                if (graphNodes[i].fixed) continue;
-                totalV += Math.abs(graphNodes[i].vx) + Math.abs(graphNodes[i].vy);
-            }
-            // 至少动 60 帧（Obsidian 的"缓缓到位"活感）；收敛（速度 < 0.5）或超过 600 帧强制停止（绝不跳个不停）
-            updateMovingEls();  // 只更新移动中的节点（轻量——保持高帧率）
-            // 快速稳定：初排已接近收敛——动画只需轻轻微调就停（不长时间游动）
-            if ((totalV > 1.5 || simFrames < 15) && simFrames < 200) {
-                simRaf = requestAnimationFrame(tick);
-            } else {
+            simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
+            // 能量自然耗尽 → 停帧（拖拽中 simDragging=true 保持运转）
+            if (!simDragging && simAlphaTarget === 0 && simAlpha < 0.002) {
+                simAlpha = 0;
                 simRaf = null;
-                simRunning = false;
+                return;
             }
+            stepOnce();
+            updateMovingEls();
+            simRaf = requestAnimationFrame(tick);
         }
-        simRunning = true;
         simRaf = requestAnimationFrame(tick);
     }
-    function stopSim() {
-        if (simRaf) { cancelAnimationFrame(simRaf); simRaf = null; }
-        simRunning = false;
+    function heatSim(alpha, target) {
+        if (alpha != null && alpha > simAlpha) simAlpha = alpha;
+        if (target != null) simAlphaTarget = target;
+        resumeSim();
     }
     function applyGraphTransform() {
-        if (graphSvgG) graphSvgG.setAttribute('transform', 'translate(' + graphTransform.x + ',' + graphTransform.y + ') scale(' + graphTransform.k + ')');
-        // Obsidian 同款：缩小到一定程度自动隐藏文件名（默认显示开关开启时）
-        if (window.GRAPH_SHOW_LABELS && graphSvgG) {
-            var showL = graphTransform.k >= 0.8;
-            var labels = graphSvgG.querySelectorAll('.graph-label');
-            for (var i = 0; i < labels.length; i++) labels[i].setAttribute('opacity', showL ? '1' : '0');
+        if (!graphSvgG) return;
+        var k = graphTransform.k;
+        graphSvgG.setAttribute('transform', 'translate(' + graphTransform.x + ',' + graphTransform.y + ') scale(' + k + ')');
+        // 标签两件事（Obsidian 同款观感）：
+        // ① 屏幕等大——反缩放 1/k（钳制 0.7~2.2），缩放时字号不随世界坐标缩水/爆炸
+        // ② 阈值显示——k≥0.75 全部显示，缩小后全部隐藏（无例外，页面干净）
+        var s = Math.min(2.2, Math.max(0.7, 1 / k));
+        for (var i = 0; i < simEls.length; i++) {
+            var txt = simEls[i].lastChild;  // text 是 node g 的最后一个子元素
+            if (!txt) continue;
+            var n = graphNodes[i];
+            txt.setAttribute('transform', 'translate(0,' + ((n.r || 4) + 11) + ') scale(' + s + ')');
+            if (window.GRAPH_SHOW_LABELS) {
+                txt.setAttribute('opacity', k >= 0.75 ? '1' : '0');
+            }
         }
     }
     // hover 高亮邻居（class 切换：邻居亮、其余淡化）
@@ -2946,14 +3692,70 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     // SSR 直达：/graph → 直接打开图谱视图（try/catch 防御：任何前置错误不阻塞图谱）
     if (window.SSR_GRAPH) { try { openGraph(); } catch (e) {} }
 
-    /* ===== Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → SVG） ===== */
+    /* ===== Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → 官方 exportToSvg 引擎，手写 SVG 兜底） ===== */
     function escapeXml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     var exAscent = 0.9;  // Virgil 字形 ascent 比例（canvas 实测缓存——不依赖 dominant-baseline，所有浏览器一致）
-    async function renderExcalidraw() {
-        var raw = window.EXCALIDRAW_RAW || '';
-        var m = raw.match(/```compressed-json\s*([\s\S]*?)```/);
-        var dv = $('excalidraw-view');
-        if (!dv) return;
+    // 官方渲染器懒加载：只有绘画页才注入脚本（其余页面零开销）。
+    // 完整官方包 @excalidraw/excalidraw UMD（与 Obsidian 插件同源渲染管线）：React UMD → ReactDOM UMD → ExcalidrawLib，
+    // 全局名 window.ExcalidrawLib。EXCALIDRAW_ASSET_PATH 指向本地 vendor 字体，导出的 @font-face 落在同源路径
+    var exLibPromise = null;
+    function loadExcalidrawLib() {
+        if (window.ExcalidrawLib && window.ExcalidrawLib.exportToSvg) return Promise.resolve();
+        if (!exLibPromise) {
+            exLibPromise = new Promise(function (res, rej) {
+                if (!window.EXCALIDRAW_ASSET_PATH) window.EXCALIDRAW_ASSET_PATH = '/assets/dist/';
+                var urls = ['/assets/react.production.min.js', '/assets/react-dom.production.min.js', '/assets/excalidraw.production.min.js'];
+                (function next(i) {
+                    if (i >= urls.length) {
+                        (window.ExcalidrawLib && window.ExcalidrawLib.exportToSvg) ? res() : rej(new Error('ExcalidrawLib load failed'));
+                        return;
+                    }
+                    var sc = document.createElement('script');
+                    sc.src = urls[i];
+                    sc.onload = function () { next(i + 1); };
+                    sc.onerror = function () { exLibPromise = null; rej(new Error('script load failed: ' + urls[i])); };
+                    document.head.appendChild(sc);
+                })(0);
+            });
+        }
+        return exLibPromise;
+    }
+    // 字体码兼容：Obsidian 插件 2.x 新 schema 的字体枚举与本引擎不同（5=Virgil legacy、4=Helvetica）。
+    // 不映射的话未知码会被回落成系统字体（Segoe UI Emoji），字形墨迹偏离基线——视觉上"字母脱离线外"。
+    // 线绑定文字（双击箭头插入的标签）保持原样：官方引擎自带标签定位与蒙版断线（线在字母处挖口，与 Obsidian 一致）
+    var EX_FAMAP = { 4: 2, 5: 1 };
+    function normalizeExcalidrawScene(els) {
+        els.forEach(function (e) {
+            if (e.fontFamily != null && EX_FAMAP[e.fontFamily] != null) e.fontFamily = EX_FAMAP[e.fontFamily];
+        });
+    }
+    // 官方引擎渲染：rough.js 手绘笔画、贝塞尔弯曲箭头、freedraw 笔迹、hachure 填充、绑定标签+蒙版断线全量还原
+    async function renderExcalidrawOfficial(scene, dv) {
+        await loadExcalidrawLib();
+        var els = JSON.parse(JSON.stringify((scene.elements || []).filter(function (e) { return e && !e.isDeleted && e.type !== 'frame'; })));
+        normalizeExcalidrawScene(els);
+        var svg = await window.ExcalidrawLib.exportToSvg({
+            elements: els,
+            appState: { exportBackground: true, viewBackgroundColor: scene.viewBackgroundColor || '#ffffff', exportWithDarkMode: document.documentElement.classList.contains('dark') },
+            files: scene.files || {},
+            exportPadding: 16
+        });
+        // 字体就绪再插入：导出坐标按 Virgil metrics 计算，避免先以回退字体绘制再跳变
+        try { await Promise.race([document.fonts.load('20px Virgil', 'Ag'), new Promise(function (r) { setTimeout(r, 1500); })]); } catch (e) {}
+        // 剥除导出包注入的全部 @font-face 块：内联 SVG 内嵌字体声明在部分浏览器与页面级同名 face 冲突导致
+        // 加载报 network error（实测），且会引用未 vendor 的辅助字体。统一走页面级自托管 Virgil（index.css）
+        var sts = svg.querySelectorAll('style');
+        for (var i = sts.length - 1; i >= 0; i--) {
+            if ((sts[i].textContent || '').indexOf('@font-face') !== -1 && sts[i].parentNode) sts[i].parentNode.removeChild(sts[i]);
+        }
+        svg.removeAttribute('width'); svg.removeAttribute('height');  // 只留 viewBox → .excalidraw-canvas svg 的 max-width:100% 等比缩放
+        svg.style.width = '100%'; svg.style.height = 'auto';
+        dv.innerHTML = '';
+        dv.appendChild(svg);
+    }
+    // 手写兜底渲染（官方包加载失败/导出异常时仍能出图——离线部署场景）：仅支持六种基础元素
+    async function renderExcalidrawFallback(scene, dv) {
+        var els = scene.elements || [];
         // 等 Virgil 字体加载（文字位置依赖其 metrics），超时 1.5s 兜底
         try { await Promise.race([document.fonts.load('20px Virgil'), new Promise(function (r) { setTimeout(r, 1500); })]); } catch (e) {}
         // canvas 实测 Virgil ascent 比例（基线渲染的精确偏移；字体没就绪时 fallback 0.9）
@@ -2963,11 +3765,6 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             var mm = ctx.measureText('Ag');
             if (mm && mm.actualBoundingBoxAscent) exAscent = mm.actualBoundingBoxAscent / 20;
         } catch (e) {}
-        if (!m || typeof LZString === 'undefined') { dv.innerHTML = '<p>Excalidraw data not found in this file.</p>'; return; }
-        var scene;
-        try { scene = JSON.parse(LZString.decompressFromBase64(m[1].replace(/\s+/g, ''))); }
-        catch (e) { dv.innerHTML = '<p>Failed to decode drawing: ' + escapeXml(e.message) + '</p>'; return; }
-        var els = scene.elements || [];
         // 线文本（bound text）：Excalidraw 把绑定线的文字渲染在线段中点（忽略未吸附的保存坐标——F/I/H/J 错位根因）
         // 预构建：线 id → 中点（text 侧用 containerId=线 id 反向查找）
         var lineMid = {};
@@ -3048,9 +3845,26 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         });
         svg += '</svg>';
         dv.innerHTML = svg;
-        dv.style.display = 'block';  // 显示画布容器（初始 display:none——忘了设置会导致空白）
+    }
+    // 总入口：解码 compressed-json → 官方引擎优先，任何异常回落手写兜底（自身永不抛出——两个调用点都未接 promise）
+    async function renderExcalidraw() {
+        var raw = window.EXCALIDRAW_RAW || '';
+        var m = raw.match(/```compressed-json\s*([\s\S]*?)```/);
+        var dv = $('excalidraw-view');
+        if (!dv) return;
+        if (!m || typeof LZString === 'undefined') { dv.innerHTML = '<p>Excalidraw data not found in this file.</p>'; return; }
+        var scene;
+        try { scene = JSON.parse(LZString.decompressFromBase64(m[1].replace(/\s+/g, ''))); }
+        catch (e) { dv.innerHTML = '<p>Failed to decode drawing: ' + escapeXml(e.message) + '</p>'; return; }
+        try { await renderExcalidrawOfficial(scene, dv); }
+        catch (oe) {
+            try { await renderExcalidrawFallback(scene, dv); }
+            catch (fe) { dv.innerHTML = '<p>Render failed: ' + escapeXml((fe && fe.message) || fe) + '</p>'; return; }
+        }
         // 视图切换：文章容器显示（excalidraw 在 doc-main 内，正常左中右结构、只占中栏），md 隐藏；
         // 绘画无目录 → 右轨两个 TOC 面板都隐藏（右栏留空）
+        hideSpecialViews();  // 清掉可能残留的 PDF/Canvas/图谱（互斥）——必须在显示本视图之前
+        dv.style.display = 'block';  // 显示画布容器（初始 display:none——忘了设置会导致空白）
         $('archive-view').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
@@ -3061,6 +3875,167 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     }
     if (window.SSR_EXCALIDRAW) { try { renderExcalidraw(); } catch (e) { if (window.console) console.log('excalidraw err', e); } }
 
+    /* ===== Obsidian Canvas 白板渲染（.canvas：JSON nodes/edges → SVG 画布，配色跟随日夜主题） ===== */
+    // 节点颜色：Obsidian 官方色板 1-6 的近似色值；其余接受 #hex 原样
+    var CV_COLORS = { '1': '#fb464c', '2': '#faa53d', '3': '#ffe100', '4': '#21c95e', '5': '#1db5f5', '6': '#a882ff' };
+    function cvColor(c) {
+        if (c == null) return '';
+        c = String(c);
+        return CV_COLORS[c] || (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(c) ? c : '');
+    }
+    function renderCanvas() {
+        var dv = $('canvas-view'), board = $('canvas-board');
+        if (!dv || !board) return;
+        var data;
+        try { data = JSON.parse(window.CANVAS_JSON || '{}'); }
+        catch (e) { board.innerHTML = '<p style="padding:24px">Invalid canvas file: ' + escapeXml(e.message) + '</p>'; finishCanvasView(); return; }
+        try { renderCanvasScene(data, board); }
+        catch (e) { board.innerHTML = '<p style="padding:24px">Render failed: ' + escapeXml((e && e.message) || e) + '</p>'; }
+        finishCanvasView();
+    }
+    // 视图切换（同 Excalidraw）：白板无目录 → 右轨两个 TOC 面板都隐藏
+    function finishCanvasView() {
+        var dv = $('canvas-view');
+        if (!dv) return;
+        hideSpecialViews();  // 清掉可能残留的 PDF/Excalidraw/图谱（互斥）
+        dv.style.display = 'block';
+        $('archive-view').style.display = 'none';
+        $('doc-wrap').style.display = 'flex';
+        var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
+        var htp = $('home-toc-panel'); if (htp) htp.style.display = 'none';
+        var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
+        var ttl = $('doc-title');
+        if (ttl) ttl.textContent = (window.CANVAS_PATH || '').split('/').pop().replace(/\.canvas$/i, '');
+    }
+    function renderCanvasScene(data, board) {
+        var NS = 'http://www.w3.org/2000/svg';
+        var nodes = (data.nodes || []).filter(function (n) { return n && n.id && n.x != null; });
+        var byId = {};
+        nodes.forEach(function (n) { byId[n.id] = n; });
+        var pad = 80, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        nodes.forEach(function (n) {
+            var w = n.width || 0, h = n.height || 0;
+            if (n.x < minX) minX = n.x; if (n.y < minY) minY = n.y;
+            if (n.x + w > maxX) maxX = n.x + w; if (n.y + h > maxY) maxY = n.y + h;
+        });
+        if (!isFinite(minX)) { minX = -40; minY = -40; maxX = 760; maxY = 560; }
+        var svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('xmlns', NS);
+        svg.setAttribute('viewBox', (minX - pad) + ' ' + (minY - pad) + ' ' + (maxX - minX + pad * 2) + ' ' + (maxY - minY + pad * 2));
+        svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        function el(tag, attrs, parent) {
+            var e = document.createElementNS(NS, tag);
+            for (var k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
+            (parent || svg).appendChild(e);
+            return e;
+        }
+        // 边端点：节点指定边的中点；贝塞尔控制点沿该边法向外伸（Obsidian 同款平滑曲线语义）
+        function sidePt(n, side) {
+            var x = n.x || 0, y = n.y || 0, w = n.width || 0, h = n.height || 0;
+            if (side === 'top') return [x + w / 2, y];
+            if (side === 'bottom') return [x + w / 2, y + h];
+            if (side === 'left') return [x, y + h / 2];
+            return [x + w, y + h / 2];
+        }
+        var DIR = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+        function cubicAt(p0, c1, c2, p1, t) {
+            var u = 1 - t, a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+            return [a * p0[0] + b * c1[0] + c * c2[0] + d * p1[0], a * p0[1] + b * c1[1] + c * c2[1] + d * p1[1]];
+        }
+        // 分层：组节点永远垫底（Obsidian 中 group 在内容下方），内容节点按文件顺序
+        (nodes.filter(function (n) { return n.type === 'group'; })).forEach(function (g) {
+            var col = cvColor(g.color);
+            var r = el('rect', { x: g.x, y: g.y, width: g.width, height: g.height, rx: 10, 'class': 'cv-group' });
+            if (col) r.setAttribute('stroke', col);
+            if (g.label) {
+                var t = el('text', { x: (g.x || 0) + 8, y: (g.y || 0) - 8, 'class': 'cv-glabel' });
+                t.textContent = g.label;
+            }
+        });
+        (nodes.filter(function (n) { return n.type !== 'group'; })).forEach(function (n) {
+            var col = cvColor(n.color);
+            var x = n.x || 0, y = n.y || 0, w = n.width || 200, h = n.height || 60;
+            // 图片文件节点：整卡铺图（圆角裁剪，等比 cover）
+            if (n.type === 'file' && /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(n.file || '')) {
+                var cid = 'cvclip-' + String(n.id).replace(/[^a-zA-Z0-9-]/g, '');
+                var cp = el('clipPath', { id: cid });
+                el('rect', { x: x, y: y, width: w, height: h, rx: 8 }, cp);
+                svg.appendChild(cp);
+                var im = el('image', { x: x, y: y, width: w, height: h, 'clip-path': 'url(#' + cid + ')', preserveAspectRatio: 'xMidYMid slice' });
+                im.setAttribute('href', '/vault/' + encodeURI(String(n.file || '').replace(/^\.?\//, '')).replace(/%2F/gi, '/'));
+                return;
+            }
+            var rect = el('rect', { x: x, y: y, width: w, height: h, rx: 8, 'class': 'cv-node' });
+            if (col) rect.setAttribute('stroke', col);
+            var fo = document.createElementNS(NS, 'foreignObject');
+            fo.setAttribute('x', x); fo.setAttribute('y', y); fo.setAttribute('width', w); fo.setAttribute('height', h);
+            var box = document.createElement('div');
+            box.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+            if (n.type === 'file') {
+                var f = String(n.file || '');
+                var a = document.createElement('a');
+                a.className = 'cv-filecard';
+                a.href = '/' + encodeURI(f.replace(/^\.?\//, '')).replace(/%2F/gi, '/');
+                var ic = document.createElement('span'); ic.className = 'cv-icon'; ic.textContent = /\.(md|canvas)$/i.test(f) ? '📝' : (/\.(pdf)$/i.test(f) ? '📕' : '📄');
+                var nm = document.createElement('span'); nm.className = 'cv-fname'; nm.textContent = f.split('/').pop();
+                a.appendChild(ic); a.appendChild(nm);
+                box.appendChild(a);
+            } else if (n.type === 'link') {
+                var u = String(n.url || '');
+                var host = u.replace(/^https?:\/\//i, '').split('/')[0];
+                var la = document.createElement('a');
+                la.className = 'cv-linkcard'; la.href = u; la.target = '_blank'; la.rel = 'noopener';
+                var lic = document.createElement('span'); lic.className = 'cv-icon'; lic.textContent = '🔗';
+                var lnm = document.createElement('span'); lnm.className = 'cv-fname'; lnm.textContent = host || u;
+                la.appendChild(lic); la.appendChild(lnm);
+                box.appendChild(la);
+            } else {
+                // text 节点：复用站点渲染栈（marked + DOMPurify），支持行内 markdown
+                box.className = 'cv-content';
+                box.innerHTML = DOMPurify.sanitize(marked.parse(String(n.text || ''), { gfm: true, breaks: true }));
+            }
+            fo.appendChild(box);
+            svg.appendChild(fo);
+        });
+        // 连线（画在节点之后：Obsidian 连线浮于卡片上方）
+        (data.edges || []).forEach(function (ed) {
+            var a = byId[ed.fromNode], b = byId[ed.toNode];
+            if (!a || !b) return;
+            var fs = ed.fromSide || 'right', ts = ed.toSide || 'left';
+            var p1 = sidePt(a, fs), p2 = sidePt(b, ts);
+            var d1 = DIR[fs] || [1, 0], d2 = DIR[ts] || [-1, 0];
+            var dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+            var k = Math.max(30, Math.min(dist / 2, 120));
+            var c1 = [p1[0] + d1[0] * k, p1[1] + d1[1] * k], c2 = [p2[0] + d2[0] * k, p2[1] + d2[1] * k];
+            var col = cvColor(ed.color);
+            var path = el('path', { d: 'M ' + p1[0] + ' ' + p1[1] + ' C ' + c1[0] + ' ' + c1[1] + ', ' + c2[0] + ' ' + c2[1] + ', ' + p2[0] + ' ' + p2[1], 'class': 'cv-edge' });
+            if (col) path.setAttribute('stroke', col);
+            // 箭头：终点沿进入方向手绘小三角（不用 marker——每条线换色无需重复定义 marker）
+            var ax = p2[0] - c2[0], ay = p2[1] - c2[1], L = Math.hypot(ax, ay) || 1;
+            ax /= L; ay /= L;
+            var s = 8, px = -ay, py = ax;
+            var tri = el('polygon', {
+                points: p2[0] + ',' + p2[1] + ' '
+                    + (p2[0] - ax * s + px * s * 0.45) + ',' + (p2[1] - ay * s + py * s * 0.45) + ' '
+                    + (p2[0] - ax * s - px * s * 0.45) + ',' + (p2[1] - ay * s - py * s * 0.45),
+                'class': 'cv-arrow'
+            });
+            if (col) tri.setAttribute('fill', col);
+            if (ed.label) {
+                var mid = cubicAt(p1, c1, c2, p2, 0.5);
+                var lab = ed.label;
+                var tw = Math.max(24, lab.length * 7 + 14);  // 中英混排近似宽度
+                var g = el('g', { 'class': 'cv-label' });
+                el('rect', { x: mid[0] - tw / 2, y: mid[1] - 11, width: tw, height: 22, rx: 5 }, g);
+                var t = el('text', { x: mid[0], y: mid[1] + 4, 'text-anchor': 'middle' }, g);
+                t.textContent = lab;
+            }
+        });
+        board.innerHTML = '';
+        board.appendChild(svg);
+    }
+    // SSR 直达的触发在 enterApp 的 SSR_CANVAS 分支内（时序原因，见该处注释）；SPA 点击走 selectFile 分支
+
     // 搜索功能：整页切换，实时过滤文档
     var searchView = $('search-view');
     var searchInput = $('search-input');
@@ -3069,7 +4044,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         var files = [];
         (function walk(nodes, cat) {
             nodes.forEach(function (n) {
-                if (n.type === 'file' && /\.md$/i.test(n.name)) files.push({ name: n.name, path: n.path, cat: cat });
+                if (n.type === 'file' && /\.(md|canvas)$/i.test(n.name)) files.push({ name: n.name, path: n.path, cat: cat });
                 else if (n.children) walk(n.children, n.name);
             });
         })(state.tree, '');
@@ -3516,6 +4491,20 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
             }
             injectAliasEntry(window.ADMIN_ALIAS_PATH);
             injectAliasEntry(window.GRAPH_ALIAS_PATH);
+            // 根层级的虚拟入口（Dashboard/Graph-View，含未配别名时服务端直出的 Graph-View）：
+            // 按一级目录行样式展示但不加折叠箭头
+            (function markAliasDirs() {
+                var rootUl = frontDrawerMd.querySelector('ul');
+                if (!rootUl) return;
+                var clean = function (s) { return '/' + String(s || '').replace(/^\/+|\/+$/g, ''); };
+                var aliases = [clean(window.ADMIN_ALIAS_PATH), clean(window.GRAPH_ALIAS_PATH), '/graph'];
+                [].forEach.call(rootUl.children, function (li) {
+                    var a = li.querySelector('a');
+                    if (!a || childUl(li)) return;
+                    var href = (a.getAttribute('href') || '').replace(/#.*$/, '');
+                    if (aliases.indexOf(href) !== -1) li.classList.add('alias-dir');
+                });
+            })();
         } catch (e) {}
     }
     $('vp-menu-btn').addEventListener('click', function (e) {
@@ -3593,7 +4582,7 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
         var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
         if (!a) return;
         var href = a.getAttribute('href') || '';
-        if (/\.md$/i.test(href) && href.charAt(0) === '/') {
+        if (/(\.md|\.canvas)$/i.test(href) && href.charAt(0) === '/') {
             e.preventDefault();
             var p = href.substring(1);
             try { p = decodeURI(p); } catch (err) {}  // 菜单/内链 href 带 URL 编码 → 解码后再查（防双重编码）
@@ -3635,12 +4624,20 @@ var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
     window.addEventListener('hashchange', handleHash);
     // SPA 路径导航（pushState）的返回/前进：popstate 时按当前路径恢复文章或回首页
     window.addEventListener('popstate', function () {
+        var h = decodeURI(location.hash.replace(/^#/, ''));
+        // hash 本身是文档路由（#dir/note.md，页内 wikilink 的往返）→ 按 hash 走，
+        // 不能落到 pathname 分支：片段导航时 pathname 还是旧文章，会把刚打开的文章覆盖回去
+        if (h && /\.(md|canvas)$/i.test(h)) {
+            handleHash();
+            return;
+        }
         var p = location.pathname.replace(/^\//, '');
-        if (/\.md$/i.test(p)) {
+        if (/(\.md|\.canvas)$/i.test(p)) {
             selectFile({ path: p });
         } else if (location.hash) {
             handleHash();
         } else {
+            hideSpecialViews();  // 返回首页：清掉可能残留的 PDF/画布/图谱（互斥）
             $('md-view').style.display = 'none';
             $('doc-wrap').style.display = 'none';
             $('archive-view').style.display = '';

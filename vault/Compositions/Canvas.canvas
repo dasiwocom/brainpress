@@ -1,0 +1,14 @@
+{
+	"nodes":[
+		{"id":"e66ca332cf6d4b6d","type":"text","text":"test","x":-220,"y":-180,"width":250,"height":60},
+		{"id":"b6088bff27076f1e","type":"text","text":"114514","x":206,"y":-175,"width":250,"height":60},
+		{"id":"5f913ad01e4b9aa1","type":"text","text":"测试","x":-114,"y":51,"width":250,"height":60}
+	],
+	"edges":[
+		{"id":"2c0222d3e550d07c","fromNode":"e66ca332cf6d4b6d","fromSide":"right","toNode":"b6088bff27076f1e","toSide":"left"},
+		{"id":"a4904e0e65919222","fromNode":"b6088bff27076f1e","fromSide":"bottom","toNode":"5f913ad01e4b9aa1","toSide":"top"},
+		{"id":"310ce05d2c421d62","fromNode":"b6088bff27076f1e","fromSide":"bottom","toNode":"5f913ad01e4b9aa1","toSide":"right"},
+		{"id":"60ce220a9ad9f290","fromNode":"5f913ad01e4b9aa1","fromSide":"top","toNode":"e66ca332cf6d4b6d","toSide":"bottom"},
+		{"id":"ab44952e9175722d","fromNode":"e66ca332cf6d4b6d","fromSide":"top","toNode":"5f913ad01e4b9aa1","toSide":"left"}
+	]
+}

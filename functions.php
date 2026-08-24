@@ -198,13 +198,24 @@ function is_pdf(string $path): bool {
     return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'pdf';
 }
 
+/** 是否为 Obsidian Canvas 白板文件（画布渲染显示用） */
+function is_canvas(string $path): bool {
+    return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'canvas';
+}
+
 /** 是否为图片文件（嵌入显示用） */
 function is_image(string $path): bool {
     return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'], true);
 }
 
-/** 递归扫描工作区，返回文件树；$excludes 命中的目录/文件不出现在树中；$pinnedDirs 置顶目录、$pinnedArticles 置顶文章（排最前） */
-function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = []): array {
+/** 音视频资源（Obsidian 嵌入用）：与前端 processObsidian 的媒体扩展名列表保持一致 */
+function is_media(string $path): bool {
+    return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus'], true);
+}
+
+/** 递归扫描工作区，返回文件树；$excludes 命中的目录/文件不出现在树中；$pinnedDirs 置顶目录、$pinnedArticles 置顶文章（排最前）；
+ *  $forMount=true 用于自定义挂载：不收录图片（挂载目录没有静态服务路由，图片是死链，只会造成脏乱显示） */
+function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false): array {
     $items = [];
     $entries = scandir($dir);
     foreach ($entries as $entry) {
@@ -223,11 +234,14 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
             continue; // 命中隐藏列表：目录整棵跳过 / 文件不收录
         }
         if (is_dir($full)) {
+            $children = scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles, $forMount);
+            // 挂载模式：过滤后变空的目录（如纯图片的 Attachments）直接不显示
+            if ($forMount && !$children) continue;
             $items[] = [
                 'name' => $entry,
                 'path' => $rel,
                 'type' => 'dir',
-                'children' => scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles),
+                'children' => $children,
             ];
         } elseif (is_md($full)) {
             $items[] = [
@@ -236,6 +250,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'type' => 'file',
             ];
         } elseif (is_image($full)) {
+            if ($forMount) continue;  // 挂载目录不收录图片（无静态路由的死链）
             // 图片文件也收录（嵌入显示用）
             $items[] = [
                 'name' => $entry,
@@ -243,7 +258,23 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'type' => 'file',
             ];
         } elseif (is_pdf($full)) {
+            if ($forMount) continue;  // 同上：挂载 PDF 无静态路由，阅读器加载不到
             // PDF 文件收录（阅读器显示用）
+            $items[] = [
+                'name' => $entry,
+                'path' => $rel,
+                'type' => 'file',
+            ];
+        } elseif (is_canvas($full)) {
+            // Obsidian Canvas 白板收录（画布渲染显示用）
+            $items[] = [
+                'name' => $entry,
+                'path' => $rel,
+                'type' => 'file',
+            ];
+        } elseif (is_media($full)) {
+            if ($forMount) continue;  // 挂载媒体无静态路由（同图片/PDF：死链不收录）
+            // 音视频资源收录（![[xx.mp4]] 嵌入按名字解析用；前台菜单 tree_to_md 会跳过展示）
             $items[] = [
                 'name' => $entry,
                 'path' => $rel,
@@ -276,10 +307,16 @@ function tree_to_md(array $items, string $prefix = ''): string {
     $lines = [];
     foreach ($items as $item) {
         if ($item['type'] === 'dir') {
+            // 无可见子项的目录（空目录/子项全是媒体等资源）整行跳过：
+            // 菜单里裸目录行没有内嵌 ul，前端折叠逻辑判不出目录会导致样式错乱
+            $childMd = tree_to_md($item['children'] ?? [], $prefix . '  ');
+            if ($childMd === '') continue;
             $lines[] = $prefix . '- ' . $item['name'];
-            $lines[] = tree_to_md($item['children'] ?? [], $prefix . '  ');
+            $lines[] = $childMd;
         } else {
-            $name = preg_replace('/\.(md|pdf)$/i', '', $item['name']);
+            // 媒体/图片是嵌入资源非文档：不进侧滑菜单（树保持干净），仅存在于树数据供 resolveAsset 解析
+            if (is_media($item['name']) || is_image($item['name'])) continue;
+            $name = preg_replace('/\.(md|pdf|canvas)$/i', '', $item['name']);
             // 最小编码：保留斜杠，只编码空格/括号等 md 链接破坏字符
             $href = str_replace('%2F', '/', rawurlencode($item['path']));
             $lines[] = $prefix . '- [' . $name . '](/' . $href . ')';
@@ -367,6 +404,7 @@ function resolve_vault_file(string $rel, array $config): ?string {
             if ($rel === basename($m['root'])) return $m['root'];
             continue;
         }
+        // 目录挂载与主 vault 同级平权：rel 直接落在挂载根内解析（无 URL 前缀包装）
         $full = realpath($m['root'] . '/' . $rel);
         if ($full !== false && strpos($full, $m['root'] . '/') === 0 && is_file($full)) return $full;
     }
@@ -388,10 +426,29 @@ function filter_abs_hidden(array $items, string $mountRoot, array $absExcludes):
     return $out;
 }
 
+/** 递归合并挂载子树进目标树：每层按名字去重（主树已有一律优先）；目录同名则继续向下合并，
+    文件同名或类型冲突则丢弃挂载侧。此前按顶层名整棵丢弃挂载目录——主 vault 存在同名目录时
+    （如两边都有 BrainPress/）整个挂载被静默吞掉，Mounts 开关切换看起来毫无效果 */
+function merge_tree_node(array &$target, array $incoming): void {
+    $idx = [];
+    foreach ($target as $i => $t) $idx[$t['name']] = $i;
+    foreach ($incoming as $n) {
+        $name = $n['name'];
+        if (!isset($idx[$name])) {
+            $idx[$name] = count($target);
+            $target[] = $n;
+            continue;
+        }
+        $ti = $idx[$name];
+        if (($target[$ti]['type'] ?? '') === 'dir' && ($n['type'] ?? '') === 'dir') {
+            merge_tree_node($target[$ti]['children'], $n['children'] ?? []);
+        }
+    }
+}
+
 /** 把启用的自定义挂载扫描成树并合并进 $tree（主树同名优先）：目录递归扫描、单 .md 文件作顶层条目。
-    去重只针对"先前已占用的名字"（主树 + 更早的挂载）——不能把挂载自己的子文件过滤掉。
-    Tree 页双写法：隐藏/置顶的相对条目不作用于挂载；绝对条目换算成挂载内相对坐标生效
-    （置顶沿用 scan_tree 的"本层排最前"语义） */
+    同名目录逐层合并而非整棵丢弃；Tree 页双写法：隐藏/置顶的相对条目不作用于挂载；
+    绝对条目换算成挂载内相对坐标生效（置顶沿用 scan_tree 的"本层排最前"语义） */
 function merge_custom_trees(array $tree, array $config): array {
     // 占用名字初始化：主树顶层 + 主树各目录的第一层文件（与 /api/list 本地优先口径一致）
     $seen = [];
@@ -422,6 +479,8 @@ function merge_custom_trees(array $tree, array $config): array {
             continue;
         }
         if (!is_dir($m['root'])) continue;
+        // 绝对隐藏条目命中挂载根本体 → 整棵跳过（后台可一键隐藏整个挂载目录）
+        if (abs_entry_hits($m['root'], $absEx)) continue;
         // 置顶绝对条目 → 挂载内相对坐标，交给 scan_tree 原生排序
         $relPinDirs = []; $relPinArticles = [];
         foreach ($absPinDirs as $a) {
@@ -432,22 +491,20 @@ function merge_custom_trees(array $tree, array $config): array {
             $rel = abs_under_root($a, $m['root']);
             if ($rel !== null && $rel !== '' && is_file($m['root'] . '/' . $rel)) $relPinArticles[] = $rel;
         }
-        $customTree = scan_tree($m['root'], '', [], $relPinDirs, $relPinArticles);
+        // 挂载内容与主 vault 同级平权：relPrefix='' 扫描后逐节点合并进顶层（同名目录递归并入、同名文件主 vault 优先），
+        // 不包一层挂载名目录——custom 和 vault 本来就是同一层级的内容来源
+        $customTree = scan_tree($m['root'], '', [], $relPinDirs, $relPinArticles, true);
         $customTree = filter_abs_hidden($customTree, $m['root'], $absEx);
-        // 仅过滤"之前已占用"的顶层名；本挂载自己的子节点不参与去重
-        $customTree = array_values(array_filter($customTree, function ($n) use ($seen) {
-            return !isset($seen[$n['name']]);
-        }));
-        // 本挂载占用的名字 → 供后续挂载去重
-        foreach ($customTree as $item) {
-            $seen[$item['name']] = true;
-            if ($item['type'] === 'dir') {
-                foreach (($item['children'] ?? []) as $f) {
-                    if (($f['type'] ?? '') === 'file') $seen[basename($f['name'])] = true;
+        merge_tree_node($tree, $customTree);
+        $seen = [];
+        foreach ($tree as $t) {
+            $seen[$t['name']] = true;
+            if (($t['type'] ?? '') === 'dir') {
+                foreach (($t['children'] ?? []) as $f) {
+                    if (($f['type'] ?? '') === 'file') $seen[$f['name']] = true;
                 }
             }
         }
-        $tree = array_merge($tree, $customTree);
     }
     return $tree;
 }
@@ -460,7 +517,10 @@ function collect_all_md_files(array $config): array {
     $absEx = [];
     foreach (($config['exclude_paths'] ?? []) as $e) if (is_string($e) && setting_is_absolute($e)) $absEx[] = $e;
     $roots = [];
-    $mainRoot = realpath(PANEL_DIR . '/vault');
+    // 主 vault 受「WebDAV 渲染」开关控制（与 /api/list、/api/file 同一开关）：关=搜索/图谱也不收录
+    $mainRoot = (($config['render_webdav'] ?? true) && realpath(PANEL_DIR . '/vault') !== false)
+        ? realpath(PANEL_DIR . '/vault')
+        : false;
     if ($mainRoot !== false && is_dir($mainRoot)) $roots[] = $mainRoot;
     foreach (custom_mount_roots($config) as $m) {
         if (!$m['isFile'] && is_dir($m['root'])) $roots[] = $m['root'];
