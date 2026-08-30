@@ -1,21 +1,16 @@
 {
-    "workspace": "\/www\/wwwroot\/localhost",
-    "session_name": "wmm_panel",
-    "storage": "local",
-    "webdav_user": "test",
-    "webdav_pass": "test",
+    "webdav_user": "",
+    "webdav_pass": "",
     "minio_endpoint": "",
     "minio_access": "",
     "minio_secret": "",
     "minio_bucket": "",
-    "render_webdav": true,
+    "render_webdav": false,
     "render_minio": false,
     "password_hash": "",
-    "render_custom": false,
-    "custom_path": "",
     "custom_paths": [
         {
-            "path": "\/home\/debian\/Everything\/vault",
+            "path": "",
             "on": false
         },
         {
@@ -38,12 +33,10 @@
     "site_title": "BrainPress",
     "default_light": true,
     "front_drawer_expanded": true,
-    "home_article": "BrainPress\/Introduction.md",
-    "admin_path": "BrainPress\/Dashboard",
-    "graph_path": "BrainPress\/Graphview",
+    "home_article": "Introduction",
+    "graph_path": "",
     "content_width": 840,
     "exclude_paths": [],
-    "pinned_dir": "",
     "pinned_articles": [],
     "expanded_dirs": [],
     "pinned_dirs": [],
@@ -53,5 +46,8 @@
     "ai_mode": "hybrid",
     "ai_enabled": true,
     "graph_show_labels": true,
-    "ai_api_base": ""
+    "ai_api_base": "",
+    "font_preset": "nunito",
+    "pin_navbar": false,
+    "webdav_mounts": []
 }

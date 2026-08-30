@@ -1,6 +1,6 @@
 <?php
 /**
- * MD2HTML v1.1.0 — 后台管理（独立入口，nginx 将 /admin 和 /api/admin/ 转发到此）
+ * BrainPress v1.1.0 — 后台管理（独立入口，nginx 将 /admin 和 /api/admin/ 转发到此）
  * 页面：/admin（未登录 → 登录页；已登录 → 配置面板）
  * API：/api/admin/config（GET 读取 / POST 保存）
  * 登录 API（/api/setup、/api/login、/api/logout）保留在 index.php（nginx /api/ 主路由）
@@ -16,22 +16,21 @@ if (strpos($uri, '/api/admin/') === 0) {
     // 管理配置：GET 返回当前配置，POST 保存
     if ($uri === '/api/admin/config' && $method === 'GET') {
         ok([
-            'storage' => $storage,
-            'webdav_user' => $config['webdav_user'] ?? '',
-            'webdav_pass' => $config['webdav_pass'] ?? '',
-            'webdav_url' => 'https://' . ($_SERVER['HTTP_HOST'] ?? 'docs.dasiwo.com') . '/dav/',
-            'render_webdav' => $config['render_webdav'] ?? true,
+            'webdav_mounts' => webdav_mounts_list($config),
+            'webdav_url' => 'https://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . '/dav/',
+            'render_webdav' => $config['render_webdav'] ?? false,
             'render_minio' => $config['render_minio'] ?? true,
             'custom_paths' => $config['custom_paths'] ?? [],
             'exclude_paths' => $config['exclude_paths'] ?? [],
             'pinned_dirs' => $config['pinned_dirs'] ?? [],
             'pinned_articles' => $config['pinned_articles'] ?? [],
             'expanded_dirs' => $config['expanded_dirs'] ?? [],
-            'site_title' => $config['site_title'] ?? 'MD2HTML',
+            'site_title' => $config['site_title'] ?? 'BrainPress',
             'home_article' => $config['home_article'] ?? '',
             'content_width' => (int)($config['content_width'] ?? 840),
-            'admin_path' => $config['admin_path'] ?? '',
             'api_token' => $config['api_token'] ?? '',
+            'font_preset' => $config['font_preset'] ?? 'nunito',
+            'pin_navbar' => $config['pin_navbar'] ?? false,
             'ai_api_base' => $config['ai_api_base'] ?? '',
             'ai_api_key' => $config['ai_api_key'] ?? '',
             'ai_model' => $config['ai_model'] ?? 'deepseek-chat',
@@ -55,11 +54,10 @@ if (strpos($uri, '/api/admin/') === 0) {
         $access = trim((string)($body['access'] ?? ''));
         $secret = trim((string)($body['secret'] ?? ''));
         $bucket = trim((string)($body['bucket'] ?? ''));
-        $storageMode = ($body['storage'] ?? '') === 'minio' ? 'minio' : 'local';
         $renderMinio = !empty($body['render_minio']);
         $test = [];
         // 仅当 MinIO 渲染开关开启时才要求填 MinIO 字段并做连接测试
-        if ($renderMinio || $storageMode === 'minio') {
+        if ($renderMinio) {
             if ($endpoint === '' || $access === '' || $secret === '' || $bucket === '') {
                 fail('All fields are required');
             }
@@ -69,7 +67,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             $GLOBALS['minioSecret'] = $secret;
             $GLOBALS['minioBucket'] = $bucket;
             $test = minio_ls('');
-            if ($test === [] && $storageMode === 'minio') {
+            if ($test === []) {
                 fail('Cannot connect to MinIO, check endpoint/key/bucket');
             }
         }
@@ -77,7 +75,6 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['minio_access'] = $access;
         $config['minio_secret'] = $secret;
         $config['minio_bucket'] = $bucket;
-        $config['storage'] = $storageMode;
         // 渲染开关（多选）
         $config['render_webdav'] = !empty($body['render_webdav']);
         $config['render_minio'] = $renderMinio;
@@ -98,13 +95,33 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['pinned_articles'] = array_values(array_filter(array_map('trim', (array)($body['pinned_articles'] ?? []))));
         $config['expanded_dirs'] = array_values(array_filter(array_map('trim', (array)($body['expanded_dirs'] ?? []))));
         // 站点设置：标题 + 首页文章（密码走独立 /api/admin/password 接口）
-        $config['site_title'] = trim((string)($body['site_title'] ?? '')) !== '' ? trim((string)$body['site_title']) : ($config['site_title'] ?? 'MD2HTML');
+        $config['site_title'] = trim((string)($body['site_title'] ?? '')) !== '' ? trim((string)$body['site_title']) : ($config['site_title'] ?? 'BrainPress');
         $config['home_article'] = trim((string)($body['home_article'] ?? ''));
         // 内容宽度：空 = 保持现值；数值则夹到 480–1600
         $rawW = trim((string)($body['content_width'] ?? ''));
         $config['content_width'] = ($rawW === '') ? (int)($config['content_width'] ?? 840) : max(480, min(1600, (int)$rawW));
-        $config['admin_path'] = trim((string)($body['admin_path'] ?? ''), "/ \t");
         $config['api_token'] = trim((string)($body['api_token'] ?? ''));
+        // WebDAV 同步账号：数组（{user,pass,path}）；空行剔除；path 去首尾斜杠，空 = vault 根。
+        // 显式提交 webdav_mounts 才写（其他接口的增量保存不碰它）；旧字段仅随第一组账号同步，兼容老读取方
+        if (isset($body['webdav_mounts']) && is_array($body['webdav_mounts'])) {
+            $mounts = [];
+            foreach ($body['webdav_mounts'] as $m) {
+                if (!is_array($m)) continue;
+                $u = trim((string)($m['user'] ?? ''));
+                $p = (string)($m['pass'] ?? '');
+                $pt = trim(trim((string)($m['path'] ?? ''), '/'), " \t");
+                if ($u === '' && $p === '' && $pt === '') continue;
+                $mounts[] = ['user' => $u, 'pass' => $p, 'path' => $pt];
+            }
+            $config['webdav_mounts'] = $mounts;
+            $config['webdav_user'] = $mounts[0]['user'] ?? '';
+            $config['webdav_pass'] = $mounts[0]['pass'] ?? '';
+        }
+        $config['dav_path'] = '';
+        // WebDAV：账号密码 + 自定义同步子目录（vault 相对；留空 = vault 根）
+        $config['webdav_user'] = trim((string)($body['webdav_user'] ?? ''));
+        $config['webdav_pass'] = trim((string)($body['webdav_pass'] ?? ''));
+        $config['dav_path'] = trim(trim((string)($body['dav_path'] ?? ''), '/'), " \t");
         $config['ai_api_base'] = trim((string)($body['ai_api_base'] ?? ''));
         $config['ai_api_key'] = trim((string)($body['ai_api_key'] ?? ''));
         $config['ai_model'] = trim((string)($body['ai_model'] ?? '')) !== '' ? trim((string)$body['ai_model']) : 'deepseek-chat';
@@ -114,10 +131,13 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['graph_path'] = trim((string)($body['graph_path'] ?? ''), "/ \t");
         $config['default_light'] = !empty($body['default_light']);
         $config['front_drawer_expanded'] = !empty($body['front_drawer_expanded']);
+        $fontPreset = trim((string)($body['font_preset'] ?? 'nunito'));
+        $config['font_preset'] = in_array($fontPreset, ['nunito', 'serif']) ? $fontPreset : 'nunito';
+        $config['pin_navbar'] = !empty($body['pin_navbar']);
         if (file_put_contents(CONFIG_FILE, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) {
             fail('Failed to save config', 500);
         }
-        ok(['storage' => $storageMode, 'tested' => $renderMinio ? count($test) . ' 项' : 'skip']);
+        ok(['tested' => $renderMinio ? count($test) . ' 项' : 'skip']);
     }
 
     // 修改密码：新密码失焦提交，需先验证旧密码（独立接口）
@@ -153,7 +173,7 @@ if ($uri === '/admin') {
         <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title><?php echo $needsSetup ? 'Setup' : 'Login'; ?> — MD2HTML</title>
+        <title><?php echo $needsSetup ? 'Setup' : 'Login'; ?> — BrainPress</title>
         <script>
         (function () {
             try {
@@ -163,23 +183,12 @@ if ($uri === '/admin') {
             } catch (e) {}
         })();
         </script>
-<style>
-/* Nunito 本地化（Google Fonts 国内不稳，字体切换导致页面颤动） */
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-400.woff2') format('woff2'); font-weight:400; font-display:optional; }
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-600.woff2') format('woff2'); font-weight:600; font-display:optional; }
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-700.woff2') format('woff2'); font-weight:700; font-display:optional; }
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-800.woff2') format('woff2'); font-weight:800; font-display:optional; }
-</style>
-<link rel="preload" href="/assets/fonts/nunito-400.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/assets/fonts/nunito-600.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/assets/fonts/nunito-700.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/assets/fonts/nunito-800.woff2" as="font" type="font/woff2" crossorigin>
         <style>
         * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-        :root { --bg:#ffffff; --line:#e2e2e3; --vp-c-text-1:#3c3c43; --vp-c-text-3:#67676c; --vp-c-brand:#3451b2; --vp-c-bg-soft:#f6f6f7; }
-        html.dark { --bg:#1b1b1f; --line:#2e2e32; --vp-c-text-1:#dfdfd6; --vp-c-text-3:#98989f; --vp-c-brand:#a8b1ff; --vp-c-bg-soft:#161618; }
+        :root { --bg:#ffffff; --line:#e2e2e3; --vp-c-text-1:#3c3c43; --vp-c-text-3:#67676c; --vp-c-brand:#5672cd; --vp-c-bg-soft:#f6f6f7; }
+        html.dark { --bg:#1b1b1f; --line:#2e2e32; --vp-c-text-1:#dfdfd6; --vp-c-text-3:#98989f; --vp-c-brand:#3e63dd; --vp-c-bg-soft:#161618; }
         *, *::before, *::after { transition:background-color .25s ease, color .25s ease, border-color .25s ease; }
-        html, body { background:var(--bg); color:var(--vp-c-text-1); font-family:"Nunito","PingFang SC","Microsoft YaHei",sans-serif; height:100%; }
+        html, body { background:var(--bg); color:var(--vp-c-text-1); font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif; height:100%; }
         body { display:flex; align-items:center; justify-content:center; }
         .card { width:min(360px, 90vw); }
         .logo { font-size:24px; font-weight:800; letter-spacing:2px; margin-bottom:6px; }
@@ -200,7 +209,7 @@ if ($uri === '/admin') {
         </head>
         <body>
         <div class="card">
-            <div class="logo">MD2HTML</div>
+            <div class="logo">BrainPress</div>
             <div class="sub"><?php echo $needsSetup ? 'Set a password to protect this site' : 'Enter password to continue'; ?></div>
             <input type="password" id="pwd" placeholder="<?php echo $needsSetup ? 'New password' : 'Password'; ?>" autocomplete="off">
             <button id="go"><?php echo $needsSetup ? 'Set Password' : 'Login'; ?></button>
@@ -238,9 +247,11 @@ if ($uri === '/admin') {
 
     // 已登录：配置面板
     header('Content-Type: text/html; charset=utf-8');
-    $siteTitle = (string)($config['site_title'] ?? 'MD2HTML');
-    // 侧滑菜单：PHP 生成（一级 System Settings + 五个子视图），点击切换视图
+    header('Cache-Control: no-store, max-age=0');
+    $siteTitle = (string)($config['site_title'] ?? 'BrainPress');
+    // 侧滑菜单：PHP 生成（一级 System Settings + 子视图），点击切换视图
     $adminMenuMd = "- [System Settings](#)\n"
+        . "  - [WebDAV](#view=dav)\n"
         . "  - [Mounts](#view=mounts)\n"
         . "  - [Preferences](#view=prefs)\n"
         . "  - [Site](#view=site)\n"
@@ -249,40 +260,55 @@ if ($uri === '/admin') {
         . "  - [Tree](#view=tree)\n";
     ?>
     <!DOCTYPE html>
-    <html lang="zh-CN">
+    <html lang="zh-CN" class="<?php echo (($_COOKIE['vp-theme'] ?? '') === 'dark') ? 'dark' : ''; ?>">
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Admin — MD2HTML</title>
+    <title>Admin — BrainPress</title>
     <script>
     var DEFAULT_LIGHT = <?php echo json_encode($config['default_light'] ?? false); ?>;
     (function () {
         try {
             if (!DEFAULT_LIGHT && localStorage.getItem('vp-theme') === 'dark') {
                 document.documentElement.classList.add('dark');
+                document.cookie = 'vp-theme=dark; path=/';
             }
         } catch (e) {}
     })();
     </script>
-<style>
-/* Nunito 本地化（Google Fonts 国内不稳，字体切换导致页面颤动） */
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-400.woff2') format('woff2'); font-weight:400; font-display:optional; }
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-600.woff2') format('woff2'); font-weight:600; font-display:optional; }
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-700.woff2') format('woff2'); font-weight:700; font-display:optional; }
-@font-face { font-family:'Nunito'; src:url('/assets/fonts/nunito-800.woff2') format('woff2'); font-weight:800; font-display:optional; }
+<?php if (($config['font_preset'] ?? 'nunito') === 'serif'): ?>
+<style>/* 字体预设：DejaVu Serif（自托管，开源 Bitstream Vera）——只管西文，中文走系统宋体 */
+@font-face { font-family:'DejaVu Serif'; src:url('/assets/fonts/dejavu-serif.woff2') format('woff2'); font-weight:400; font-display:swap; }
+@font-face { font-family:'DejaVu Serif'; src:url('/assets/fonts/dejavu-serif-bold.woff2') format('woff2'); font-weight:700; font-display:swap; }
+html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Serif CJK SC",serif !important; }
+#left-drawer-md, #drawer-md { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Serif CJK SC",serif !important; }
+#vp-logo { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Serif CJK SC",serif !important; }
 </style>
+<?php endif; ?>
     <script src="/assets/marked.min.js"></script>
     <script src="/assets/purify.min.js?v=20260812o"></script>
-    <link rel="stylesheet" href="/assets/admin.css?v=20260812r">
+    <link rel="stylesheet" href="/assets/admin.css?v=20260829c">
+    <style>/* 阅读列宽（同前台）：覆盖 admin.css 的默认值 */
+    :root { --vp-content-w:<?php echo max(480, min(1600, (int)($config['content_width'] ?? 840))); ?>px; }
+    </style>
     </head>
     <body>
-        <!-- 第一层：VitePress 风格导航栏（与前台顶部栏完全一致，仅右侧内容不同） -->
+    <div id="app">
+    <!-- 桌面端左侧常驻目录栏（同前台三栏布局） -->
+    <aside id="left-sidebar">
+        <div class="sidebar-header">Contents</div>
+        <div class="drawer-md" id="left-drawer-md"></div>
+    </aside>
+    <div id="main">
+        <!-- 第一层：VitePress 风格导航栏（与前台顶部栏完全一致） -->
         <div id="nav-wrap">
         <div id="vp-nav">
             <div id="vp-nav-left">
-                <!-- 菜单按钮：位置与前台完全一致（最左） -->
                 <button class="vp-icon-btn" id="vp-menu-btn" aria-label="menu">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+                <button class="vp-icon-btn" id="vp-ai-btn" aria-label="ask AI">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
                 </button>
                 <span id="vp-logo"><?php echo htmlspecialchars($siteTitle); ?></span>
             </div>
@@ -305,111 +331,80 @@ if ($uri === '/admin') {
     <div id="vp-drawer">
         <div class="drawer-md" id="drawer-md"></div>
     </div>
-    <div class="wrap">
-        <!-- 视图：挂载设置（WebDAV / MinIO / Custom Path） -->
-        <div id="view-mounts">
-        <!-- 滑动切换开关：WebDAV Mount / MinIO Storage / Custom Path -->
-        <div class="toggle" id="toggle">
-            <div class="toggle-thumb" id="toggle-thumb"></div>
-            <div class="toggle-opt active" data-mode="webdav">WebDAV Mount</div>
-            <div class="toggle-opt" data-mode="minio">MinIO Storage</div>
-            <div class="toggle-opt" data-mode="custom">Custom Path</div>
-        </div>
-
-        <!-- WebDAV 挂载信息（滑块在左时显示） -->
-        <div class="section" id="panel-webdav">
-            <p class="desc">Fill in the following in Obsidian Remotely Save to sync notes to this site (mounted to the <code>vault/</code> directory, rendered directly).</p>
-            <div class="render-row"><span class="render-label">Frontend render</span><button class="switch" id="switch-webdav" aria-label="toggle webdav render"></button></div>
+    <div id="content">
+    <div class="doc-wrap">
+        <div class="doc-main">
+        <!-- 视图：WebDAV 同步（多账号管理同步存储，账号各自绑定 vault 下子目录） -->
+        <div id="view-dav" style="display:none">
+            <p class="desc">WebDAV sync for Obsidian Remotely Save. Every sync account shares the same Server URL below — the account you log in with decides which folder it sees. Each account has its own username/password and mounts a sync folder under <code>vault/</code> (the whole vault if the folder is left empty), which is exactly what that account can read and write. Only <code>vault/</code> is ever exposed, never anything outside it.</p>
             <div class="field-row"><span class="field-label">Server URL</span><span class="field-value" id="dav-url">…</span><button class="copy-btn" onclick="copyVal('dav-url')">Copy</button></div>
-            <div class="field-row"><span class="field-label">Username</span><span class="field-value" id="dav-user">…</span><button class="copy-btn" onclick="copyVal('dav-user')">Copy</button></div>
-            <div class="field-row"><span class="field-label">Password</span><span class="field-value" id="dav-pass">…</span><button class="copy-btn" onclick="copyVal('dav-pass')">Copy</button></div>
-            <div class="field-row"><span class="field-label">Auth Type</span><span class="field-value">WebDAV (Basic Auth)</span></div>
-            <div class="msg" id="msg-webdav"></div>
+            <div class="section-title">Sync accounts</div>
+            <p class="desc" style="margin-bottom:8px">Directory is relative to <code>vault/</code> (empty = vault root). Give each account its own folder to keep notebooks separate.</p>
+            <div id="dav-rows"></div>
+            <div class="field-row"><button class="btn" id="btn-dav-add">+ Add sync account</button></div>
+            <div class="field-row"><button class="btn primary" id="btn-dav-save">Save sync accounts</button></div>
+            <div class="msg" id="msg-dav"></div>
         </div>
 
-        <!-- MinIO 配置表单（滑块在右时显示） -->
-        <div class="section" id="panel-minio" style="display:none">
-            <p class="desc">Enter S3-compatible object storage (MinIO) config. The site will read Markdown files from this bucket and render them.</p>
-            <div class="render-row"><span class="render-label">Frontend render</span><button class="switch" id="switch-minio" aria-label="toggle minio render"></button></div>
-            <div class="field-row"><span class="field-label">Endpoint</span><input type="text" id="minio-endpoint" placeholder="http://127.0.0.1:19000"></div>
-            <div class="field-row"><span class="field-label">Access Key</span><input type="text" id="minio-access" placeholder="minio"></div>
-            <div class="field-row"><span class="field-label">Secret Key</span><input type="text" id="minio-secret" placeholder="…"></div>
-            <div class="field-row"><span class="field-label">Bucket</span><input type="text" id="minio-bucket" placeholder="vault"></div>
-            <div class="msg" id="msg"></div>
-        </div>
+        <!-- 视图：挂载设置（渲染来源：Vault Render / MinIO Storage / Custom Path 三档 Toggle） -->
+        <div id="view-mounts">
+            <div class="toggle" id="toggle-mounts">
+                <div class="toggle-thumb" id="toggle-mounts-thumb"></div>
+                <div class="toggle-opt active" data-mode="vault">Vault Render</div>
+                <div class="toggle-opt" data-mode="minio">MinIO Storage</div>
+                <div class="toggle-opt" data-mode="custom">Custom Path</div>
+            </div>
 
-        <!-- 自定义本地路径（滑块在 Custom 时显示，最多 5 条：左输入框 + 右开关） -->
-        <div class="section" id="panel-custom" style="display:none">
-            <p class="desc">Enter up to 5 local absolute paths on this server. Directory → render all Markdown inside it; a single .md file → render only that file.</p>
-            <div class="field-row"><input type="text" id="custom-path-1" placeholder="Path 1 · /root/.hermes/memories"><button class="switch" id="switch-custom-1" aria-label="toggle custom 1 render"></button></div>
-            <div class="field-row"><input type="text" id="custom-path-2" placeholder="Path 2 · /root/.hermes/workspace"><button class="switch" id="switch-custom-2" aria-label="toggle custom 2 render"></button></div>
-            <div class="field-row"><input type="text" id="custom-path-3" placeholder="Path 3"><button class="switch" id="switch-custom-3" aria-label="toggle custom 3 render"></button></div>
-            <div class="field-row"><input type="text" id="custom-path-4" placeholder="Path 4"><button class="switch" id="switch-custom-4" aria-label="toggle custom 4 render"></button></div>
-            <div class="field-row"><input type="text" id="custom-path-5" placeholder="Path 5"><button class="switch" id="switch-custom-5" aria-label="toggle custom 5 render"></button></div>
-            <div class="msg" id="msg-custom"></div>
-        </div>
+            <div class="section" id="panel-vault">
+                <p class="desc">One master switch for everything synced under <code>vault/</code> (all WebDAV sync folders). Off by default — syncing stores your notes, this switch publishes them to the frontend, search and graph. Rendering only reads files, it can't write or delete anything.</p>
+                <div class="render-row"><span class="render-label">Render synced vault</span><button class="switch" id="switch-webdav" aria-label="toggle vault render"></button></div>
+                <div class="msg" id="msg-vault"></div>
+            </div>
+
+            <div class="section" id="panel-minio" style="display:none">
+                <p class="desc">Enter S3-compatible object storage (MinIO) config. The site will read Markdown files from this bucket, merge them into the tree (by name, local wins) and render them.</p>
+                <div class="render-row"><span class="render-label">Frontend render</span><button class="switch" id="switch-minio" aria-label="toggle minio render"></button></div>
+                <div class="field-row"><span class="field-label">Endpoint</span><input type="text" id="minio-endpoint" placeholder="http://127.0.0.1:19000"></div>
+                <div class="field-row"><span class="field-label">Access Key</span><input type="text" id="minio-access" placeholder="minio"></div>
+                <div class="field-row"><span class="field-label">Secret Key</span><input type="text" id="minio-secret" placeholder="…"></div>
+                <div class="field-row"><span class="field-label">Bucket</span><input type="text" id="minio-bucket" placeholder="vault"></div>
+                <div class="msg" id="msg-minio"></div>
+            </div>
+
+            <div class="section" id="panel-custom" style="display:none">
+                <p class="desc">Enter up to 5 local absolute paths on this server. A directory → render all Markdown inside it; a single .md file → render only that file. Each has its own on/off switch and saves when you toggle a switch or leave an input.</p>
+                <div class="field-row"><input type="text" id="custom-path-1" placeholder="Path 1 · /srv/notes/memories"><button class="switch" id="switch-custom-1" aria-label="toggle custom 1 render"></button></div>
+                <div class="field-row"><input type="text" id="custom-path-2" placeholder="Path 2 · /srv/notes/workspace"><button class="switch" id="switch-custom-2" aria-label="toggle custom 2 render"></button></div>
+                <div class="field-row"><input type="text" id="custom-path-3" placeholder="Path 3"><button class="switch" id="switch-custom-3" aria-label="toggle custom 3 render"></button></div>
+                <div class="field-row"><input type="text" id="custom-path-4" placeholder="Path 4"><button class="switch" id="switch-custom-4" aria-label="toggle custom 4 render"></button></div>
+                <div class="field-row"><input type="text" id="custom-path-5" placeholder="Path 5"><button class="switch" id="switch-custom-5" aria-label="toggle custom 5 render"></button></div>
+                <div class="msg" id="msg-custom"></div>
+            </div>
         </div>
 
         <!-- 视图：偏好设置（开关即保存） -->
         <div id="view-prefs" style="display:none">
             <p class="desc">Site behavior preferences. Switches save immediately.</p>
             <div class="render-row"><span class="render-label">Default light mode</span><button class="switch" id="switch-light" aria-label="toggle default light"></button></div>
+            <div class="render-row"><span class="render-label">Pin navbar (always visible)</span><button class="switch" id="switch-pin-nav" aria-label="toggle pin navbar"></button></div>
+            <div class="render-row"><span class="render-label">Font preset</span>
+                <select id="font-preset" class="font-select">
+                    <option value="nunito">Sans (System)</option>
+                    <option value="serif">Serif (DejaVu Serif)</option>
+                </select>
+            </div>
             <div class="msg" id="msg-prefs"></div>
         </div>
 
         <!-- 视图：站点设置（标题 + 首页文章 + 密码修改） -->
         <div id="view-site" style="display:none">
             <p class="desc">Site identity, home page article and admin password. Paths are relative to vault/ (e.g. knowledge/article/note.md). Title and article save on blur; new password saves on blur after verifying current password.</p>
-            <div class="field-row"><span class="field-label">Site title</span><input type="text" id="site-title" placeholder="MD2HTML"></div>
+            <div class="field-row"><span class="field-label">Site title</span><input type="text" id="site-title" placeholder="BrainPress"></div>
             <div class="field-row"><span class="field-label">Home article</span><input type="text" id="home-article" placeholder="knowledge/article/your-note.md"></div>
             <div class="field-row"><span class="field-label">Content width</span><input type="text" id="content-width" placeholder="840 (px) — reading column width; side rails auto-balance"></div>
-            <div class="field-row"><span class="field-label">Admin path alias</span><input type="text" id="admin-path" placeholder="e.g. Visual-Knowledge/admin — tree entry + 302 to /admin; empty = none"></div>
             <div class="field-row"><span class="field-label">Current password</span><input type="password" id="site-password-old" placeholder="Enter current password" autocomplete="current-password"></div>
             <div class="field-row"><span class="field-label">New password</span><input type="password" id="site-password" placeholder="Min 4 chars, blur to save" autocomplete="new-password"></div>
             <div class="msg" id="msg-site"></div>
-        </div>
-
-        <!-- 视图：AI（双档选择栏：Chat Model 模型接入 / Agent API 接入信息） -->
-        <div id="view-ai" style="display:none">
-        <div class="toggle two" id="toggle-ai">
-            <div class="toggle-thumb" id="toggle-ai-thumb"></div>
-            <div class="toggle-opt active" data-tab="chat">Chat Model</div>
-            <div class="toggle-opt" data-tab="agent">Agent API</div>
-        </div>
-
-        <!-- 档位一：Chat（OpenAI 兼容端点 + key + model + 连接测试） -->
-        <div class="section" id="panel-ai-chat">
-            <p class="desc">AI chat integration — any OpenAI-compatible chat endpoint works. Cloud gateways: DeepSeek, NewAPI / one-api, OpenRouter... Local inference: Ollama (base http://127.0.0.1:11434/v1), LM Studio, llama.cpp, vLLM — API key can be left empty for local services. The endpoint powers the ask button on the front site. The key is stored in config.json only. Fields save on blur.</p>
-            <div class="field-row"><span class="field-label">API base URL</span><input type="text" id="ai-api-base" placeholder="https://api.deepseek.com · http://127.0.0.1:11434/v1"></div>
-            <div class="field-row"><span class="field-label">API key</span><input type="text" id="ai-api-key" placeholder="Empty = AI chat disabled"></div>
-            <div class="field-row"><span class="field-label">Model</span><input type="text" id="ai-model" placeholder="deepseek-chat"></div>
-            <div class="render-row"><span class="render-label">AI enabled</span><button class="switch" id="switch-ai-enabled" aria-label="toggle AI enabled"></button></div>
-            <div class="render-row"><span class="render-label">Hybrid mode</span><button class="switch" id="switch-ai-mode" aria-label="toggle AI hybrid mode"></button></div>
-            <p class="desc">The full chat URL is {base URL}/chat/completions. AI enabled: master switch — off hides the ask button and rejects /api/ask. Hybrid mode: on = knowledge base first with general fallback, off (strict) = answers only from the knowledge base.</p>
-            <div class="render-row"><button class="btn" id="btn-ai-test">Test connection</button></div>
-            <div class="msg" id="msg-ai"></div>
-        </div>
-
-        <!-- 档位二：Agent（外部 Agent 接入知识库的 API 信息；Bearer token 在此编辑） -->
-        <div class="section" id="panel-ai-agent" style="display:none">
-            <p class="desc">Hand these details to an AI agent or script to operate this knowledge base remotely. Read endpoints are public; write access requires the Bearer token below (sent as the Authorization header; empty = write API disabled). Token saves on blur.</p>
-            <div class="field-row"><span class="field-label">Base URL</span><code id="agent-base-url" style="flex:1;font-size:12px;"></code><button class="btn" id="btn-agent-copy-url">Copy</button></div>
-            <div class="field-row"><span class="field-label">Bearer token</span><input type="text" id="api-token" placeholder="Empty = write API disabled (e.g. openssl rand -hex 32)"></div>
-            <div class="section-title">Endpoints</div>
-            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/list</code><span style="font-size:12px;color:var(--vp-c-text-2)">full directory tree (public)</span></div>
-            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/article-list</code><span style="font-size:12px;color:var(--vp-c-text-2)">all articles path+name (public)</span></div>
-            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/file?path=X</code><span style="font-size:12px;color:var(--vp-c-text-2)">read one note (public)</span></div>
-            <div class="field-row"><code style="font-size:12px;">GET&nbsp;&nbsp;/api/search?q=X</code><span style="font-size:12px;color:var(--vp-c-text-2)">keyword search (public)</span></div>
-            <div class="field-row"><code style="font-size:12px;">POST&nbsp;&nbsp;/api/ask</code><span style="font-size:12px;color:var(--vp-c-text-2)">RAG Q&amp;A {"question":"..."} (needs AI enabled)</span></div>
-            <div class="field-row"><code style="font-size:12px;">POST&nbsp;&nbsp;/api/note</code><span style="font-size:12px;color:var(--vp-c-text-2)">create/update note — Bearer auth</span></div>
-            <div class="field-row"><code style="font-size:12px;">DELETE&nbsp;&nbsp;/api/note</code><span style="font-size:12px;color:var(--vp-c-text-2)">delete note — Bearer auth</span></div>
-            <div class="section-title">Examples</div>
-            <p class="desc" style="margin-bottom:4px">Write a note (Bearer token required):</p>
-            <pre id="agent-example-write" style="font-size:11.5px;background:var(--vp-c-bg-soft);padding:10px 12px;border-radius:8px;overflow-x:auto;white-space:pre;margin:0 0 8px;"></pre>
-            <p class="desc" style="margin-bottom:4px">Ask the knowledge base:</p>
-            <pre id="agent-example-ask" style="font-size:11.5px;background:var(--vp-c-bg-soft);padding:10px 12px;border-radius:8px;overflow-x:auto;white-space:pre;margin:0;"></pre>
-            <div class="msg" id="msg-agent"></div>
-        </div>
         </div>
 
         <!-- 视图：Graph（知识图谱设置：文件名显示 + 访问路径别名） -->
@@ -439,12 +434,54 @@ if ($uri === '/admin') {
             <div id="exclude-list"></div>
             <div class="msg" id="msg-tree"></div>
         </div>
+        <!-- 视图：AI 配置（内容区，菜单可访问） -->
+        <div id="view-ai" style="display:none">
+            <p class="desc">AI chat integration settings. Any OpenAI-compatible chat endpoint works. Agent API details are at the bottom.</p>
+            <div class="toggle two" id="toggle-ai">
+                <div class="toggle-thumb" id="toggle-ai-thumb"></div>
+                <div class="toggle-opt active" data-tab="chat">Chat Model</div>
+                <div class="toggle-opt" data-tab="agent">Agent API</div>
+            </div>
+            <div class="section" id="panel-ai-chat">
+                <p class="desc">AI chat integration — any OpenAI-compatible chat endpoint works.</p>
+                <div class="field-row"><span class="field-label">API base URL</span><input type="text" id="ai-api-base" placeholder="https://api.deepseek.com · http://127.0.0.1:11434/v1"></div>
+                <div class="field-row"><span class="field-label">API key</span><input type="text" id="ai-api-key" placeholder="Empty = AI chat disabled"></div>
+                <div class="field-row"><span class="field-label">Model</span><input type="text" id="ai-model" placeholder="deepseek-chat"></div>
+                <div class="render-row"><span class="render-label">AI enabled</span><button class="switch" id="switch-ai-enabled" aria-label="toggle AI enabled"></button></div>
+                <div class="render-row"><span class="render-label">Hybrid mode</span><button class="switch" id="switch-ai-mode" aria-label="toggle AI hybrid mode"></button></div>
+                <div class="render-row"><button class="btn" id="btn-ai-test">Test connection</button></div>
+                <div class="msg" id="msg-ai"></div>
+            </div>
+            <div class="section" id="panel-ai-agent" style="display:none">
+                <p class="desc">Agent API access details for remote knowledge base operation.</p>
+                <div class="field-row"><span class="field-label">Base URL</span><code id="agent-base-url" style="flex:1;font-size:12px;"></code><button class="btn" id="btn-agent-copy-url">Copy</button></div>
+                <div class="field-row"><span class="field-label">Bearer token</span><input type="text" id="api-token" placeholder="Empty = write API disabled"></div>
+                <div class="msg" id="msg-agent"></div>
+            </div>
+        </div>
+
+        </div><!-- /.doc-main -->
+        </div><!-- /.doc-wrap -->
+    </div><!-- /#content -->
+    <!-- AI 对话面板（同前台：桌面端填充左栏，窄屏端走抽屉） -->
+    <div class="ai-view" id="ai-view">
+        <div class="ai-header">Ask the knowledge base</div>
+        <div class="ai-msgs" id="ai-msgs">
+            <div class="ai-msg ai-bot">Hi! Ask me anything — I answer based on the articles in this knowledge base.</div>
+        </div>
+        <div class="ai-input-wrap">
+            <input type="text" id="ai-input" placeholder="Ask a question..." autocomplete="off" spellcheck="false">
+            <button class="ai-send" id="ai-send">Send</button>
+        </div>
     </div>
+    </div><!-- /#main -->
+    <!-- 桌面端右侧轨道（同前台结构，后台无 TOC） -->
+    <aside id="right-sidebar"></aside>
+    </div><!-- /#app -->
     <script>
-    // 侧滑菜单内容：服务端内联的 _admin-menu.md（零额外请求）
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260823f"></script>
+    <script src="/assets/admin.js?v=20260829d"></script>
     </body>
     </html>
     <?php

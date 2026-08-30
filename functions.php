@@ -1,24 +1,21 @@
 <?php
 /**
- * MD2HTML v1.0.0 — 公共函数层
+ * BrainPress v1.0.0 — 公共函数层
  * 被 index.php（主站）和 admin.php（后台）共同 require。
  * 包含：session/config 初始化、MinIO S3 直连、认证、文件扫描、工具函数。
  */
 
 declare(strict_types=1);
 
-session_name('wmm_panel');
+session_name('brainpress');
 session_start();
 
 const PANEL_DIR  = __DIR__;
-const CONFIG_FILE = PANEL_DIR . '/config.json';
-const DEFAULT_WORKSPACE = '/root/.hermes/workspace';
+// 配置文件路径：环境变量 BP_CONFIG_FILE 可覆盖（Docker 部署把配置放进持久化目录，代码目录保持只读）
+define('CONFIG_FILE', getenv('BP_CONFIG_FILE') ?: PANEL_DIR . '/config.json');
 const MAX_FILE_SIZE = 1048576; // 1MB
 
 $config = json_decode((string)@file_get_contents(CONFIG_FILE), true) ?: [];
-$workspace = $config['workspace'] ?? DEFAULT_WORKSPACE;
-// 存储后端：minio（读 Obsidian 存储桶）/ local（读本地 posts/）
-$storage = $config['storage'] ?? 'local';
 
 // MinIO 连接配置（S3 API 直连，不走 mc/exec——FPM 禁用了 exec；可从 /admin 配置）
 $minioEndpoint = $config['minio_endpoint'] ?? 'http://127.0.0.1:19000';
@@ -35,7 +32,11 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 /** S3 请求（AWS SigV4 签名），返回 [状态码, 响应体] */
 function minio_request(string $method, string $path, string $query = ''): array {
     global $minioEndpoint, $minioAccess, $minioSecret;
-    $host = parse_url($minioEndpoint, PHP_URL_HOST) . ':' . parse_url($minioEndpoint, PHP_URL_PORT);
+    $host = parse_url($minioEndpoint, PHP_URL_HOST) ?: '127.0.0.1';
+    $port = parse_url($minioEndpoint, PHP_URL_PORT);
+    if ($port !== null && $port !== 80 && $port !== 443) {
+        $host .= ':' . $port;
+    }
     $now = gmdate('Ymd\THis\Z');
     $date = gmdate('Ymd');
     $service = 's3';
@@ -171,24 +172,6 @@ function require_auth(): void {
 
 /* ---------- 文件工具 ---------- */
 
-/** 将面板内相对路径转换为工作区内的安全绝对路径，非法返回 null */
-function safe_path(string $rel): ?string {
-    global $workspace;
-    $base = realpath($workspace);
-    if ($base === false) {
-        return null;
-    }
-    $rel = str_replace('\\', '/', $rel);
-    $full = realpath($base . '/' . $rel);
-    if ($full === false || $full === $base) {
-        return null;
-    }
-    if (strpos($full, $base . '/') !== 0) {
-        return null;
-    }
-    return $full;
-}
-
 function is_md(string $path): bool {
     return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'md';
 }
@@ -216,6 +199,9 @@ function is_media(string $path): bool {
 /** 递归扫描工作区，返回文件树；$excludes 命中的目录/文件不出现在树中；$pinnedDirs 置顶目录、$pinnedArticles 置顶文章（排最前）；
  *  $forMount=true 用于自定义挂载：不收录图片（挂载目录没有静态服务路由，图片是死链，只会造成脏乱显示） */
 function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false): array {
+    if (!is_dir($dir)) {
+        return []; // vault 目录缺失时优雅兜底（空树），不报错
+    }
     $items = [];
     $entries = scandir($dir);
     foreach ($entries as $entry) {
@@ -390,6 +376,26 @@ function custom_mount_roots(array $config): array {
     return $out;
 }
 
+/** 规范化 WebDAV 同步账号列表（webdav_mounts[]，每项 {user,pass,path}）；兼容旧版单账号字段
+    webdav_user / webdav_pass（迁移到多账号）。空行剔除；path 去首尾斜杠，空 = vault 根 */
+function webdav_mounts_list(array $config): array {
+    $out = [];
+    foreach ((array)($config['webdav_mounts'] ?? []) as $m) {
+        if (!is_array($m)) continue;
+        $u = trim((string)($m['user'] ?? ''));
+        $p = (string)($m['pass'] ?? '');
+        $pt = trim(trim((string)($m['path'] ?? ''), '/'), " \t");
+        if ($u === '' && $p === '' && $pt === '') continue;
+        $out[] = ['user' => $u, 'pass' => $p, 'path' => $pt];
+    }
+    if ($out === [] && trim((string)($config['webdav_user'] ?? '')) !== '') {
+        $out[] = ['user' => trim((string)$config['webdav_user']),
+                  'pass' => (string)($config['webdav_pass'] ?? ''),
+                  'path' => ''];
+    }
+    return $out;
+}
+
 /** 解析 vault 相对路径 → 绝对文件路径。顺序：主 vault → 自定义挂载目录 → 单文件挂载（rel == 文件名）；找不到 null */
 function resolve_vault_file(string $rel, array $config): ?string {
     $rel = str_replace('\\', '/', ltrim(trim($rel), '/'));
@@ -518,7 +524,7 @@ function collect_all_md_files(array $config): array {
     foreach (($config['exclude_paths'] ?? []) as $e) if (is_string($e) && setting_is_absolute($e)) $absEx[] = $e;
     $roots = [];
     // 主 vault 受「WebDAV 渲染」开关控制（与 /api/list、/api/file 同一开关）：关=搜索/图谱也不收录
-    $mainRoot = (($config['render_webdav'] ?? true) && realpath(PANEL_DIR . '/vault') !== false)
+    $mainRoot = (($config['render_webdav'] ?? false) && realpath(PANEL_DIR . '/vault') !== false)
         ? realpath(PANEL_DIR . '/vault')
         : false;
     if ($mainRoot !== false && is_dir($mainRoot)) $roots[] = $mainRoot;
