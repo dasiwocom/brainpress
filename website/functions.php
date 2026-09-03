@@ -10,6 +10,9 @@ declare(strict_types=1);
 session_name('brainpress');
 session_start();
 
+// ima mount driver (Tencent ima knowledge base OpenAPI)
+require __DIR__ . '/ima.php';
+
 const PANEL_DIR  = __DIR__;
 // 配置文件路径：环境变量 BP_CONFIG_FILE 可覆盖（Docker 部署把配置放进持久化目录，代码目录保持只读）
 define('CONFIG_FILE', getenv('BP_CONFIG_FILE') ?: PANEL_DIR . '/config.json');
@@ -511,6 +514,17 @@ function merge_custom_trees(array $tree, array $config): array {
                 }
             }
         }
+    }
+    return $tree;
+}
+
+/** Merge the ima knowledge base into the tree as an independent content source (same-name main vault / local mounts win);
+ *  returns the original tree when ima is disabled or the cache is empty. Shared by the frontend menu and /api/list. */
+function merge_ima_tree(array $tree, array $config): array {
+    if (!function_exists('ima_enabled') || !ima_enabled($config)) return $tree;
+    $imaTree = ima_tree($config, $config['exclude_paths'] ?? []);
+    if ($imaTree !== []) {
+        merge_tree_node($tree, $imaTree);
     }
     return $tree;
 }

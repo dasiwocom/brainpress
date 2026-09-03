@@ -20,6 +20,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'webdav_url' => 'https://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . '/dav/',
             'render_webdav' => $config['render_webdav'] ?? false,
             'render_minio' => $config['render_minio'] ?? true,
+            'render_ima' => $config['render_ima'] ?? false,
             'custom_paths' => $config['custom_paths'] ?? [],
             'exclude_paths' => $config['exclude_paths'] ?? [],
             'pinned_dirs' => $config['pinned_dirs'] ?? [],
@@ -45,6 +46,10 @@ if (strpos($uri, '/api/admin/') === 0) {
                 'access' => $config['minio_access'] ?? 'minio',
                 'secret' => $config['minio_secret'] ?? '',
                 'bucket' => $config['minio_bucket'] ?? 'vault',
+            ],
+            'ima' => [
+                'client_id' => $config['ima']['client_id'] ?? '',
+                'api_key' => $config['ima']['api_key'] ?? '',
             ],
         ]);
     }
@@ -78,6 +83,26 @@ if (strpos($uri, '/api/admin/') === 0) {
         // 渲染开关（多选）
         $config['render_webdav'] = !empty($body['render_webdav']);
         $config['render_minio'] = $renderMinio;
+        // ima mount: credentials + render switch + connection test (only when enabled)
+        $imaCid = trim((string)($body['ima_client_id'] ?? ''));
+        $imaKey = trim((string)($body['ima_api_key'] ?? ''));
+        $renderIma = !empty($body['render_ima']);
+        $imaTest = [];
+        if ($renderIma) {
+            if ($imaCid === '' || $imaKey === '') {
+                fail('ima client id and api key are both required');
+            }
+            $config['ima'] = ['client_id' => $imaCid, 'api_key' => $imaKey];
+            // connection test: fetch own knowledge base list to validate the credentials
+            $imaTest = ima_knowledge_bases($config);
+            if ($imaTest === []) {
+                fail('Cannot connect to ima, check client id / api key');
+            }
+        }
+        $config['render_ima'] = $renderIma;
+        if ($renderIma) {
+            $config['ima'] = ['client_id' => $imaCid, 'api_key' => $imaKey];
+        }
         // 自定义路径（最多 5 条：每条 = 路径 + 开关）
         $rawPaths = $body['custom_paths'] ?? [];
         $customPaths = [];
@@ -137,7 +162,10 @@ if (strpos($uri, '/api/admin/') === 0) {
         if (file_put_contents(CONFIG_FILE, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) {
             fail('Failed to save config', 500);
         }
-        ok(['tested' => $renderMinio ? count($test) . ' 项' : 'skip']);
+        $imaNotes = $renderIma ? ('ima ' . count($imaTest) . ' bases') : '';
+        $minioNotes = $renderMinio ? ('MinIO ' . count($test) . ' items') : '';
+        $notes = trim(trim($minioNotes . ' / ' . $imaNotes, ' '), ' /');
+        ok(['tested' => $notes === '' ? 'skip' : $notes]);
     }
 
     // 修改密码：新密码失焦提交，需先验证旧密码（独立接口）
@@ -249,10 +277,13 @@ if ($uri === '/admin') {
     header('Content-Type: text/html; charset=utf-8');
     header('Cache-Control: no-store, max-age=0');
     $siteTitle = (string)($config['site_title'] ?? 'BrainPress');
-    // 侧滑菜单：PHP 生成（一级 System Settings + 子视图），点击切换视图
+    // Side drawer menu: PHP-generated (top-level System Settings + child views), click switches view
     $adminMenuMd = "- [System Settings](#)\n"
         . "  - [WebDAV](#view=dav)\n"
-        . "  - [Mounts](#view=mounts)\n"
+        . "  - [Mounts](#)\n"
+        . "    - [Default Mount](#view=mounts)\n"
+        . "    - [MinIO](#view=minio)\n"
+        . "    - [ima](#view=ima)\n"
         . "  - [Preferences](#view=prefs)\n"
         . "  - [Site](#view=site)\n"
         . "  - [AI](#view=ai)\n"
@@ -346,12 +377,11 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="msg" id="msg-dav"></div>
         </div>
 
-        <!-- 视图：挂载设置（渲染来源：Vault Render / MinIO Storage / Custom Path 三档 Toggle） -->
+        <!-- View: Default Mount (render sources: Vault Render / Custom Path two-tab toggle) -->
         <div id="view-mounts">
-            <div class="toggle" id="toggle-mounts">
+            <div class="toggle two" id="toggle-mounts">
                 <div class="toggle-thumb" id="toggle-mounts-thumb"></div>
                 <div class="toggle-opt active" data-mode="vault">Vault Render</div>
-                <div class="toggle-opt" data-mode="minio">MinIO Storage</div>
                 <div class="toggle-opt" data-mode="custom">Custom Path</div>
             </div>
 
@@ -359,16 +389,6 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                 <p class="desc">One master switch for everything synced under <code>vault/</code> (all WebDAV sync folders). Off by default — syncing stores your notes, this switch publishes them to the frontend, search and graph. Rendering only reads files, it can't write or delete anything.</p>
                 <div class="render-row"><span class="render-label">Render synced vault</span><button class="switch" id="switch-webdav" aria-label="toggle vault render"></button></div>
                 <div class="msg" id="msg-vault"></div>
-            </div>
-
-            <div class="section" id="panel-minio" style="display:none">
-                <p class="desc">Enter S3-compatible object storage (MinIO) config. The site will read Markdown files from this bucket, merge them into the tree (by name, local wins) and render them.</p>
-                <div class="render-row"><span class="render-label">Frontend render</span><button class="switch" id="switch-minio" aria-label="toggle minio render"></button></div>
-                <div class="field-row"><span class="field-label">Endpoint</span><input type="text" id="minio-endpoint" placeholder="http://127.0.0.1:19000"></div>
-                <div class="field-row"><span class="field-label">Access Key</span><input type="text" id="minio-access" placeholder="minio"></div>
-                <div class="field-row"><span class="field-label">Secret Key</span><input type="text" id="minio-secret" placeholder="…"></div>
-                <div class="field-row"><span class="field-label">Bucket</span><input type="text" id="minio-bucket" placeholder="vault"></div>
-                <div class="msg" id="msg-minio"></div>
             </div>
 
             <div class="section" id="panel-custom" style="display:none">
@@ -379,6 +399,30 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                 <div class="field-row"><input type="text" id="custom-path-4" placeholder="Path 4"><button class="switch" id="switch-custom-4" aria-label="toggle custom 4 render"></button></div>
                 <div class="field-row"><input type="text" id="custom-path-5" placeholder="Path 5"><button class="switch" id="switch-custom-5" aria-label="toggle custom 5 render"></button></div>
                 <div class="msg" id="msg-custom"></div>
+            </div>
+        </div>
+
+        <!-- View: MinIO (S3-compatible object storage plugin) -->
+        <div id="view-minio" style="display:none">
+            <div class="section">
+                <p class="desc">Enter S3-compatible object storage (MinIO) config. The site reads Markdown files from this bucket, merges them into the tree (by name, local wins) and renders them.</p>
+                <div class="render-row"><span class="render-label">Frontend render</span><button class="switch" id="switch-minio" aria-label="toggle minio render"></button></div>
+                <div class="field-row"><span class="field-label">Endpoint</span><input type="text" id="minio-endpoint" placeholder="http://127.0.0.1:19000"></div>
+                <div class="field-row"><span class="field-label">Access Key</span><input type="text" id="minio-access" placeholder="minio"></div>
+                <div class="field-row"><span class="field-label">Secret Key</span><input type="text" id="minio-secret" placeholder="…"></div>
+                <div class="field-row"><span class="field-label">Bucket</span><input type="text" id="minio-bucket" placeholder="vault"></div>
+                <div class="msg" id="msg-minio"></div>
+            </div>
+        </div>
+
+        <!-- View: ima knowledge base mount (standalone config page) -->
+        <div id="view-ima" style="display:none">
+            <div class="section">
+                <p class="desc">Tencent ima knowledge base mount. After entering your ima OpenAPI credentials, your own knowledge bases (knowledge base → folder → file) are flattened into the file tree as an independent content source and rendered live — PDF via the pdf.js reader, md via Markdown, both fetched on demand through the server proxy without being stored on this site. Files in subscription knowledge bases can't be fetched via the API and are excluded.</p>
+                <div class="render-row"><span class="render-label">Render ima</span><button class="switch" id="switch-ima" aria-label="toggle ima render"></button></div>
+                <div class="field-row"><span class="field-label">ima Client ID</span><input type="text" id="ima-client-id" placeholder="da82a2a7..." autocomplete="off"></div>
+                <div class="field-row"><span class="field-label">ima API Key</span><input type="password" id="ima-api-key" placeholder="…"></div>
+                <div class="msg" id="msg-ima"></div>
             </div>
         </div>
 

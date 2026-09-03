@@ -55,6 +55,10 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
             readfile($full);
             exit;
         }
+        // ima mount static files (PDF, etc.): proxy-fetch then forward (download requires X-IMA-* headers)
+        if (ima_index_lookup($config, $rel) !== null) {
+            if (ima_stream_file($config, $rel)) exit;
+        }
         fail('Not Found', 404);
     }
 }
@@ -107,6 +111,15 @@ if (preg_match('#\.md$#i', $uri)) {
                 $ssrArticleContent = $rawContent;
             }
         }
+    } elseif (ima_index_lookup($config, $rel) !== null) {
+        // ima mount md: proxy-fetch body and inline it (open-and-read)
+        if (!is_excluded($rel, $config['exclude_paths'] ?? [])) {
+            $raw = ima_read_raw($config, $rel);
+            if ($raw !== null) {
+                $ssrArticlePath = $rel;
+                $ssrArticleContent = $raw['bytes'];
+            }
+        }
     }
 }
 
@@ -116,6 +129,11 @@ if (preg_match('#\.pdf$#i', $uri)) {
     $pdfRel = urldecode(ltrim($uri, '/'));
     $pdfFull = resolve_vault_file($pdfRel, $config);
     if ($pdfFull !== null) {
+        if (!is_excluded($pdfRel, $config['exclude_paths'] ?? [])) {
+            $ssrPdfPath = $pdfRel;
+        }
+    } elseif (ima_index_lookup($config, $pdfRel) !== null) {
+        // ima mount PDF: frontend streams it via /vault/<rel> (server proxy)
         if (!is_excluded($pdfRel, $config['exclude_paths'] ?? [])) {
             $ssrPdfPath = $pdfRel;
         }
@@ -154,7 +172,7 @@ $frontMenuMd = '';
 $frontTree = (($config['render_webdav'] ?? false) && is_dir(PANEL_DIR . '/vault'))
     ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [])
     : [];
-$frontMenuMd = tree_to_md(merge_custom_trees($frontTree, $config));
+$frontMenuMd = tree_to_md(merge_ima_tree(merge_custom_trees($frontTree, $config), $config));
 // Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
 if (trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
     $frontMenuMd = rtrim($frontMenuMd) . "\n- [Graph-View](/graph)";

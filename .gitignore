@@ -1,6 +1,10 @@
 # Config with secrets
 website/config.json
 
+# ima 索引缓存（含内部 media id，非秘密但属运行时产物）
+website/ima_cache.json
+website/ima_cache.php
+
 # Logs
 *.log
 website/.server.log

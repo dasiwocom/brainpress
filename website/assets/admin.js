@@ -18,7 +18,7 @@ function fallbackCopy(text) {
     try { document.execCommand('copy'); } catch (e) {}
     document.body.removeChild(ta);
 }
-// Mounts 三档 Toggle：Vault Render / MinIO Storage / Custom Path
+// Default Mount two-tab toggle: Vault Render / Custom Path
 var mountTab = 'vault';
 function setMountTab(tab) {
     mountTab = tab;
@@ -26,11 +26,8 @@ function setMountTab(tab) {
     for (var i = 0; i < opts.length; i++) {
         opts[i].classList.toggle('active', opts[i].dataset.mode === tab);
     }
-    var thumb = $('toggle-mounts-thumb');
-    thumb.classList.toggle('mid', tab === 'minio');
-    thumb.classList.toggle('right', tab === 'custom');
+    $('toggle-mounts-thumb').classList.toggle('right', tab === 'custom');
     $('panel-vault').style.display = tab === 'vault' ? '' : 'none';
-    $('panel-minio').style.display = tab === 'minio' ? '' : 'none';
     $('panel-custom').style.display = tab === 'custom' ? '' : 'none';
 }
 document.querySelectorAll('#toggle-mounts .toggle-opt').forEach(function (el) {
@@ -60,6 +57,7 @@ function bindSwitch(btnId) {
 }
 bindSwitch('switch-webdav');
 bindSwitch('switch-minio');
+bindSwitch('switch-ima');
 var CUSTOM_COUNT = 5;
 for (var ci = 1; ci <= CUSTOM_COUNT; ci++) {
     bindSwitch('switch-custom-' + ci);
@@ -91,6 +89,8 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { $('minio-access').value = d.minio.access; } catch (e) { console.log('restore minio-access:', e); }
     try { $('minio-secret').value = d.minio.secret; } catch (e) { console.log('restore minio-secret:', e); }
     try { $('minio-bucket').value = d.minio.bucket; } catch (e) { console.log('restore minio-bucket:', e); }
+    try { $('ima-client-id').value = d.ima.client_id || ''; } catch (e) { console.log('restore ima-client-id:', e); }
+    try { $('ima-api-key').value = d.ima.api_key || ''; } catch (e) { console.log('restore ima-api-key:', e); }
     try {
         var cps = d.custom_paths || [];
         for (var i = 1; i <= CUSTOM_COUNT; i++) {
@@ -101,6 +101,7 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     } catch (e) { console.log('restore custom:', e); }
     try { if (d.render_webdav === true) $('switch-webdav').classList.add('on'); } catch (e) {}
     try { if (d.render_minio !== false) $('switch-minio').classList.add('on'); } catch (e) {}
+    try { if (d.render_ima === true) $('switch-ima').classList.add('on'); } catch (e) {}
     try { if (d.default_light) $('switch-light').classList.add('on'); } catch (e) {}
     try { if (d.front_drawer_expanded !== false) $('switch-drawer').classList.add('on'); } catch (e) {}
     try { if (d.ai_mode !== 'strict') $('switch-ai-mode').classList.add('on'); } catch (e) {}
@@ -316,6 +317,8 @@ function curMsg() {
     }
     if (document.getElementById('view-graph').style.display !== 'none') return $('msg-graph');
     if (document.getElementById('view-tree').style.display !== 'none') return $('msg-tree');
+    if (document.getElementById('view-minio').style.display !== 'none') return $('msg-minio');
+    if (document.getElementById('view-ima').style.display !== 'none') return $('msg-ima');
     return $('msg-vault');
 }
 // 收集 5 条自定义路径状态
@@ -390,6 +393,9 @@ function saveConfig() {
         bucket: $('minio-bucket').value.trim(),
         render_webdav: $('switch-webdav').classList.contains('on'),
         render_minio: $('switch-minio').classList.contains('on'),
+        render_ima: $('switch-ima').classList.contains('on'),
+        ima_client_id: $('ima-client-id').value.trim(),
+        ima_api_key: $('ima-api-key').value.trim(),
         custom_paths: customState(),
         exclude_paths: excludeItems.slice(),
         pinned_dirs: pinnedDirs.slice(),
@@ -420,7 +426,7 @@ function saveConfig() {
         var msg = curMsg();
         if (d.ok) {
             msg.className = 'msg ok';
-            msg.textContent = d.tested === 'skip' ? 'Saved' : 'Saved: MinIO tested ' + d.tested;
+            msg.textContent = d.tested === 'skip' ? 'Saved' : ('Saved: ' + d.tested);
         } else {
             msg.className = 'msg err';
             msg.textContent = d.error || 'Save failed';
@@ -459,7 +465,7 @@ $('site-password').addEventListener('blur', function () {
     });
 });
 // pinned-dir 已改为列表式（输入框 + Add），无失焦保存逻辑
-var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'site-title', 'home-article', 'content-width', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
+var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'ima-client-id', 'ima-api-key', 'site-title', 'home-article', 'content-width', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
 for (var bi = 1; bi <= CUSTOM_COUNT; bi++) blurIds.push('custom-path-' + bi);
 blurIds.forEach(function (id) {
     $(id).addEventListener('blur', saveConfig);
@@ -525,7 +531,7 @@ function fillAgentView() {
 $('btn-agent-copy-url').addEventListener('click', function () { fallbackCopy($('agent-base-url').textContent); });
 // 视图切换：挂载设置 / 偏好设置 / 站点设置 / AI（Chat+Agent 双档） / 图谱设置 / 目录管理
 function showView(name) {
-    var views = ['dav', 'mounts', 'prefs', 'site', 'ai', 'graph', 'tree'];
+    var views = ['dav', 'mounts', 'minio', 'prefs', 'site', 'ai', 'graph', 'tree', 'ima'];
     for (var i = 0; i < views.length; i++) {
         $('view-' + views[i]).style.display = views[i] === name ? '' : 'none';
     }

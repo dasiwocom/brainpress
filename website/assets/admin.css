@@ -24,7 +24,7 @@ body { overflow:hidden; }
 #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; position:relative; }
 #content {
     flex:1; overflow-y:auto; overflow-x:hidden; min-height:0; min-width:0;
-    padding:84px var(--gutter) 40px; position:relative;
+    padding:56px var(--gutter) 40px; position:relative;
 }
 /* 左轨道：桌面端常驻目录栏 */
 #left-sidebar {
@@ -67,7 +67,7 @@ body { overflow:hidden; }
         box-sizing:border-box;
         padding:56px 0 0;
     }
-    #content { padding:84px 0 40px; }
+    #content { padding:56px 0 40px; }
 }
 @media (min-width:769px) and (max-width:1399px) {
     #left-sidebar { flex:0 0 280px; max-width:280px; }

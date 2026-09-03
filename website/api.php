@@ -103,6 +103,9 @@ function handle_api(string $uri, string $method, array $config): never
         // 自定义本地路径（最多 5 条，与主 vault 平权）：目录递归扫描、单 .md 文件作顶层条目，同名主 vault 优先
         $tree = merge_custom_trees($tree, $config);
 
+        // ima mount: independent content source, flattened into the top level (same-name main vault wins)
+        $tree = merge_ima_tree($tree, $config);
+
         ok(['tree' => $tree]);
     }
 
@@ -153,6 +156,22 @@ function handle_api(string $uri, string $method, array $config): never
             fail('文件不存在');
         }
 
+        // ima mount: rel matches the ima index → proxy-fetch content from the server (md/canvas/txt through the full-text pipeline; PDF through /vault/ stream)
+        $imaEntry = ima_index_lookup($config, $rel);
+        if ($imaEntry !== null) {
+            $raw = ima_read_raw($config, $rel);
+            if ($raw === null) fail('file not found');
+            $bytes = $raw['bytes'];
+            if (strlen($bytes) > MAX_FILE_SIZE) fail('file too large');
+            ok([
+                'path' => $rel,
+                'content' => $bytes,
+                'mtime' => date('Y-m-d H:i:s'),
+                'size' => strlen($bytes),
+                'ima' => true,
+            ]);
+        }
+
         // 本地路径（vault/ 下）→ 读本地；否则 → 读桶
         $localFull = realpath(PANEL_DIR . '/vault/' . $rel);
         $isLocal = ($localFull !== false && strpos($localFull, realpath(PANEL_DIR . '/vault') . '/') === 0);
@@ -192,12 +211,21 @@ function handle_api(string $uri, string $method, array $config): never
         if ($q === '') fail('查询词为空', 400);
         $excludes = $config['exclude_paths'] ?? [];
         $files = collect_all_md_files($config);
+        // ima mount: its md files are also included in full-text search (content fetched live)
+        foreach (ima_md_files($config) as $f) $files[] = $f;
         $results = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
-            $abs = resolve_vault_file($f['path'], $config);
-            if ($abs === null) continue;
-            $content = (string)@file_get_contents($abs);
+            // ima file: fetch body live via API; local file: read from disk
+            if (ima_index_lookup($config, $f['path']) !== null) {
+                $raw = ima_read_raw($config, $f['path']);
+                if ($raw === null) continue;
+                $content = $raw['bytes'];
+            } else {
+                $abs = resolve_vault_file($f['path'], $config);
+                if ($abs === null) continue;
+                $content = (string)@file_get_contents($abs);
+            }
             $pos = mb_stripos($content, $q);
             $nameHit = mb_stripos($f['name'], $q) !== false;
             if (!$nameHit && $pos === false) continue;
@@ -212,6 +240,8 @@ function handle_api(string $uri, string $method, array $config): never
         $gDir = trim((string)($_GET['dir'] ?? ''));
         $gExcludes = $config['exclude_paths'] ?? [];
         $gFiles = collect_all_md_files($config);
+        // ima mount: its md files are also included in the graph (nodes + wikilink parsing)
+        foreach (ima_md_files($config) as $f) $gFiles[] = $f;
         $nodes = []; $links = []; $idMap = []; $gid = 0;
         foreach ($gFiles as $f) {
             if (is_excluded($f['path'], $gExcludes)) continue;
@@ -225,9 +255,15 @@ function handle_api(string $uri, string $method, array $config): never
             if (is_excluded($f['path'], $gExcludes)) continue;
             if ($gDir !== '' && strpos($f['path'], $gDir . '/') !== 0) continue;
             if (!isset($idMap[$f['path']])) continue;
-            $gAbs = resolve_vault_file($f['path'], $config);
-            if ($gAbs === null) continue;
-            $content = (string)@file_get_contents($gAbs);
+            // ima file: fetch body via API; local file: read from disk
+            if (ima_index_lookup($config, $f['path']) !== null) {
+                $raw = ima_read_raw($config, $f['path']);
+                $content = $raw ? $raw['bytes'] : '';
+            } else {
+                $gAbs = resolve_vault_file($f['path'], $config);
+                if ($gAbs === null) continue;
+                $content = (string)@file_get_contents($gAbs);
+            }
             if ($content === '') continue;
             if (preg_match_all('/\[\[([^\]\|#]+)(?:\|[^\]]*)?\]\]/u', $content, $gm)) {
                 foreach ($gm[1] as $gTarget) {
