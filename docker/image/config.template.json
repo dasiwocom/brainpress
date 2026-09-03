@@ -1,0 +1,53 @@
+{
+    "webdav_user": "",
+    "webdav_pass": "",
+    "minio_endpoint": "",
+    "minio_access": "",
+    "minio_secret": "",
+    "minio_bucket": "",
+    "render_webdav": false,
+    "render_minio": false,
+    "password_hash": "",
+    "custom_paths": [
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        },
+        {
+            "path": "",
+            "on": false
+        }
+    ],
+    "site_title": "BrainPress",
+    "default_light": true,
+    "front_drawer_expanded": true,
+    "home_article": "Introduction",
+    "graph_path": "",
+    "content_width": 840,
+    "exclude_paths": [],
+    "pinned_articles": [],
+    "expanded_dirs": [],
+    "pinned_dirs": [],
+    "api_token": "",
+    "ai_api_key": "",
+    "ai_model": "deepseek-chat",
+    "ai_mode": "hybrid",
+    "ai_enabled": true,
+    "graph_show_labels": true,
+    "ai_api_base": "",
+    "font_preset": "nunito",
+    "pin_navbar": false,
+    "webdav_mounts": []
+}

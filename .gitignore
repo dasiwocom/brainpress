@@ -1,0 +1,16 @@
+# Config with secrets
+website/config.json
+
+# Logs
+*.log
+website/.server.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo

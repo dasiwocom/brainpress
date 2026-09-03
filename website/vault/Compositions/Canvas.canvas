@@ -1,0 +1,32 @@
+{
+	"nodes": [
+		{"id":"title","type":"text","text":"# BrainPress\n### If Obsidian is your second brain, BrainPress is your brain printer.","x":-400,"y":-400,"width":500,"height":120},
+
+		{"id":"deploy","type":"text","text":"## Deployment\n- Nginx / Apache\n- Docker Compose\n- Electron Desktop\n- PHP Built-in Server","x":-600,"y":-200,"width":280,"height":180,"color":"4"},
+		{"id":"core","type":"text","text":"## Core (PHP)\n- `index.php` SSR + Routing\n- `api.php` REST API\n- `dav.php` WebDAV\n- `admin.php` Config GUI\n- `functions.php` Shared Lib","x":-260,"y":-200,"width":280,"height":180,"color":"6"},
+		{"id":"storage","type":"text","text":"## Storage\n- Local filesystem (vault/)\n- S3 / MinIO\n- WebDAV (Obsidian sync)\n- Custom mount paths","x":80,"y":-200,"width":280,"height":180,"color":"2"},
+
+		{"id":"frontend","type":"text","text":"## Frontend\n- `site.js` (2853 lines)\n- `site.css` (767 lines)\n- Zero CDN, all local","x":-460,"y":60,"width":280,"height":120,"color":"1"},
+		{"id":"libs","type":"text","text":"## Libraries\n- marked.js (Markdown)\n- DOMPurify (XSS)\n- highlight.js (Code)\n- KaTeX (Math)\n- Lunr.js (Search)\n- Excalidraw (Whiteboard)\n- pdf.js (PDF reader)","x":-140,"y":60,"width":280,"height":180,"color":"5"},
+		{"id":"ai","type":"text","text":"## AI & Search\n- DeepSeek / OpenAI API\n- RAG Pipeline\n- Hybrid / Strict modes\n- Client-side full-text\n- Knowledge Graph (SVG)\n- Backlinks detection","x":180,"y":60,"width":280,"height":180,"color":"3"},
+
+		{"id":"features","type":"text","text":"## Key Features\n- Real-time Markdown rendering\n- Full Obsidian syntax support\n- Auto sidebar tree\n- Dark/Light mode\n- SSR for instant load\n- Knowledge Graph view\n- Backlinks\n- Built-in PDF reader\n- Canvas & Excalidraw support\n- AI Chat (RAG)\n- Full-text search\n- WebDAV sync\n- S3/MinIO storage\n- REST API\n- Admin GUI\n- Responsive design","x":-200,"y":320,"width":600,"height":380,"color":"0"},
+
+		{"id":"browser","type":"text","text":"Browser","x":-400,"y":-500,"width":100,"height":50},
+		{"id":"browser-arrow","type":"text","text":"-->","x":-300,"y":-490,"width":40,"height":30},
+		{"id":"server","type":"text","text":"PHP Server","x":-240,"y":-500,"width":120,"height":50},
+		{"id":"vault","type":"text","text":"vault/ (Markdown)","x":-80,"y":-500,"width":180,"height":50},
+
+		{"id":"tech","type":"text","text":"**Tech Stack:** PHP 8+ | No Database | No CDN | GPL v2","x":-250,"y":760,"width":500,"height":50}
+	],
+	"edges": [
+		{"id":"e1","fromNode":"deploy","fromSide":"right","toNode":"core","toSide":"left"},
+		{"id":"e2","fromNode":"core","fromSide":"right","toNode":"storage","toSide":"left"},
+		{"id":"e3","fromNode":"core","fromSide":"bottom","toNode":"libs","toSide":"top"},
+		{"id":"e4","fromNode":"libs","fromSide":"right","toNode":"ai","toSide":"left"},
+		{"id":"e5","fromNode":"core","fromSide":"bottom","toNode":"frontend","toSide":"top"},
+		{"id":"e6","fromNode":"browser","fromSide":"right","toNode":"server","toSide":"left"},
+		{"id":"e7","fromNode":"server","fromSide":"right","toNode":"vault","toSide":"left"},
+		{"id":"e8","fromNode":"core","fromSide":"bottom","toNode":"features","toSide":"top"}
+	]
+}

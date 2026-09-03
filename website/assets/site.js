@@ -1,0 +1,2842 @@
+/* BrainPress 前台脚本（从 index.php 抽出独立维护）
+ * 依赖：页内联 boot 变量（FRONT_MENU_MD / SSR_* / HOME_MD / SITE_TITLE 等，见 index.php）
+ */
+(function () {
+    'use strict';
+    var state = { path: null, tree: [] };
+    var $ = function (id) { return document.getElementById(id); };
+    // 内容视图互斥：切换前隐藏全部特殊视图（PDF/Excalidraw/Canvas/Graph）——
+    // 各渲染器只藏自己认识的容器会导致上一个画布残留（如 canvas 与 excalidraw 同页，需刷新才消失）
+    function hideSpecialViews() {
+        ['pdf-view', 'excalidraw-view', 'canvas-view', 'graph-view'].forEach(function (id) {
+            var e = $(id);
+            if (e) e.style.display = 'none';
+        });
+    }
+
+    /* ---------- 基础 ---------- */
+    function toast(msg) {
+        var el = $('toast');
+        el.textContent = msg;
+        el.classList.add('show');
+        clearTimeout(el._t);
+        el._t = setTimeout(function () { el.classList.remove('show'); }, 2200);
+    }
+
+    async function api(url, opts) {
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers || {});
+        if (opts.body && typeof opts.body === 'object') {
+            opts.headers['Content-Type'] = 'application/json';
+            opts.body = JSON.stringify(opts.body);
+        }
+        var res = await fetch(url, opts);
+        var data = null;
+        try { data = await res.json(); } catch (e) { /* ignore */ }
+        if (!res.ok) {
+            throw new Error(data && data.error ? data.error : ('Request failed' + ' ' + res.status));
+        }
+        return data;
+    }
+
+    function esc(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    /* ---------- Obsidian 语法保护：marked 渲染前占位，渲染后还原 ---------- */
+    // marked 会把 ![[xxx.png]] 里的 [[xxx]] 误判为链接（尤其 www 开头），先替换成占位符；
+    // 数学公式同理——$ 内的 *_[] 等会被 marked 吃掉，先摘出，还原为 .ob-math 空元素（tex 走 base64 存 data-tex）
+    // 占位符 payload 用无填充 base64url：标准 base64 的 == 尾巴会被 ==高亮== 扩展误认成定界符
+    function b64e(s) {
+        return btoa(unescape(encodeURIComponent(s))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function b64d(s) {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        return decodeURIComponent(escape(atob(s)));
+    }
+    function protectObsidian(text) {
+        return text
+            // 块级公式先替换，避免内联正则吃掉 $$ 的定界符；I/D 标记行内/块级
+            .replace(/\$\$([\s\S]+?)\$\$/g, function (m, inner) {
+                if (!inner.trim()) return m;
+                return '%%OBS_MATH%%D:' + b64e(inner) + '%%END%%';
+            })
+            .replace(/\$(?!\s)((?:[^$\n\\]|\\.)+?)\$/g, function (m, inner) {
+                if (!inner.trim()) return m;
+                return '%%OBS_MATH%%I:' + b64e(inner) + '%%END%%';
+            })
+            .replace(/!\[\[([^\]]+)\]\]/g, function (m, inner) {
+                return '%%OBS_EMBED%%' + b64e(inner) + '%%END%%';
+            })
+            .replace(/\[\[([^\]]+)\]\]/g, function (m, inner) {
+                return '%%OBS_LINK%%' + b64e(inner) + '%%END%%';
+            });
+    }
+    function restoreObsidian(html) {
+        return html
+            .replace(/%%OBS_MATH%%([ID]):([A-Za-z0-9_-]+)%%END%%/g, function (m, mode, b64) {
+                return '<span class="ob-math" data-display="' + (mode === 'D' ? '1' : '0') + '" data-tex="' + b64 + '"></span>';
+            })
+            .replace(/%%OBS_EMBED%%([A-Za-z0-9_-]+)%%END%%/g, function (m, b64) {
+                return '![[' + b64d(b64) + ']]';
+            })
+            .replace(/%%OBS_LINK%%([A-Za-z0-9_-]+)%%END%%/g, function (m, b64) {
+                return '[[' + b64d(b64) + ']]';
+            });
+    }
+
+    /* Obsidian 注释 %%...%%（预览不可见）：渲染前剥离；可跨行；```/~~~ 围栏内不剥（防破坏代码示例） */
+    function stripObsidianComments(text) {
+        if (text.indexOf('%%') === -1) return text;
+        var lines = text.split('\n'), out = [], fence = null, inComment = false;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (fence) {
+                out.push(line);
+                var t = line.trim();
+                if (t.charAt(0) === fence.ch && RegExp('^' + fence.ch + '{' + fence.len + '}\\s*$').test(t)) fence = null;
+                continue;
+            }
+            var fm = /^\s*(`{3,}|~{3,})/.exec(line);
+            if (fm) { fence = { ch: fm[1].charAt(0), len: fm[1].length }; out.push(line); continue; }
+            var res = '', j = 0;
+            while (j < line.length) {
+                if (inComment) {
+                    var end = line.indexOf('%%', j);
+                    if (end === -1) { j = line.length; }   // 整行都在注释内
+                    else { inComment = false; j = end + 2; }
+                } else {
+                    var st = line.indexOf('%%', j);
+                    if (st === -1) { res += line.slice(j); j = line.length; }
+                    else { res += line.slice(j, st); j = st + 2; inComment = true; }
+                }
+            }
+            out.push(res);
+        }
+        return out.join('\n');
+    }
+
+    /* 统一 md 渲染管线：注释剥离 → Obsidian 占位保护 → marked → 还原 → 消毒（所有渲染出口共用） */
+    function mdToHtml(raw) {
+        return DOMPurify.sanitize(restoreObsidian(marked.parse(protectObsidian(stripObsidianComments(String(raw || ''))), { gfm: true, breaks: true })));
+    }
+
+    /* GFM 脚注扩展（marked 原生不支持）：[^id] 上标引用 / [^id]: 定义。
+       引用不用 href 锚点——hash 变化会触发 handleHash 误当文章路径导航，改为 JS 点击滚动 */
+    marked.use({
+        extensions: [
+            {
+                name: 'footnoteDef', level: 'block',
+                start: function (src) { var i = src.search(/^\[\^/m); return i === -1 ? undefined : i; },
+                tokenizer: function (src) {
+                    var m = /^\[\^([^\]\s]+)\]:[ \t]*(.*)\n?/.exec(src);
+                    if (!m) return undefined;
+                    return { type: 'footnoteDef', raw: m[0], id: m[1], tokens: this.lexer.inlineTokens(m[2]) };
+                },
+                renderer: function (token) {
+                    return '<div class="fn-def" data-fnid="' + esc(token.id) + '"><span class="fn-mark">' + esc(token.id) + '.</span>' + this.parser.parseInline(token.tokens) + '</div>';
+                }
+            },
+            {
+                name: 'footnoteRef', level: 'inline',
+                start: function (src) { var i = src.indexOf('[^'); return i === -1 ? undefined : i; },
+                tokenizer: function (src) {
+                    var m = /^\[\^([^\]\s]+)\](?!:)/.exec(src);
+                    if (!m) return undefined;
+                    return { type: 'footnoteRef', raw: m[0], id: m[1] };
+                },
+                renderer: function (token) {
+                    return '<sup class="fn-ref" data-fnid="' + esc(token.id) + '">' + esc(token.id) + '</sup>';
+                }
+            },
+            {
+                /* Obsidian 高亮 ==文字== → <mark>（不与加粗/斜体冲突：== 前后需非等号边界） */
+                name: 'obHighlight', level: 'inline',
+                start: function (src) { var i = src.indexOf('=='); return i === -1 ? undefined : i; },
+                tokenizer: function (src) {
+                    var m = /^==(?!\s)([\s\S]+?)==(?!=)/.exec(src);
+                    if (!m || !m[1].trim()) return undefined;
+                    return { type: 'obHighlight', raw: m[0], tokens: this.lexer.inlineTokens(m[1]) };
+                },
+                renderer: function (token) {
+                    return '<mark>' + this.parser.parseInline(token.tokens) + '</mark>';
+                }
+            }
+        ]
+    });
+
+    /* ---------- 界面切换 ---------- */
+    // 首页：渲染站点设置配置的首页文章正文（复用文章渲染管线；幂等——只渲染一次，避免二次渲染重排抽搐）
+    var homeRendered = false;
+    function renderHome() {
+        if (homeRendered) return;
+        homeRendered = true;
+        var md = $('home-md');
+        var title = $('home-title');
+        var empty = $('empty-state');
+        if (!window.HOME_MD) {
+            md.style.display = 'none';
+            title.style.display = 'none';
+            empty.textContent = 'No home article configured. Set it in Admin → Site Settings.';
+            empty.style.display = '';
+            return;
+        }
+        try {
+            var html = mdToHtml(window.HOME_MD);
+            md.innerHTML = html;
+            try {
+                md.querySelectorAll('pre code').forEach(function (el) { hljs.highlightElement(el); });
+            } catch (e) {}
+            // 正文允许 H1（标题栏用文件名显示，正文 H1 不再降级）
+            // 大标题：文章第一个标题（PHP 提取），无则隐藏
+            if (window.HOME_TITLE) {
+                title.textContent = window.HOME_TITLE;
+                title.style.display = '';
+            } else {
+                title.style.display = 'none';
+            }
+            md.style.display = '';
+            empty.style.display = 'none';
+        } catch (e) {
+            md.style.display = 'none';
+            title.style.display = 'none';
+            empty.textContent = 'Home article failed to render.';
+            empty.style.display = '';
+        }
+    }
+    function enterApp() {
+        $('app').classList.add('show');
+        // 服务端渲染直达（URL 直接访问 /xxx.md）：内联内容同步渲染显示（无 fetch 等待，打开即文章）
+        if (window.SSR_MD) {
+            renderHome(); // 预渲染主页（隐藏状态）：SSR 直达时主页默认未渲染，logo 回首页需立即可用
+            state.path = window.SSR_PATH;
+            var shtml = mdToHtml(window.SSR_MD);
+            showArticle(shtml, window.SSR_PATH);
+            loadTree();
+            return;
+        }
+        // 服务端渲染直达（URL 直接访问 /xxx.pdf）：内联路径，前端 pdf.js 渲染阅读器
+        if (window.SSR_PDF) {
+            renderHome(); // 预渲染主页（隐藏状态）
+            state.path = window.SSR_PDF;
+            openPdf(window.SSR_PDF);
+            loadTree();
+            return;
+        }
+        // 服务端渲染直达（URL 直接访问 /graph）：图谱视图已由下方 SSR 块打开，这里只建索引树；
+        // 不能走默认主页路径——archive-view 复显会联动点亮右轨首页 TOC（图谱页右轨必须留白）
+        if (window.SSR_GRAPH) {
+            state.path = '';
+            loadTree();
+            return;
+        }
+        // 服务端渲染直达（URL 直接访问 .excalidraw.md）：renderExcalidraw 异步切换视图（等字体加载），
+        // 这里同样跳过主页路径；两个 TOC 面板由 renderExcalidraw 显式隐藏
+        if (window.SSR_EXCALIDRAW) {
+            state.path = window.EXCALIDRAW_PATH || '';
+            $('doc-wrap').style.display = 'none';
+            $('archive-view').style.display = 'none';
+            loadTree();
+            return;
+        }
+        // 服务端渲染直达（URL 直接访问 .canvas）：同步渲染画布并切换视图（同 SSR_PDF 模式——
+        // 底部独立触发器会先于 init() 执行、被本分支重新隐藏，故必须在分支内调用）
+        if (window.SSR_CANVAS) {
+            state.path = window.CANVAS_PATH || '';
+            $('archive-view').style.display = 'none';
+            renderCanvas();
+            loadTree();
+            return;
+        }
+        // 默认显示首页（渲染首页文章正文）
+        $('doc-wrap').style.display = 'none';
+        $('archive-view').style.display = '';
+        $('empty-state').style.display = 'none';
+        // 带 hash（直达文章）：完整路径立即加载（selectFile 不依赖树，避免黑屏等待 loadTree）；
+        // 数字 ID / 纯文件名依赖 _docMap（loadTree 构建），保持隐藏等 loadTree 后 handleHash 处理
+        var h = '';
+        try { h = decodeURI(location.hash.replace(/^#/, '')); } catch (e) {}
+        if (h) {
+            if (h.indexOf('/') > -1 || /\.md$/i.test(h)) {
+                selectFile({ path: h });
+            } else {
+                hideSpecialViews();
+                $('archive-view').style.display = 'none';
+                $('doc-wrap').style.display = 'none';
+            }
+        } else {
+            // 主页：先隐藏内容区，渲染完成后再显示（避免渲染/加载过程的跳动）
+            hideSpecialViews();
+            $('archive-view').style.display = 'none';
+            renderHome();
+            $('archive-view').style.display = '';
+        }
+        loadTree();
+    }
+
+    /* ---------- 文件树 ---------- */
+    // 构建名字映射（数字 ID / 显示名 → 完整路径）：双链、嵌入、反向链接、hash 直达共用。
+    function buildDocMap(nodes) {
+        window._docMap = window._docMap || {};
+        (function walk(list) {
+            list.forEach(function (node) {
+                if (node.type === 'dir') {
+                    walk(node.children || []);
+                } else if (node.type === 'file' && /\.md$/i.test(node.name)) {
+                    var m = node.name.match(/^(\d+)-/);
+                    if (m) window._docMap[m[1]] = node.path;
+                    // 显示名（去 ID 前缀、去 .md）也映射，双链 [[名]] 可匹配无 ID 文章
+                    window._docMap[node.name.replace(/^\d+-/, '').replace(/\.md$/i, '')] = node.path;
+                }
+            });
+        })(nodes);
+    }
+    // 树（_docMap）晚于正文渲染到达时的补救：升级渲染瞬间因查不到名字而标 missing 的双链/嵌入
+    function retryObsidian() {
+        var root = $('md-view');
+        if (!root) return;
+        var touched = false;
+        root.querySelectorAll('a.ob-link.ob-link-missing[data-link]').forEach(function (a) {
+            var target = findNote(a.dataset.link);
+            if (!target) return;
+            a.classList.remove('ob-link-missing');
+            a.href = '#' + encodeURI(target);
+            a.title = target;
+            a.dataset.path = target;
+            if (a.dataset.sub) a.addEventListener('click', function () { window._pendingAnchor = a.dataset.sub; });
+            touched = true;
+        });
+        root.querySelectorAll('.ob-embed.ob-embed-missing[data-name]').forEach(function (el) {
+            var nm = el.dataset.name;
+            el.classList.remove('ob-embed-missing');
+            el.textContent = 'Loading embed: ' + nm + '...';
+            mountEmbed(el, nm, el.dataset.sub || null);
+            touched = true;
+        });
+        if (touched) renderBacklinks();
+    }
+    async function loadTree() {
+        try {
+            var data = await api('/api/list');
+            state.tree = data.tree;
+            buildDocMap(state.tree);
+            // SSR 直达/快速点击时正文先于树渲染：补一次按名解析（双链/嵌入/反向链接）
+            if (state.path) retryObsidian();
+            // 主页已由 PHP 服务端渲染最新文章列表，树只用于搜索索引 + hash 直达
+            // 文件树就绪后，处理 URL hash（数字 ID、完整路径或纯文件名直达）
+            var h = location.hash.replace(/^#/, '');
+            if (h && !state.path) {
+                try {
+                    var path = null;
+                    if (/^\d+$/.test(h) && window._docMap && window._docMap[h]) {
+                        path = window._docMap[h];
+                    } else {
+                        path = decodeURI(h);
+                        // 兜底：纯文件名（无路径前缀）时查 _docMap 显示名映射
+                        if (path.indexOf('/') === -1 && window._docMap && window._docMap[path]) {
+                            path = window._docMap[path];
+                        }
+                    }
+                    if (path) selectFile({ path: path });
+                } catch (e) {}
+            }
+        } catch (e) {
+            toast(e.message);
+        }
+    }
+
+
+    /* ---------- 文件操作 ---------- */
+    // 生成文章目录（TOC）：扫描 md-view 里的 h1-h3，点击平滑滚动
+    function renderToc() {
+        var list = $('toc-list');
+        if (!list) return;
+        var headings = $('md-view').querySelectorAll('h1, h2, h3, h4');
+        if (!headings.length) {
+            $('toc-panel').style.display = 'none';
+            return;
+        }
+        $('toc-panel').style.display = 'block';
+        list.innerHTML = '';
+        headings.forEach(function (h) {
+            var lv = parseInt(h.tagName.charAt(1), 10);
+            var text = h.textContent.trim();
+            if (!text) return;
+            var link = document.createElement('button');
+            link.className = 'toc-link lv-' + lv;
+            link.textContent = text;
+            link.addEventListener('click', function () {
+                var top = h.offsetTop - $('content').offsetTop;
+                $('content').scrollTo({ top: top - 90, behavior: 'smooth' });
+            });
+            list.appendChild(link);
+        });
+    }
+
+    // 首页目录：扫描 home-md 的 h2-h4，结构与文章 TOC 一致；随归档视图显隐自动同步
+    function renderHomeToc() {
+        var list = $('home-toc-list');
+        if (!list) return;
+        var headings = $('home-md').querySelectorAll('h2, h3, h4');
+        if (!headings.length) {
+            $('home-toc-panel').style.display = 'none';
+            return;
+        }
+        list.innerHTML = '';
+        headings.forEach(function (h) {
+            var lv = parseInt(h.tagName.charAt(1), 10);
+            var text = h.textContent.trim();
+            if (!text) return;
+            var link = document.createElement('button');
+            link.className = 'toc-link lv-' + lv;
+            link.textContent = text;
+            link.addEventListener('click', function () {
+                var top = h.offsetTop - $('content').offsetTop;
+                $('content').scrollTo({ top: top - 90, behavior: 'smooth' });
+            });
+            list.appendChild(link);
+        });
+        $('home-toc-panel').style.display = 'block';
+    }
+    // 归档视图在多处被切换显隐——用 MutationObserver 监听其内联样式，统一联动首页目录
+    (function () {
+        var av = $('archive-view'), htp = $('home-toc-panel');
+        if (!av || !htp) return;
+        function syncHomeToc() {
+            if (av.style.display === 'none') {
+                htp.style.display = 'none';
+                return;
+            }
+            renderHomeToc();
+        }
+        if (window.MutationObserver) {
+            new MutationObserver(syncHomeToc).observe(av, { attributes: true, attributeFilter: ['style'] });
+        }
+        syncHomeToc();
+    })();
+
+    // PDF 渲染前置：按需加载 pdf.min.js（不拖慢首页）；文件从前端 /vault/ 路径加载
+    function loadPdfJs(cb) {
+        if (window.pdfjsLib) { cb(); return; }
+        var s = document.createElement('script');
+        s.src = '/assets/pdfjs/pdf.min.js';
+        s.onload = cb;
+        document.head.appendChild(s);
+    }
+    /* ===== PDF 阅读器共享组件：笔记嵌入与 URL 直开同构（Obsidian 式工具栏 + 框内滚动） ===== */
+    function pdfIcon(d) {
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + d + '"/></svg>';
+    }
+    // opts.full    直开整页模式：吃满 #pdf-view、键盘翻页常驻（嵌入模式仅全屏时响应）
+    // opts.sub     嵌入语法 #page=N 子定位；opts.initPage 直开初始页
+    function buildPdfPane(el, doc, opts) {
+        opts = opts || {};
+        el.classList.add('ob-pdf');
+        if (opts.full) el.classList.add('ob-pdf-full');
+        var st = { mode: 'auto', pct: 100, scale: 0, page: 1, dpr: Math.min((window.devicePixelRatio || 1) * 1.5, 3) };
+        var w1 = 612, h1 = 792;   // 首页基准尺寸（加载后修正）
+
+        /* ---- 骨架：工具栏 + 内部滚动区 ---- */
+        var bar = document.createElement('div');
+        bar.className = 'ob-pdf-toolbar';
+        bar.innerHTML =
+            '<button type="button" class="ob-pdf-btn ob-tocbtn" title="Outline" hidden>' + pdfIcon('M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01') + '</button>' +
+            '<span class="ob-pdf-sep"></span>' +
+            '<button type="button" class="ob-pdf-btn ob-prev" title="Previous page">' + pdfIcon('m15 18-6-6 6-6') + '</button>' +
+            '<input type="text" inputmode="numeric" class="ob-pdf-pageinp" value="1" title="Page number">' +
+            '<span class="ob-pdf-total">/ ' + doc.numPages + '</span>' +
+            '<button type="button" class="ob-pdf-btn ob-next" title="Next page">' + pdfIcon('m9 18 6-6-6-6') + '</button>' +
+            '<span class="ob-pdf-sep"></span>' +
+            '<button type="button" class="ob-pdf-btn ob-zout" title="Zoom out">' + pdfIcon('M5 12h14') + '</button>' +
+            '<select class="ob-pdf-zoomsel" title="Zoom">' +
+                '<option value="auto" selected>Automatic</option>' +
+                '<option value="page-fit">Page Fit</option>' +
+                '<option value="page-width">Page Width</option>' +
+                '<option value="50">50%</option><option value="75">75%</option>' +
+                '<option value="100">100%</option><option value="125">125%</option>' +
+                '<option value="150">150%</option><option value="200">200%</option>' +
+                '<option value="300">300%</option><option value="400">400%</option>' +
+            '</select>' +
+            '<button type="button" class="ob-pdf-btn ob-zin" title="Zoom in">' + pdfIcon('M5 12h14M12 5v14') + '</button>' +
+            '<span class="sp"></span>' +
+            '<button type="button" class="ob-pdf-btn ob-fs" title="Fullscreen">' + pdfIcon('M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3') + '</button>';
+        el.appendChild(bar);
+        var body = document.createElement('div');
+        body.className = 'ob-pdf-body';
+        var box = document.createElement('div');
+        box.className = 'ob-pdf-pages';
+        body.appendChild(box);
+        el.appendChild(body);
+        var inp = bar.querySelector('.ob-pdf-pageinp');
+        var sel = bar.querySelector('.ob-pdf-zoomsel');
+
+        /* ---- 页槽与懒渲染 ---- */
+        var io = null, rendered = {};
+        function clearPages() {
+            rendered = {};
+            [].forEach.call(box.children, function (slot) {
+                [].forEach.call(slot.querySelectorAll('canvas'), function (c) { c.remove(); });
+                slot.classList.remove('done');
+            });
+        }
+        function renderSlot(slot) {
+            var n = parseInt(slot.dataset.page, 10);
+            if (rendered[n]) return;
+            rendered[n] = 1;
+            doc.getPage(n).then(function (page) {
+                var vp = page.getViewport({ scale: st.scale * st.dpr });
+                var cv = document.createElement('canvas');
+                cv.width = Math.round(vp.width);
+                cv.height = Math.round(vp.height);
+                slot.appendChild(cv);   // 显示尺寸由 CSS width:100% 控制，铺满框体
+                // 像素渲染：pdf.js 绘入画布（缺失则整页空白）
+                page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise
+                    .then(function () { slot.classList.add('done'); })
+                    .catch(function () { rendered[n] = 0; });
+            });
+        }
+        function observeSlots() {
+            if (io) io.disconnect();
+            io = ('IntersectionObserver' in window) ? new IntersectionObserver(function (ents) {
+                ents.forEach(function (en) {
+                    if (!en.isIntersecting) return;
+                    io.unobserve(en.target);
+                    renderSlot(en.target);
+                });
+            }, { root: body, rootMargin: '300px' }) : null;
+            [].forEach.call(box.children, function (slot) {
+                var n = parseInt(slot.dataset.page, 10);
+                if (rendered[n]) return;
+                if (io) io.observe(slot);
+                else renderSlot(slot);
+            });
+        }
+
+        /* ---- 缩放：Automatic/Page Width=适配框宽；Page Fit=整页入框；其余为绝对百分比 ---- */
+        function applyMode() {
+            var availW = body.clientWidth || 600;   // 页面铺满框体，无内边距
+            if (st.mode === 'auto' || st.mode === 'page-width') st.scale = availW / w1;
+            else if (st.mode === 'page-fit') st.scale = Math.min(availW / w1, (body.clientHeight - 2) / h1);
+            else st.scale = st.pct / 100;
+            st.scale = Math.max(0.05, st.scale);
+            [].forEach.call(box.children, function (slot) {
+                slot.style.minHeight = Math.round(h1 * st.scale) + 'px';
+            });
+            clearPages();
+            observeSlots();
+        }
+
+        /* ---- 翻页与滚动跟随（rect 相对坐标，不依赖 offsetParent） ---- */
+        function relTop(node) {
+            return node.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+        }
+        function goPage(n, scroll) {
+            n = Math.min(Math.max(1, n), doc.numPages);
+            st.page = n;
+            inp.value = n;
+            if (scroll !== false) {
+                var s = box.querySelector('[data-page="' + n + '"]');
+                if (s) body.scrollTo({ top: Math.max(0, relTop(s)), behavior: 'smooth' });
+            }
+        }
+        var ticking = false;
+        body.addEventListener('scroll', function () {
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(function () {
+                ticking = false;
+                var cur = 1;
+                [].forEach.call(box.children, function (slot) {
+                    if (relTop(slot) <= body.scrollTop + 20) cur = parseInt(slot.dataset.page, 10);
+                });
+                if (document.activeElement !== inp && cur !== st.page) { st.page = cur; inp.value = cur; }
+            });
+        });
+
+        /* ---- 工具栏交互 ---- */
+        bar.querySelector('.ob-prev').addEventListener('click', function () { goPage(st.page - 1); });
+        bar.querySelector('.ob-next').addEventListener('click', function () { goPage(st.page + 1); });
+        inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { goPage(parseInt(inp.value, 10) || 1); inp.blur(); }
+        });
+        inp.addEventListener('blur', function () { inp.value = st.page; });
+        // 缩放步进沿下拉列表方向：越往下百分比越大（pdf.js 同序）
+        bar.querySelector('.ob-zout').addEventListener('click', function () {
+            if (sel.selectedIndex > 0) { sel.selectedIndex -= 1; sel.dispatchEvent(new Event('change')); }
+        });
+        bar.querySelector('.ob-zin').addEventListener('click', function () {
+            if (sel.selectedIndex < sel.options.length - 1) { sel.selectedIndex += 1; sel.dispatchEvent(new Event('change')); }
+        });
+        sel.addEventListener('change', function () {
+            var v = sel.value;
+            if (v === 'auto' || v === 'page-fit' || v === 'page-width') { st.mode = v; }
+            else { st.mode = 'pct'; st.pct = parseInt(v, 10); }
+            applyMode();
+        });
+        bar.querySelector('.ob-fs').addEventListener('click', function () {
+            if (document.fullscreenElement === el) {
+                if (document.exitFullscreen) document.exitFullscreen();
+            } else if (el.classList.contains('fs')) {
+                el.classList.remove('fs');   // CSS 模拟全屏退出
+            } else {
+                var fn = el.requestFullscreen || el.webkitRequestFullscreen;
+                if (fn) { try { fn.call(el); } catch (e) { el.classList.add('fs'); } }
+                else el.classList.add('fs');
+            }
+            setTimeout(applyMode, 120);
+        });
+        // 键盘翻页：直开模式常驻；嵌入模式仅全屏时响应
+        document.addEventListener('keydown', function pdfKey(e) {
+            if (!el.isConnected) { document.removeEventListener('keydown', pdfKey); return; }
+            if (!opts.full && document.fullscreenElement !== el && !el.classList.contains('fs')) return;
+            if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+            if (e.key === 'ArrowLeft' || e.key === 'PageUp') goPage(st.page - 1);
+            else if (e.key === 'ArrowRight' || e.key === 'PageDown') goPage(st.page + 1);
+        });
+
+        /* ---- 文档大纲（getOutline → 抽屉；无大纲隐藏按钮） ---- */
+        try {
+            doc.getOutline().then(function (ol) {
+                if (!ol || !ol.length) return;
+                var tocBtn = bar.querySelector('.ob-tocbtn');
+                tocBtn.hidden = false;
+                var drawer = document.createElement('div');
+                drawer.className = 'ob-pdf-outline';
+                function build(items) {
+                    var ul = document.createElement('ul');
+                    items.forEach(function (it) {
+                        var li = document.createElement('li');
+                        var a = document.createElement('a');
+                        a.textContent = it.title || '—';
+                        a.addEventListener('click', function () {
+                            Promise.resolve(typeof it.dest === 'string' ? doc.getDestination(it.dest) : it.dest)
+                                .then(function (d) { return d ? doc.getPageIndex(d[0]) : null; })
+                                .then(function (idx) { if (idx != null) goPage(idx + 1); })
+                                .catch(function () {});
+                        });
+                        li.appendChild(a);
+                        if (it.items && it.items.length) li.appendChild(build(it.items));
+                        ul.appendChild(li);
+                    });
+                    return ul;
+                }
+                drawer.appendChild(build(ol));
+                el.appendChild(drawer);
+                tocBtn.addEventListener('click', function () { el.classList.toggle('outline-open'); });
+            });
+        } catch (e) {}
+
+        /* ---- 尺寸自适应：窗口/容器变化时按模式重新适配（防抖） ---- */
+        var rt;
+        if (typeof ResizeObserver !== 'undefined') {
+            new ResizeObserver(function () {
+                clearTimeout(rt);
+                rt = setTimeout(function () {
+                    if (!el.isConnected) return;
+                    if (st.mode === 'auto' || st.mode === 'page-width' || st.mode === 'page-fit') applyMode();
+                }, 160);
+            }).observe(body);
+        }
+
+        /* ---- 初始化：首页定基准 → 建槽 → 应用缩放 → 初始页跳转 ---- */
+        doc.getPage(1).then(function (p1) {
+            w1 = p1.getViewport({ scale: 1 }).width;
+            h1 = p1.getViewport({ scale: 1 }).height;
+            for (var i = 1; i <= doc.numPages; i++) {
+                (function (i) {
+                    var slot = document.createElement('div');
+                    slot.className = 'ob-pdf-page';
+                    slot.dataset.page = i;
+                    slot.style.minHeight = Math.round(body.clientWidth * h1 / w1) + 'px';
+                    box.appendChild(slot);
+                })(i);
+            }
+            applyMode();
+            var pm = /^page=(\d+)$/i.exec((opts.sub || '').trim());
+            var start = parseInt(pm ? pm[1] : (opts.initPage || 1), 10);
+            if (start > 1) setTimeout(function () { goPage(start); }, 120);
+        });
+    }
+
+    // URL 直开 PDF（/xxx.pdf SSR 路径）：视图切换后复用同一阅读器组件
+    function openPdf(path, initPage) {
+        hideSpecialViews();
+        $('archive-view').style.display = 'none';
+        $('empty-state').style.display = 'none';
+        $('doc-wrap').style.display = 'flex';
+        var tp = $('toc-panel'); if (tp) tp.style.display = 'none';  // PDF 无目录 → 右栏留空
+        $('md-view').style.display = 'none';
+        // 标题：文件名（去 .pdf 扩展名，与目录树一致）
+        var docName = path.split('/').pop().replace(/\.pdf$/i, '');
+        $('doc-title').textContent = docName;
+        try { document.title = docName + ' · ' + (window.SITE_TITLE || 'BrainPress'); } catch (e) {}
+        var pv = $('pdf-view');
+        pv.style.display = '';
+        pv.innerHTML = '<div style="margin:auto;color:var(--vp-c-text-mute);font-size:13px;">Loading…</div>';
+        loadPdfJs(function () {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/pdfjs/pdf.worker.min.js';
+            pdfjsLib.getDocument('/vault/' + path).promise.then(function (doc) {
+                pv.innerHTML = '';
+                var host = document.createElement('div');
+                pv.appendChild(host);
+                buildPdfPane(host, doc, { full: true, initPage: initPage });
+            }).catch(function (err) {
+                pv.innerHTML = '<div style="padding:48px;text-align:center;color:var(--vp-c-text-mute);">Failed to load PDF: ' + ((err && err.message) || 'unknown error') + '</div>';
+            });
+        });
+    }
+
+    // 文章渲染统一出口：内联 HTML → 高亮/降级/标题/视图切换/增强（selectFile 与 SSR 共用）
+    function showArticle(html, nodePath) {
+        $('md-view').innerHTML = html;
+        // 代码高亮（VS Code 风格：日间 Light+ / 夜间 Dark+）
+        try {
+            $('md-view').querySelectorAll('pre code').forEach(function (el) {
+                hljs.highlightElement(el);
+            });
+        } catch (e) {}
+        // 正文允许 H1：不再降级（标题栏显示文件名，正文 H1 与文件名可并存）
+        // 文档标题 = 文件名（去扩展名），清除旧翻译标记
+        var docName = nodePath.split('/').pop().replace(/\.md$/i, '');
+        $('doc-title').textContent = docName;
+        delete $('doc-title').dataset.orig;
+        // 视图切换：内容就绪后一次性显示
+        hideSpecialViews();  // 清掉可能残留的 PDF/画布/图谱（互斥）
+        $('archive-view').style.display = 'none';
+        $('empty-state').style.display = 'none';
+        $('doc-wrap').style.display = 'flex';
+        $('md-view').style.display = '';
+        $('content').scrollTop = 0;
+        renderToc();
+        addCodeCopy();
+        processObsidian();
+        // 树可能先于文章就绪（retry 已在空视图上跑过）：渲染完成后补一次解析，双保险且幂等
+        if (state.tree && state.tree.length) retryObsidian();
+        // 跨笔记锚点定位（[[笔记#标题 / #^块ID]]）：文章渲染完成后滚动到位
+        if (window._pendingAnchor) {
+            var pa = window._pendingAnchor;
+            window._pendingAnchor = null;
+            setTimeout(function () { jumpToAnchor(pa); }, 80);
+        }
+    }
+
+    async function selectFile(node) {
+        state.path = node.path;
+        // PDF 文件：走阅读器（pdf.js），不走 md 渲染管线
+        if (/\.pdf$/i.test(node.path)) {
+            openPdf(node.path);
+            return;
+        }
+        // Canvas 白板：读原文 → 画布渲染（不走 md 管线）
+        if (/\.canvas$/i.test(node.path)) {
+            try {
+                var cdata = await api('/api/file?path=' + encodeURIComponent(node.path));
+                if (!cdata || !cdata.ok) { toast((cdata && cdata.error) || 'Failed to read file'); return; }
+                window.CANVAS_PATH = node.path;
+                window.CANVAS_JSON = cdata.content || '';
+                renderCanvas();
+            } catch (e) { toast(e.message); }
+            return;
+        }
+        try {
+            // 先请求内容并渲染好，再一次性切换视图（避免空白闪烁）
+            var data = await api('/api/file?path=' + encodeURIComponent(node.path));
+            if (!data || !data.ok) {
+                toast((data && data.error) || 'Failed to read file');
+                return;
+            }
+            // Excalidraw 判定：扩展名或内容特征（真实 frontmatter 标记 + 真实代码围栏——
+            // 宽松的子串匹配会把"介绍 excalidraw 的文档"误判成绘画文件）
+            var raw = data.content || '';
+            if (/\.excalidraw\.md$/i.test(node.path) || (raw.indexOf('excalidraw-plugin:') !== -1 && /^```compressed-json\s*$/m.test(raw))) {
+                window.EXCALIDRAW_PATH = node.path;
+                window.EXCALIDRAW_RAW = raw;
+                renderExcalidraw();
+                return;
+            }
+            var html = mdToHtml(data.content);
+            showArticle(html, node.path);
+            // 更新地址栏：SPA 点击已 pushState 路径 URL 时不重复设 hash（避免 /path#path 冗余）
+            try {
+                if (!/\.md$/i.test(location.pathname)) {
+                    var docId = null;
+                    for (var k in (window._docMap || {})) {
+                        if (window._docMap[k] === node.path) { docId = k; break; }
+                    }
+                    location.hash = docId || encodeURI(node.path);
+                }
+            } catch (e) {}
+        } catch (e) {
+            toast(e.message);
+        }
+    }
+
+    // 给代码块加复制按钮
+    function addCodeCopy() {
+        $('md-view').querySelectorAll('pre').forEach(function (pre) {
+            if (pre.querySelector('.code-copy')) return;
+            var btn = document.createElement('button');
+            btn.className = 'code-copy';
+            btn.title = 'Copy code';
+            btn.setAttribute('aria-label', 'Copy code');
+            // 单行代码块：按钮垂直居中（避免偏下不对称）
+            if (pre.scrollHeight <= 60) btn.classList.add('single-line');
+            btn.addEventListener('click', function () {
+                var code = pre.querySelector('code');
+                var text = code ? code.innerText : pre.innerText;
+                var done = function () {
+                    btn.classList.add('copied');
+                    btn.title = 'Copied';
+                    setTimeout(function () {
+                        btn.classList.remove('copied');
+                        btn.title = 'Copy code';
+                    }, 1500);
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(done).catch(function () {
+                        fallbackCopy(text);
+                        done();
+                    });
+                } else {
+                    fallbackCopy(text);
+                    done();
+                }
+            });
+            pre.appendChild(btn);
+        });
+    }
+    function fallbackCopy(text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+    }
+
+    /* ===== Obsidian 兼容：双链 / 嵌入 / 标签 ===== */
+    // 按名字或 ID 查笔记路径
+    function findNote(name) {
+        var map = window._docMap || {};
+        var target = name.replace(/\.md$/i, '');
+        // 1. ID 直接匹配
+        if (map[target]) return map[target];
+        // 2. 按显示名匹配（去 ID 前缀、去 .md）
+        for (var k in map) {
+            var p = map[k];
+            var base = p.split('/').pop().replace(/^\d+-/, '').replace(/\.md$/i, '');
+            if (base === target) return p;
+        }
+        return null;
+    }
+    // 拆 [[目标#子定位|别名]]：子定位 = 标题 或 ^块ID；别名可能写在 # 之后（[[a#b|c]]）
+    function splitRef(ref) {
+        var alias = null, pipe = ref.indexOf('|');
+        if (pipe > -1) { alias = ref.slice(pipe + 1).trim(); ref = ref.slice(0, pipe); }
+        ref = ref.trim();
+        var hash = ref.indexOf('#');
+        if (hash > -1) return { target: ref.slice(0, hash).trim(), sub: ref.slice(hash + 1).trim(), alias: alias };
+        return { target: ref, sub: '', alias: alias };
+    }
+    // 树内严格按文件名查找（不猜路径）：存在返回路径，不存在返回 null（链接/嵌入判定"未解析"用）
+    function findAsset(name) {
+        var found = null;
+        (function walk(nodes) {
+            nodes.forEach(function (n) {
+                if (found) return;
+                if (n.type === 'file' && n.name === name) found = n.path;
+                else if (n.children) walk(n.children);
+            });
+        })(state.tree);
+        return found;
+    }
+    // 资产路径解析（嵌入图片/音视频/画布/PDF）：树内精确文件名 → 当前笔记同目录兜底 → vault 根
+    function resolveAsset(name) {
+        var found = findAsset(name);
+        if (found) return found;
+        if (state.path && state.path.indexOf('/') > -1) {
+            return state.path.slice(0, state.path.lastIndexOf('/') + 1) + name;
+        }
+        return name;
+    }
+    /* ===== Obsidian Callout 提示块：> [!type] 标题 → 官方风格彩色卡片 ===== */
+    // 类型 → [颜色, 图标path]；颜色取 Obsidian 官方色板近似值，图标为 Lucide 线条路径
+    var CALLOUT_TYPES = {
+        note: ['#086ddd', 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'],
+        info: ['#086ddd', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10Zm0-14v8m0-12h.01'],
+        todo: ['#086ddd', 'm9 11 3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'],
+        abstract: ['#00bfbc', 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+        summary: ['#00bfbc', 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+        tldr: ['#00bfbc', 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01'],
+        tip: ['#00bdd0', 'M9 18h6m-5 4h4m-3.09-8c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14Z'],
+        hint: ['#00bdd0', 'M9 18h6m-5 4h4m-3.09-8c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14Z'],
+        important: ['#00bdd0', 'M9 18h6m-5 4h4m-3.09-8c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14Z'],
+        success: ['#08b94e', 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3'],
+        check: ['#08b94e', 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3'],
+        done: ['#08b94e', 'M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3'],
+        question: ['#ec7500', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10ZM9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m0 3h.01'],
+        help: ['#ec7500', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10ZM9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m0 3h.01'],
+        faq: ['#ec7500', 'M12 22a10 10 0 1 0-10-10 10 10 0 0 0 10 10ZM9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3m0 3h.01'],
+        warning: ['#e0ac00', 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4m0 4h.01'],
+        caution: ['#e0ac00', 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4m0 4h.01'],
+        attention: ['#e0ac00', 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3ZM12 9v4m0 4h.01'],
+        danger: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        error: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        failure: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        fail: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        missing: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        bug: ['#e93147', 'M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2ZM12 8v4m0 4h.01'],
+        example: ['#7852ee', 'm7.5 4.27 9 5.15M21 8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 8V6a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 6Z'],
+        quote: ['#808080', '']
+    };
+    function transformCallouts(root) {
+        [].forEach.call(root.querySelectorAll('blockquote'), function (bq) {
+            var firstP = bq.querySelector('p');
+            if (!firstP || !firstP.firstChild) return;
+            var tn = firstP.firstChild.nodeType === 3 ? firstP.firstChild : null;
+            if (!tn) return;
+            // 头部形如 [!type]± 标题（- 默认折叠 / + 默认展开；官方标记在 ] 前，此处兼容 ] 后写法）
+            var m = /^\s*\[!([\w-]+?)([+-]?)\][ \t]*/.exec(tn.nodeValue);
+            if (!m) return;
+            var type = m[1].toLowerCase();
+            var cfg = CALLOUT_TYPES[type] || CALLOUT_TYPES.note;
+            var fold = m[2];
+            var title = tn.nodeValue.slice(m[0].length).trim();
+            // 容错：] 后缀折叠标记（后随空白才认定，避免误吃 "-xxx" 正文）
+            if (!fold && /^[+-][ \t]/.test(title)) {
+                fold = title.charAt(0);
+                title = title.slice(1).trim();
+            }
+            if (!title) title = type.charAt(0).toUpperCase() + type.slice(1);
+            // 首行整行是标题（Obsidian：正文从下一行开始）——标记连同标题文本一起摘除，
+            // 否则标题会在内容区重复出现；随后的 <br> 一并清掉，避免留空行
+            tn.nodeValue = '';
+            var nbr = tn.nextSibling;
+            if (nbr && nbr.nodeType === 1 && nbr.tagName === 'BR') nbr.parentNode.removeChild(nbr);
+            var div = document.createElement('div');
+            div.className = 'callout callout-' + type + (fold === '-' ? ' is-collapsed' : '');
+            div.style.setProperty('--callout-color', cfg[0]);
+            var head = document.createElement('div');
+            head.className = 'callout-title';
+            var icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            icon.setAttribute('viewBox', '0 0 24 24');
+            icon.setAttribute('fill', 'none');
+            icon.setAttribute('stroke', 'currentColor');
+            icon.setAttribute('stroke-width', '2');
+            icon.setAttribute('stroke-linecap', 'round');
+            icon.setAttribute('stroke-linejoin', 'round');
+            icon.innerHTML = '<path d="' + cfg[1] + '"/>';
+            head.appendChild(icon);
+            var ttl = document.createElement('span');
+            ttl.textContent = title;
+            head.appendChild(ttl);
+            div.appendChild(head);
+            var content = document.createElement('div');
+            content.className = 'callout-content';
+            while (bq.firstChild) content.appendChild(bq.firstChild);
+            // 单行 callout（只有标题没有正文）：清掉搬进来的空 <p>
+            [].forEach.call(content.querySelectorAll('p'), function (p) {
+                if (!p.textContent.trim() && !p.querySelector('img,video,audio,input,iframe,svg')) p.parentNode.removeChild(p);
+            });
+            div.appendChild(content);
+            bq.parentNode.replaceChild(div, bq);
+            if (fold !== '') {
+                div.classList.add('callout-foldable');
+                head.addEventListener('click', function () { div.classList.toggle('is-collapsed'); });
+            }
+        });
+    }
+    // 块 ID：块级元素末尾 " ^id" 是不可见元数据——摘除文本并在元素上挂 data-block-id 锚点（供 [[..#^id]] 定位/嵌入）。
+    // 相邻行会被 marked 合并进同一 <p>（中间仅 <br>），故扫描块内所有文本节点，命中首个 "行尾 ^id" 即止
+    function applyBlockIds(scope) {
+        scope.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote').forEach(function (el) {
+            if (el.dataset.blockId) return;
+            var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+            var tn;
+            while ((tn = walker.nextNode())) {
+                var host = tn.parentElement;
+                if (host && host.closest && host.closest('pre, code, .ob-math')) continue;
+                // \u2011（不换行连字符）与 '-' 同义：Obsidian 粘贴的块ID 可能带它
+                var m = /[ \t]\^([\w\u2011-]+)[ \t]*$/.exec(tn.nodeValue);
+                if (!m) continue;
+                tn.nodeValue = tn.nodeValue.slice(0, m.index);
+                el.dataset.blockId = m[1].replace(/\u2011/g, '-');
+                break;
+            }
+        });
+    }
+    // 滚动容器内精确定位：用视口相对坐标换算（offsetTop 受定位祖先影响不可靠）
+    function scrollMdTo(el, off) {
+        var c = $('content');
+        var top = el.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop - (off || 90);
+        c.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    }
+    // 锚点定位：#^块ID → data-block-id 元素；#标题 → 标题文本匹配；命中则平滑滚动
+    function jumpToAnchor(sub) {
+        var view = $('md-view');
+        if (!view) return false;
+        var el = null;
+        if (sub.charAt(0) === '^') {
+            // U+2011（不换行连字符）视作普通 '-'：Obsidian 输入法/粘贴可能产生
+            var bid = sub.slice(1).replace(/\u2011/g, '-').replace(/[^\w-]/g, '');
+            if (bid) el = view.querySelector('[data-block-id="' + bid + '"]');
+        } else {
+            var want = sub.toLowerCase();
+            view.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(function (h) {
+                if (!el && h.textContent.trim().toLowerCase() === want) el = h;
+            });
+        }
+        if (!el) return false;
+        scrollMdTo(el);
+        return true;
+    }
+    // 画布嵌入：拉取 .canvas JSON，复用 renderCanvasScene 渲染为内嵌 SVG 场景
+    function embedCanvas(el, name) {
+        api('/api/file?path=' + encodeURIComponent(resolveAsset(name))).then(function (data) {
+            var scene;
+            try { scene = JSON.parse(data.content || '{}'); }
+            catch (e) { throw new Error('invalid'); }
+            el.innerHTML = '';
+            var box = document.createElement('div');
+            box.className = 'ob-embed-canvas';
+            el.appendChild(box);
+            renderCanvasScene(scene, box);
+            el.classList.add('loaded');
+        }).catch(function () {
+            embedFail(el, name);
+        });
+    }
+    // 嵌入失败兜底：按 Obsidian 官方样式显示未解析链接文本；带 data-name 供 retryObsidian 二次修复。
+    // 树若已就绪（失败回调晚于一次性重试），立刻排一次重试闭环；树未就绪则等 loadTree 后统一重试
+    function embedFail(el, name) {
+        var miss = document.createElement('span');
+        miss.className = 'ob-embed ob-embed-missing';
+        miss.dataset.name = name;
+        miss.textContent = '![[' + name + ']]';
+        miss.title = 'Embed target not found';
+        el.replaceWith(miss);
+        if (state.tree && state.tree.length) setTimeout(retryObsidian, 0);
+    }
+    // 嵌入统一挂载：按扩展名分派 图片/视频/音频/画布/笔记（含块引用提取）。
+    // 树未就绪时 resolveAsset 只能同目录兜底猜路径 → 失败落成 missing[data-name]，loadTree 后统一重试
+    function mountEmbed(el, name, sub) {
+        if (/\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(name)) {
+            var img = document.createElement('img');
+            img.className = 'ob-embed-img';
+            img.src = '/vault/' + encodeURI(resolveAsset(name));
+            img.alt = name;
+            // 不用 lazy：离屏图片不发起请求，onerror 永不触发，缺失兜底与重试机制会失效
+            img.onerror = function () { embedFail(img, name); };  // 树未就绪猜错路径 → 落 missing 等重试
+            el.innerHTML = '';
+            el.classList.add('loaded');
+            el.appendChild(img);
+        } else if (/\.(mp4|webm|ogv|mov|m4v)$/i.test(name)) {
+            var vid = document.createElement('video');
+            vid.className = 'ob-embed-media';
+            vid.controls = true;
+            vid.preload = 'metadata';
+            vid.src = '/vault/' + encodeURI(resolveAsset(name));
+            vid.onerror = function () { embedFail(vid, name); };
+            el.innerHTML = '';
+            el.classList.add('loaded');
+            el.appendChild(vid);
+        } else if (/\.(mp3|wav|ogg|m4a|flac|aac|opus)$/i.test(name)) {
+            var aud = document.createElement('audio');
+            aud.className = 'ob-embed-media';
+            aud.controls = true;
+            aud.preload = 'metadata';
+            aud.src = '/vault/' + encodeURI(resolveAsset(name));
+            aud.onerror = function () { embedFail(aud, name); };
+            el.innerHTML = '';
+            el.classList.add('loaded');
+            el.appendChild(aud);
+        } else if (/\.canvas$/i.test(name)) {
+            embedCanvas(el, name);
+        } else if (/\.pdf$/i.test(name)) {
+            mountPdfEmbed(el, name, sub);
+        } else {
+            loadEmbed(el, name, sub);
+        }
+    }
+    /* ===== Obsidian 式 PDF 内嵌：复用共享阅读器组件 buildPdfPane =====
+       工具栏：大纲 | ‹ 页码/N › | 缩放下拉 −/+ | 全屏；正文懒渲染（IntersectionObserver）；
+       深色模式保持白纸不反色（Obsidian 同款）；#page=N 打开即跳转 */
+    function mountPdfEmbed(el, name, sub) {
+        loadPdfJs(function () {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/pdfjs/pdf.worker.min.js';
+            pdfjsLib.getDocument('/vault/' + encodeURI(resolveAsset(name))).promise.then(function (doc) {
+                el.innerHTML = '';
+                el.classList.add('loaded');
+                buildPdfPane(el, doc, { sub: sub });
+            }).catch(function () {
+                embedFail(el, name);  // 树未就绪猜错路径 → 落 missing 等重试
+            });
+        });
+    }
+    /* 数学公式：还原阶段生成 .ob-math 空元素（data-tex 存 base64），此处统一 KaTeX 渲染 */
+    function renderMath(root) {
+        if (!window.katex) return;
+        root.querySelectorAll('span.ob-math').forEach(function (el) {
+            if (el.dataset.rendered) return;
+            el.dataset.rendered = '1';
+            var tex;
+            try { tex = b64d(el.dataset.tex); } catch (e) { return; }
+            try {
+                katex.render(tex, el, { displayMode: el.dataset.display === '1', throwOnError: false });
+                if (el.dataset.display === '1') el.classList.add('ob-math-block');
+            } catch (e) { el.textContent = tex; }
+        });
+    }
+    function processObsidian() {
+        var root = $('md-view');
+        if (!root) return;
+        renderMath(root);      // 先渲染公式，避免 $ 内文本进入下方扫描
+        applyBlockIds(root);   // 先摘块 ID，避免 ^id 文本进入下方双链/标签扫描
+        transformCallouts(root);  // Obsidian Callout：> [!type] 转彩色卡片（须在文本扫描前替换节点）
+        // 遍历文本节点，处理 [[双链]]、![[嵌入]]、#标签；跳过代码块/行内代码与已渲染公式（内部 # 等是内容不是语法）
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        var nodes = [];
+        while (walker.nextNode()) {
+            var host = walker.currentNode.parentElement;
+            if (host && host.closest && host.closest('pre, code, .ob-math')) continue;
+            nodes.push(walker.currentNode);
+        }
+        nodes.forEach(function (textNode) {
+            var text = textNode.nodeValue;
+            if (!text) return;
+            var out = [];
+            var last = 0;
+            // 标签允许嵌套层级（Obsidian：#父/子/孙）；嵌入/双链分支才持有 m[2]，标签走 m[4]，
+            // splitRef 不能提到分支外——标签命中时 m[2] 为 undefined 会抛错中断整个遍历
+            var re = /(!?)\[\[([^\[\]]+)\]\]|(^|\s)#([\u4e00-\u9fa5\w-]+(?:\/[\u4e00-\u9fa5\w-]+)*)/g;
+            var m;
+            while ((m = re.exec(text)) !== null) {
+                if (m.index > last) out.push(text.slice(last, m.index));
+                if (m[1] === '!') {
+                    // 嵌入 ![[名字]] / ![[名字#^块ID]]
+                    var er = splitRef(m[2]);
+                    out.push({ embed: er.target, sub: er.sub });
+                } else if (m[2]) {
+                    // 双链 [[名字]] / [[名字|别名]] / [[#标题|别名]] / [[名字#^块ID]]
+                    var lr = splitRef(m[2]);
+                    out.push({ link: lr.target, sub: lr.sub, alias: lr.alias });
+                } else if (m[4]) {
+                    // 标签 #标签 / #嵌套/标签
+                    out.push({ tag: m[4], leading: m[3] });
+                }
+                last = m.index + m[0].length;
+            }
+            if (!out.length) return;
+            if (last < text.length) out.push(text.slice(last));
+            // 重建节点
+            var frag = document.createDocumentFragment();
+            out.forEach(function (item) {
+                if (typeof item === 'string') {
+                    frag.appendChild(document.createTextNode(item));
+                } else if (item.embed !== undefined) {
+                    // 嵌入分支：自引用块就地克隆；其余统一交给 mountEmbed（可被 retryObsidian 重试）
+                    var embedName = item.embed;
+                    if (!embedName && /^\^/.test(item.sub)) {
+                        // 自引用块嵌入 ![[#^id]]：克隆本文已挂锚点的块
+                        var bid0 = item.sub.slice(1).replace(/\u2011/g, '-').replace(/[^\w-]/g, '');
+                        var blk0 = bid0 ? root.querySelector('[data-block-id="' + bid0 + '"]') : null;
+                        var em0 = document.createElement('span');
+                        em0.className = 'ob-embed';
+                        if (blk0) {
+                            var inn0 = document.createElement('div');
+                            inn0.className = 'ob-embed-inner';
+                            inn0.appendChild(blk0.cloneNode(true));
+                            em0.appendChild(inn0);
+                            em0.classList.add('loaded');
+                        } else {
+                            // 未解析嵌入：按 Obsidian 官方样式显示原文链接文本
+                            em0.textContent = '![[' + item.sub + ']]';
+                            em0.title = 'Unresolved embed';
+                            em0.classList.add('ob-embed-missing');
+                        }
+                        frag.appendChild(em0);
+                    } else {
+                        var span = document.createElement('span');
+                        span.className = 'ob-embed';
+                        span.dataset.name = embedName;
+                        if (item.sub) span.dataset.sub = item.sub;
+                        span.textContent = 'Loading embed: ' + embedName + '...';
+                        frag.appendChild(span);
+                        mountEmbed(span, embedName, item.sub);
+                    }
+                } else if (item.link !== undefined) {
+                    var a = document.createElement('a');
+                    a.className = 'ob-link';
+                    if (!item.link && item.sub) {
+                        // 页内定位 [[#标题]] / [[#^块ID|别名]]
+                        a.textContent = item.alias || item.sub.replace(/^\^/, '');
+                        a.href = '#';
+                        a.addEventListener('click', function (e) {
+                            e.preventDefault();
+                            if (!jumpToAnchor(item.sub)) toast('Anchor not found: ' + item.sub);
+                        });
+                        frag.appendChild(a);
+                    } else {
+                        var target = findNote(item.link);
+                        a.textContent = item.alias || item.link;
+                        a.dataset.link = item.link;
+                        if (item.sub) a.dataset.sub = item.sub;
+                        if (!target && /\.pdf$/i.test(item.link)) {
+                            // PDF 链接：树内找到 → 打开阅读器（#page=N 直达页）；找不到按未解析处理
+                            var pdfPath = findAsset(item.link);
+                            if (pdfPath) {
+                                var pg = /^page=(\d+)$/i.exec((item.sub || '').trim());
+                                a.title = 'Open PDF: ' + item.link;
+                                a.href = '#';
+                                a.addEventListener('click', function (e) {
+                                    e.preventDefault();
+                                    openPdf(pdfPath, pg ? parseInt(pg[1], 10) : 1);
+                                });
+                                frag.appendChild(a);
+                                return;
+                            }
+                        }
+                        if (target) {
+                            // 用完整路径做 hash（encodeURI 保留斜杠），无 ID 文章也能直达
+                            a.href = '#' + encodeURI(target);
+                            a.title = target;
+                            a.dataset.path = target;
+                            if (item.sub) {
+                                // 跨笔记定位 [[笔记#标题/#^块]]：目标文章渲染完成后滚动到位
+                                a.addEventListener('click', function () { window._pendingAnchor = item.sub; });
+                            }
+                        } else {
+                            a.classList.add('ob-link-missing');
+                            a.title = 'Note not found: ' + item.link;
+                        }
+                        frag.appendChild(a);
+                    }
+                } else if (item.tag) {
+                    var t = document.createElement('a');
+                    t.className = 'ob-tag';
+                    t.textContent = '#' + item.tag;
+                    t.dataset.tag = item.tag;
+                    t.href = '#tag=' + item.tag;
+                    t.addEventListener('click', function (e) {
+                        e.preventDefault();
+                        // 打开搜索并填入标签
+                        openSearch();
+                        searchInput.value = '#' + item.tag;
+                        renderSearch('#' + item.tag);
+                    });
+                    frag.appendChild(document.createTextNode(item.leading || ''));
+                    frag.appendChild(t);
+                }
+            });
+            textNode.parentNode.replaceChild(frag, textNode);
+        });
+        // 脚注引用点击：滚动到对应定义（不能用 href 锚点——hash 变化会触发文章路由 handleHash）
+        root.querySelectorAll('sup.fn-ref[data-fnid]').forEach(function (s) {
+            s.addEventListener('click', function () {
+                var id = s.dataset.fnid;
+                var def = null;
+                root.querySelectorAll('.fn-def[data-fnid]').forEach(function (d) {
+                    if (!def && d.dataset.fnid === id) def = d;
+                });
+                if (def) scrollMdTo(def);
+            });
+        });
+        renderBacklinks();
+    }
+    // 获取笔记的 ID
+    function getDocId(path) {
+        for (var k in (window._docMap || {})) {
+            if (window._docMap[k] === path) return k;
+        }
+        return '';
+    }
+    // 加载嵌入内容（name 支持块引用 sub=^id：只保留被引用的块）
+    function loadEmbed(el, name, sub) {
+        var path = findNote(name);
+        if (!path) {
+            el.textContent = '![[' + name + (sub || '') + ']]';
+            el.title = 'Unresolved embed';
+            el.classList.add('ob-embed-missing');
+            return;
+        }
+        api('/api/file?path=' + encodeURIComponent(path)).then(function (data) {
+            var html = mdToHtml(data.content);
+            // 去掉第一个 h1
+            var tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            var h1 = tmp.querySelector('h1');
+            if (h1) h1.remove();
+            applyBlockIds(tmp);
+            // 块引用嵌入 ![[笔记#^id]]：整篇渲染后只保留被引用的块
+            if (sub && sub.charAt(0) === '^') {
+                var bid = sub.slice(1).replace(/[^\w-]/g, '');
+                var blk = bid ? tmp.querySelector('[data-block-id="' + bid + '"]') : null;
+                tmp.innerHTML = '';
+                if (blk) tmp.appendChild(blk);
+                else {
+                    el.textContent = '![[' + name + sub + ']]';
+                    el.title = 'Block not found';
+                    el.classList.add('ob-embed-missing');
+                    return;
+                }
+            }
+            // 嵌入内容代码高亮
+            try {
+                tmp.querySelectorAll('pre code').forEach(function (el) {
+                    hljs.highlightElement(el);
+                });
+            } catch (e) {}
+            el.innerHTML = '';
+            var inner = document.createElement('div');
+            inner.className = 'ob-embed-inner';
+            inner.innerHTML = tmp.innerHTML;
+            el.appendChild(inner);
+            el.classList.add('loaded');
+        }).catch(function () {
+            el.textContent = 'Embed failed: ' + name;
+            el.classList.add('ob-embed-missing');
+        });
+    }
+    // 渲染反向链接（被谁引用）
+    function renderBacklinks() {
+        var wrap = $('backlinks');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        wrap.style.display = 'none';   // 构建期间隐藏，避免插入时触发颜色过渡
+        if (!state.path) return;
+        var currentName = state.path.split('/').pop().replace(/^\d+-/, '').replace(/\.md$/i, '');
+        var currentId = getDocId(state.path);
+        var refs = [];
+        var map = window._docMap || {};
+        for (var k in map) {
+            var p = map[k];
+            if (p === state.path) continue;
+            var base = p.split('/').pop().replace(/^\d+-/, '').replace(/\.md$/i, '');
+            // 简化：加载每篇笔记内容检查是否引用当前笔记（异步，笔记少可接受）
+            refs.push({ path: p, name: base, id: k });
+        }
+        // 逐个检查引用，并记录引用上下文片段
+        var checked = 0;
+        var found = [];
+        refs.forEach(function (ref) {
+            api('/api/file?path=' + encodeURIComponent(ref.path)).then(function (data) {
+                var c = data.content || '';
+                var idx = c.indexOf('[[' + currentName + ']]');
+                if (idx === -1) idx = c.indexOf('[[' + currentId + ']]');
+                if (idx > -1) {
+                    ref.excerpt = c.slice(Math.max(0, idx - 30), idx + 30 + currentName.length + 4).replace(/\n/g, ' ').trim();
+                    found.push(ref);
+                }
+                checked++;
+                if (checked >= refs.length) showBacklinks(found, wrap);
+            }).catch(function () {
+                checked++;
+                if (checked >= refs.length) showBacklinks(found, wrap);
+            });
+        });
+        if (!refs.length) showBacklinks(found, wrap);
+    }
+    function showBacklinks(found, wrap) {
+        if (!found.length) {
+            wrap.style.display = '';
+            return;
+        }
+        // 头部：标题
+        var head = document.createElement('div');
+        head.className = 'backlinks-head';
+        var title = document.createElement('span');
+        title.className = 'backlinks-title';
+        title.textContent = 'Backlinks';
+        head.appendChild(title);
+        wrap.appendChild(head);
+        // 列表：每条 = 笔记名 + 引用上下文
+        var list = document.createElement('div');
+        list.className = 'backlinks-list';
+        found.forEach(function (ref) {
+            var a = document.createElement('a');
+            a.className = 'backlinks-item';
+            // 用完整路径做 hash（encodeURI 保留斜杠），无 ID 文章也能直达
+            a.href = '#' + encodeURI(ref.path);
+            a.dataset.path = ref.path;
+            var name = document.createElement('span');
+            name.className = 'bl-name';
+            name.textContent = ref.name;
+            a.appendChild(name);
+            if (ref.excerpt) {
+                var ex = document.createElement('span');
+                ex.className = 'bl-excerpt';
+                ex.textContent = ref.excerpt;
+                a.appendChild(ex);
+            }
+            list.appendChild(a);
+        });
+        wrap.appendChild(list);
+        // 内容构建完成后再显示（避免插入时颜色过渡闪烁）
+        wrap.style.display = '';
+    }
+
+    /* ---------- 搜索功能（见下方） ---------- */
+    // （编辑/余额/上传功能已随二层顶部栏移除）
+
+    /* ---------- 滚动时隐藏/显示第一层导航栏 ---------- */
+    // 方向判断：向下滚动隐藏、向上滚动显示
+    // 切换后重置 lastY（padding 变化会改变 scrollHeight/scrollTop，必须校准基准）
+    // PIN_NAVBAR：后台偏好设置开启时导航栏始终可见，跳过滚动隐藏逻辑
+    var navWrap = $('nav-wrap');
+    var mainEl = $('main');
+    var contentEl = $('content');
+    var lastY = 0;
+    var topHidden = false;
+    function setTopHidden(hidden) {
+        if (hidden === topHidden) return;
+        topHidden = hidden;
+        navWrap.classList.toggle('hidden', hidden);
+        mainEl.classList.toggle('hide-top', hidden);
+        lastY = contentEl.scrollTop;   // 校准基准，防止突变干扰方向判断
+    }
+    contentEl.addEventListener('scroll', function () {
+        if (window.PIN_NAVBAR) { lastY = contentEl.scrollTop; return; }
+        var y = contentEl.scrollTop;
+        var delta = y - lastY;
+        var maxY = contentEl.scrollHeight - contentEl.clientHeight;
+        // 顶部兜底：scrollTop 接近 0 时强制显示一层（猛拽回顶部也能拉回来）
+        if (y < 10) {
+            setTopHidden(false);
+            lastY = y;
+            return;
+        }
+        // 死区：滚动距离小于 6px 不判断（过滤微抖）
+        if (Math.abs(delta) < 6) { lastY = y; return; }
+        if (delta > 0) {
+            // 向下滚：隐藏（贴底 60px 内不隐藏，避免贴底抖动）
+            if (maxY - y < 60) { lastY = y; return; }
+            setTopHidden(true);
+        } else {
+            // 向上滚：显示（不受底部限制）
+            setTopHidden(false);
+        }
+        lastY = y;
+    });
+
+    /* ---------- 顶部导航 ---------- */
+    // logo 点击：回到主页。非首页路径（文章/图谱）或带 hash 时整页跳转 '/'（最可靠的“刷新到主页”）；已在主页则滚回顶部
+    $('vp-logo').addEventListener('click', function () {
+        if (location.pathname !== '/' || location.hash) {
+            location.href = '/';
+            return;
+        }
+        $('md-view').style.display = 'none';
+        hideSpecialViews();  // 清掉可能残留的 PDF/画布/图谱（互斥）
+        $('doc-wrap').style.display = 'none';
+        renderHome();
+        $('empty-state').style.display = 'none';
+        $('content').scrollTop = 0;
+    });
+    // 主题切换（日间/夜间，localStorage 记忆）
+    function applyTheme(dark) {
+        // PDF 阅读器保持白纸不反色（Obsidian 同款），主题切换走通用逻辑
+        document.documentElement.classList.toggle('dark', dark);
+        try { localStorage.setItem('vp-theme', dark ? 'dark' : 'light'); document.cookie = 'vp-theme=' + (dark ? 'dark' : 'light') + '; path=/'; } catch (e) {}
+    }
+    try {
+        var savedTheme = localStorage.getItem('vp-theme');
+        if (savedTheme === 'dark') applyTheme(true);
+    } catch (e) {}
+    // Graph View：/graph 知识图谱（SVG 力导向，零依赖；?dir= 限定目录，节点点击打开文章）
+    var graphView = $('graph-view');
+    var graphInfo = $('graph-info');
+    var graphSvg = $('graph-svg');
+    var graphWrap = $('graph-canvas-wrap');
+    var graphEmpty = $('graph-empty');
+    var GNS = 'http://www.w3.org/2000/svg';
+    function openGraph() {
+        try { setDrawer(false); } catch (e) {}
+        try { setTopHidden(false); } catch (e) {}  // 图谱 fixed 定位不随滚动：强制显示顶栏（否则上方留 56px 空档、图谱贴不到顶栏）
+        // 地址栏同步为 /graph（可分享/刷新保持图谱页）
+        try { history.pushState(null, '', '/graph'); } catch (e) {}
+        // Graph 是独立页面：隐藏文章/首页容器，图谱铺满内容区（不套文章格式）
+        hideSpecialViews();
+        $('archive-view').style.display = 'none';
+        $('doc-wrap').style.display = 'none';
+        var gtp = $('toc-panel'); if (gtp) gtp.style.display = 'none';
+        var ghtp = $('home-toc-panel'); if (ghtp) ghtp.style.display = 'none';  // 右轨留白（否则首页目录漏到图谱页）
+        graphView.style.display = 'flex';
+        if (window.console) console.log('GRAPH OPENED');
+        loadGraph();
+    }
+    function loadGraph() {
+        fetch('/api/graph').then(function (r) { return r.json(); }).then(function (d) {
+            if (!d.ok) return;
+            try {
+                renderGraph(d.nodes || [], d.links || []);
+            } catch (err) {
+                graphEmpty.textContent = 'Graph error: ' + (err && err.message ? err.message : err);
+                graphEmpty.style.display = 'flex';
+                if (window.console) console.error('graph:', err);
+            }
+        }).catch(function (err) {
+            graphEmpty.textContent = 'Graph load error: ' + (err && err.message ? err.message : err);
+            graphEmpty.style.display = 'flex';
+        });
+    }
+    // Quartz 风格力导向图：目录着色 + 节点大小按度数 + hover 高亮邻居 + 缩放/平移/节点拖拽 + 同目录弱链接聚类
+    var GRAPH_PALETTE = ['#3451b2', '#e05d44', '#2f9e44', '#e67700', '#7048e8', '#0b7285', '#c2255c', '#5f3dc4', '#099268', '#d6336c'];
+    var GRAPH_DARK_PALETTE = ['#a8b1ff', '#ffa8a8', '#8ce99a', '#ffc078', '#b197fc', '#66d9e8', '#faa2c1', '#d0bfff', '#63e6be', '#ff8787'];
+    var graphColors = {};
+    var graphTransform = { x: 0, y: 0, k: 1 };
+    var graphNodes = [], graphLinks = [];
+    var graphSvgG = null;
+    function renderGraph(nodes, links) {
+        graphNodes = nodes; graphLinks = links;
+        graphSvg.innerHTML = '';
+        graphInfo.textContent = nodes.length + ' articles · ' + links.length + ' links';
+        graphEmpty.style.display = nodes.length ? 'none' : 'flex';
+        if (!nodes.length) return;
+        // 画布尺寸（视口兜底）
+        W = graphWrap.clientWidth || (window.innerWidth - 96);
+        H = graphWrap.clientHeight || (window.innerHeight - 120);
+        cx = W / 2; cy = H / 2;
+        // 目录颜色分配
+        var dirs = {};
+        nodes.forEach(function (n) { if (n.dir) dirs[n.dir] = true; });
+        var dirKeys = Object.keys(dirs);
+        dirKeys.forEach(function (d, i) {
+            graphColors[d] = document.documentElement.classList.contains('dark') ? GRAPH_DARK_PALETTE[i % GRAPH_DARK_PALETTE.length] : GRAPH_PALETTE[i % GRAPH_PALETTE.length];
+        });
+        // 度数（节点大小 + 标签分级显示用：缩小时只标注高连接度的枢纽文章，避免满屏糊字）
+        var degree = {};
+        nodes.forEach(function (n) { degree[n.id] = 0; });
+        links.forEach(function (l) {
+            degree[l.source] = (degree[l.source] || 0) + 1;
+            degree[l.target] = (degree[l.target] || 0) + 1;
+        });
+        nodes.forEach(function (n) { n.deg = degree[n.id] || 0; });
+        // 初始位置：目录分区（同目录节点初始聚在同一扇区——布局成簇、避免对称死锁）
+        var dirGroups = {};
+        nodes.forEach(function (n) { (dirGroups[n.dir] = dirGroups[n.dir] || []).push(n); });
+        var dKeys = Object.keys(dirGroups);
+        var sector = 0;
+        dKeys.forEach(function (d) {
+            var arr = dirGroups[d];
+            var ang = (sector / Math.max(1, dKeys.length)) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+            sector++;
+            var rad = Math.min(W, H) * 0.38;
+            var ccx = cx + Math.cos(ang) * rad, ccy = cy + Math.sin(ang) * rad;
+            arr.forEach(function (n, i) {
+                var a = (i / Math.max(1, arr.length)) * Math.PI * 2;
+                var r = Math.min(110, Math.sqrt(arr.length) * 24);
+                n.x = ccx + Math.cos(a) * r + (Math.random() - 0.5) * 30;
+                n.y = ccy + Math.sin(a) * r + (Math.random() - 0.5) * 30;
+                n.vx = 0; n.vy = 0; n.fixed = false;
+            });
+        });
+        // 同目录弱吸引对（预构建——stepOnce 每帧用，聚类但不画线）
+        clusterPairs = [];
+        dKeys.forEach(function (d) {
+            var arr = dirGroups[d];
+            for (var i = 0; i < arr.length; i++) {
+                for (var j = i + 1; j < arr.length; j++) {
+                    clusterPairs.push([arr[i].id, arr[j].id]);
+                }
+            }
+        });
+        // 快速初排（45 轮同步，带 alpha 衰减——避免打开时长时间空白，又保留可见的舒展动画）
+        simAlpha = 1; simAlphaTarget = 0;
+        for (var iter = 0; iter < 45; iter++) {
+            stepOnce();
+            simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
+        }
+        // 渲染 SVG（缓存元素引用——每帧直接更新，不 querySelectorAll）
+        graphSvgG = document.createElementNS(GNS, 'g');
+        graphSvg.appendChild(graphSvgG);
+        simLineEls = [];
+        linkAdj = {};
+        links.forEach(function (l, li) {
+            (linkAdj[l.source] = linkAdj[l.source] || []).push(li);
+            (linkAdj[l.target] = linkAdj[l.target] || []).push(li);
+            var a = nodes[l.source], b = nodes[l.target];
+            if (!a || !b) return;
+            var line = document.createElementNS(GNS, 'line');
+            line.setAttribute('class', 'graph-link');
+            line.setAttribute('data-s', l.source);
+            line.setAttribute('data-t', l.target);
+            line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+            line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+            graphSvgG.appendChild(line);
+            simLineEls.push(line);
+        });
+        simEls = [];
+        nodes.forEach(function (n) {
+            var r = (5 + Math.min(1.2, (degree[n.id] || 0) * 0.25)) * 0.7;  // 整体缩小 30%：孤立 ≈3.5、有链接最多 ≈4.3
+            n.r = r;
+            var node = document.createElementNS(GNS, 'g');
+            node.setAttribute('class', 'graph-node');
+            node.setAttribute('data-id', n.id);
+            var c = document.createElementNS(GNS, 'circle');
+            c.setAttribute('r', r);
+            c.setAttribute('fill', graphColors[n.dir] || '#888');
+            node.appendChild(c);
+            var t = document.createElementNS(GNS, 'text');
+            t.setAttribute('text-anchor', 'middle');
+            t.setAttribute('class', 'graph-label');
+            t.setAttribute('opacity', window.GRAPH_SHOW_LABELS ? '1' : '0');  // 后台开关：默认显示 / hover 显示
+            // 屏幕等大：transform 平移到节点下方再反缩放（applyGraphTransform 每次缩放同步更新）
+            t.setAttribute('transform', 'translate(0,' + (r + 11) + ') scale(' + (1 / graphTransform.k) + ')');
+            t.textContent = n.name;  // 完整名字（hover 展开不省略）
+            node.appendChild(t);
+            node.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                // 拖拽过的节点不跳转（拖拽后浏览器仍会触发 click）
+                if (n._dragged) { n._dragged = false; return; }
+                selectFile({ path: n.path });
+            });
+            // hover：显示标签 + 高亮邻居（class 切换——轻量）
+            node.addEventListener('mouseenter', function () { t.setAttribute('opacity', '1'); highlightNode(n.id); });
+            node.addEventListener('mouseleave', function () { t.setAttribute('opacity', '0'); highlightNode(-1); });
+            // 节点拖拽：锁定位置 + alphaTarget=0.3 再加热（邻居实时跟随，松手自然冷却）；
+            // 移动超 5px 视为拖拽（抑制 click 跳转）
+            node.addEventListener('pointerdown', function (ev) {
+                ev.preventDefault(); ev.stopPropagation();
+                var svgRect = graphSvg.getBoundingClientRect();
+                var sx = ev.clientX, sy = ev.clientY;
+                n.fixed = true;
+                n._dragged = false;
+                simDragging = true;
+                heatSim(simAlpha < 0.05 ? 0.15 : null, 0.3);  // 冷图拖拽快速起热；热图保持当前能量
+                highlightNode(n.id);  // 拖拽聚焦：被拖节点+相连的线/节点高亮，其余淡化（与 hover 一致，手机也生效）
+                function move(ev2) {
+                    if (!n._dragged && (Math.abs(ev2.clientX - sx) + Math.abs(ev2.clientY - sy) > 5)) n._dragged = true;
+                    // 直接写坐标——渲染由常驻 sim tick 完成（每帧全图更新，邻居丝滑跟随）
+                    n.x = (ev2.clientX - svgRect.left - graphTransform.x) / graphTransform.k;
+                    n.y = (ev2.clientY - svgRect.top - graphTransform.y) / graphTransform.k;
+                }
+                function up() {
+                    n.fixed = false;
+                    simDragging = false;
+                    simAlphaTarget = 0;  // 松手 → 自然冷却收敛
+                    highlightNode(-1);  // 恢复全部亮度
+                    window.removeEventListener('pointermove', move);
+                    window.removeEventListener('pointerup', up);
+                }
+                window.addEventListener('pointermove', move);
+                window.addEventListener('pointerup', up);
+            });
+            node.style.transform = 'translate(' + n.x + 'px,' + n.y + 'px)';
+            graphSvgG.appendChild(node);
+            simEls.push(node);
+        });
+        // 缩放（滚轮，rAF 节流）+ 平移（空白拖拽）
+        graphSvg.addEventListener('wheel', function (ev) {
+            ev.preventDefault();
+            var rect = graphSvg.getBoundingClientRect();
+            var px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+            var k2 = graphTransform.k * (ev.deltaY < 0 ? 1.15 : 0.87);
+            k2 = Math.max(0.2, Math.min(5, k2));
+            graphTransform.x = px - (px - graphTransform.x) * (k2 / graphTransform.k);
+            graphTransform.y = py - (py - graphTransform.y) * (k2 / graphTransform.k);
+            graphTransform.k = k2;
+            applyGraphTransform();
+        }, { passive: false });
+        var panning = null, panPending = false;
+        var pointers = {}, lastPinchDist = 0;
+        graphSvg.addEventListener('pointerdown', function (ev) {
+            pointers[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+            var nP = Object.keys(pointers).length;
+            if (nP >= 2) {
+                panning = null;  // 双指 = 缩放模式，停止平移
+                var ids = Object.keys(pointers);
+                var p1 = pointers[ids[0]], p2 = pointers[ids[1]];
+                lastPinchDist = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+            } else if (nP === 1 && ev.target === graphSvg) {
+                panning = { x: ev.clientX, y: ev.clientY, ax: 0, ay: 0 };
+            }
+        });
+        window.addEventListener('pointermove', function (ev) {
+            if (pointers[ev.pointerId]) { pointers[ev.pointerId].x = ev.clientX; pointers[ev.pointerId].y = ev.clientY; }
+            var ids = Object.keys(pointers);
+            // 双指：pinch 缩放（围绕两指中点——Obsidian 同款）
+            if (ids.length >= 2 && lastPinchDist > 0) {
+                var p1 = pointers[ids[0]], p2 = pointers[ids[1]];
+                var dist = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+                var rect = graphSvg.getBoundingClientRect();
+                var mx = (p1.x + p2.x) / 2 - rect.left, my = (p1.y + p2.y) / 2 - rect.top;
+                var k2 = graphTransform.k * (dist / lastPinchDist);
+                k2 = Math.max(0.2, Math.min(5, k2));
+                graphTransform.x = mx - (mx - graphTransform.x) * (k2 / graphTransform.k);
+                graphTransform.y = my - (my - graphTransform.y) * (k2 / graphTransform.k);
+                graphTransform.k = k2;
+                lastPinchDist = dist;
+                applyGraphTransform();
+                return;
+            }
+            if (!panning) return;
+            panning.ax += ev.clientX - panning.x;  // 单指平移（累积位移——rAF 合并）
+            panning.ay += ev.clientY - panning.y;
+            panning.x = ev.clientX; panning.y = ev.clientY;
+            if (panPending) return;
+            panPending = true;
+            requestAnimationFrame(function () {
+                panPending = false;
+                graphTransform.x += panning.ax;
+                graphTransform.y += panning.ay;
+                panning.ax = 0; panning.ay = 0;
+                applyGraphTransform();
+            });
+        });
+        function onPtrUp(ev) {
+            delete pointers[ev.pointerId];
+            if (Object.keys(pointers).length < 2) lastPinchDist = 0;
+            if (Object.keys(pointers).length === 0) panning = null;
+        }
+        window.addEventListener('pointerup', onPtrUp);
+        window.addEventListener('pointercancel', onPtrUp);
+        applyGraphTransform();
+        // 满能量开局：可见的有机舒展动画（alpha 1→0 约 3 秒缓缓收敛静止）
+        heatSim(1, 0);
+    }
+    // ---- 力导向模拟（Quartz/Obsidian 丝滑感的核心：d3-force 同款 alpha 能量衰减驱动）----
+    // 每帧 alpha 向 target 衰减（约 3 秒从 1 → 0），所有力乘 alpha——开局有生命力的舒展动画、缓缓收敛静止；
+    // 拖拽时抬高 alphaTarget=0.3 再加热（邻居实时跟随），松手后自然冷却。不再用"最多 N 帧硬停"的土办法
+    var simRaf = null;
+    var simAlpha = 0, simAlphaTarget = 0, simDragging = false;
+    var ALPHA_DECAY = 1 - Math.pow(0.001, 1 / 300);  // ≈0.023/帧（d3 默认曲线：300 帧衰减到千分之一）
+    var simEls = [], simLineEls = [], clusterPairs = [], linkAdj = {};
+    var W = 800, H = 500, cx = 400, cy = 250;
+    function stepOnce() {
+        var nodes = graphNodes;
+        if (!nodes.length || simAlpha <= 0) return;
+        var a = simAlpha;
+        var REP = 3300, SPRING = 0.06, REST = 105;
+        // 多体斥力（O(n²) 直接累加——vault 级节点量最优解，无需四叉树）
+        for (var i = 0; i < nodes.length; i++) {
+            if (nodes[i].fixed) continue;
+            for (var j = i + 1; j < nodes.length; j++) {
+                if (nodes[j].fixed) continue;
+                var dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+                var d2 = dx * dx + dy * dy + 1;
+                var f = (REP / d2) * a;
+                var d = Math.sqrt(d2);
+                nodes[i].vx += (dx / d) * f; nodes[i].vy += (dy / d) * f;
+                nodes[j].vx -= (dx / d) * f; nodes[j].vy -= (dy / d) * f;
+            }
+        }
+        // 链接弹簧（胡克定律：拉到理想长度 REST）
+        graphLinks.forEach(function (l) {
+            var an = nodes[l.source], bn = nodes[l.target];
+            if (!an || !bn) return;
+            var dx = bn.x - an.x, dy = bn.y - an.y;
+            var d = Math.sqrt(dx * dx + dy * dy) || 1;
+            var f = (d - REST) * SPRING * a;
+            if (!an.fixed) { an.vx += (dx / d) * f; an.vy += (dy / d) * f; }
+            if (!bn.fixed) { bn.vx -= (dx / d) * f; bn.vy -= (dy / d) * f; }
+        });
+        // 同目录弱吸引（聚类不画线——距离 130 内互相靠近）
+        for (var cp = 0; cp < clusterPairs.length; cp++) {
+            var ca = nodes[clusterPairs[cp][0]], cb = nodes[clusterPairs[cp][1]];
+            if (!ca || !cb || ca.fixed || cb.fixed) continue;
+            var cdx = cb.x - ca.x, cdy = cb.y - ca.y;
+            var cd = Math.sqrt(cdx * cdx + cdy * cdy) || 1;
+            if (cd > 140) continue;
+            var cf = (cd - 140) * 0.003 * a;
+            ca.vx += (cdx / cd) * cf; ca.vy += (cdy / cd) * cf;
+            cb.vx -= (cdx / cd) * cf; cb.vy -= (cdy / cd) * cf;
+        }
+        // 积分：中心引力 + 阻尼（velocityDecay 0.6=d3 默认）+ 位移
+        nodes.forEach(function (n) {
+            if (n.fixed) return;
+            n.vx += (cx - n.x) * 0.02 * a;
+            n.vy += (cy - n.y) * 0.02 * a;
+            n.vx *= 0.6; n.vy *= 0.6;
+            // 安全钳制（正常物理下到不了这个值——只防极端情况弹飞）
+            if (n.vx > 12) n.vx = 12; if (n.vx < -12) n.vx = -12;
+            if (n.vy > 12) n.vy = 12; if (n.vy < -12) n.vy = -12;
+            n.x += n.vx; n.y += n.vy;
+            // 软边界：越界温和拉回（不硬反弹）
+            if (n.x < 20) n.vx += (20 - n.x) * 0.08 * a;
+            if (n.x > W - 20) n.vx -= (n.x - (W - 20)) * 0.08 * a;
+            if (n.y < 20) n.vy += (20 - n.y) * 0.08 * a;
+            if (n.y > H - 20) n.vy -= (n.y - (H - 20)) * 0.08 * a;
+            if (n.x < 5) n.x = 5;
+            if (n.x > W - 5) n.x = W - 5;
+            if (n.y < 5) n.y = 5;
+            if (n.y > H - 5) n.y = H - 5;
+        });
+        // 位置更新由调用方负责（tick/move 用 updateMovingEls 轻量更新；renderGraph 末尾用 updateEls 全量一次）
+    }
+    function updateMovingEls() {
+        // 拖拽联动：只更新在移动的节点（其余静止跳过——轻量）；线全量更新（数量少）
+        for (var i = 0; i < simEls.length; i++) {
+            var n = graphNodes[i];
+            if (!n) continue;
+            if (n.fixed || Math.abs(n.vx) > 0.08 || Math.abs(n.vy) > 0.08) {
+                // CSS transform（合成器 GPU 加速——比 SVG 属性更新丝滑；svg 无 viewBox，CSS px = SVG 单位）
+                simEls[i].style.transform = 'translate(' + n.x.toFixed(1) + 'px,' + n.y.toFixed(1) + 'px)';
+            }
+        }
+        for (var j = 0; j < simLineEls.length; j++) {
+            var l = graphLinks[j];
+            var a = graphNodes[l.source], b = graphNodes[l.target];
+            if (!a || !b) continue;
+            simLineEls[j].setAttribute('x1', a.x.toFixed(1));
+            simLineEls[j].setAttribute('y1', a.y.toFixed(1));
+            simLineEls[j].setAttribute('x2', b.x.toFixed(1));
+            simLineEls[j].setAttribute('y2', b.y.toFixed(1));
+        }
+    }
+    function updateEls() {
+        // 直接索引：simEls[i] 对应 graphNodes[i]（渲染时同序创建）；线同理——每帧零对象分配
+        for (var i = 0; i < simEls.length; i++) {
+            var n = graphNodes[i];
+            if (!n) continue;
+            simEls[i].style.transform = 'translate(' + n.x.toFixed(1) + 'px,' + n.y.toFixed(1) + 'px)';
+        }
+        for (var j = 0; j < simLineEls.length; j++) {
+            var l = graphLinks[j];
+            var a = graphNodes[l.source], b = graphNodes[l.target];
+            if (!a || !b) continue;
+            simLineEls[j].setAttribute('x1', a.x.toFixed(1));
+            simLineEls[j].setAttribute('y1', a.y.toFixed(1));
+            simLineEls[j].setAttribute('x2', b.x.toFixed(1));
+            simLineEls[j].setAttribute('y2', b.y.toFixed(1));
+        }
+    }
+    function resumeSim() {
+        if (simRaf) return;
+        function tick() {
+            simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
+            // 能量自然耗尽 → 停帧（拖拽中 simDragging=true 保持运转）
+            if (!simDragging && simAlphaTarget === 0 && simAlpha < 0.002) {
+                simAlpha = 0;
+                simRaf = null;
+                return;
+            }
+            stepOnce();
+            updateMovingEls();
+            simRaf = requestAnimationFrame(tick);
+        }
+        simRaf = requestAnimationFrame(tick);
+    }
+    function heatSim(alpha, target) {
+        if (alpha != null && alpha > simAlpha) simAlpha = alpha;
+        if (target != null) simAlphaTarget = target;
+        resumeSim();
+    }
+    function applyGraphTransform() {
+        if (!graphSvgG) return;
+        var k = graphTransform.k;
+        graphSvgG.setAttribute('transform', 'translate(' + graphTransform.x + ',' + graphTransform.y + ') scale(' + k + ')');
+        // 标签两件事（Obsidian 同款观感）：
+        // ① 屏幕等大——反缩放 1/k（钳制 0.7~2.2），缩放时字号不随世界坐标缩水/爆炸
+        // ② 阈值显示——k≥0.75 全部显示，缩小后全部隐藏（无例外，页面干净）
+        var s = Math.min(2.2, Math.max(0.7, 1 / k));
+        for (var i = 0; i < simEls.length; i++) {
+            var txt = simEls[i].lastChild;  // text 是 node g 的最后一个子元素
+            if (!txt) continue;
+            var n = graphNodes[i];
+            txt.setAttribute('transform', 'translate(0,' + ((n.r || 4) + 11) + ') scale(' + s + ')');
+            if (window.GRAPH_SHOW_LABELS) {
+                txt.setAttribute('opacity', k >= 0.75 ? '1' : '0');
+            }
+        }
+    }
+    // hover 高亮邻居（class 切换：邻居亮、其余淡化）
+    function highlightNode(id) {
+        // 用缓存数组（simEls/simLineEls 与 graphNodes/graphLinks 同序）——不查 DOM
+        if (!graphSvgG) return;
+        var neighbors = {};
+        if (id >= 0) {
+            graphLinks.forEach(function (l) {
+                if (l.source == id || l.target == id) { neighbors[l.source] = 1; neighbors[l.target] = 1; }
+            });
+        }
+        for (var i = 0; i < simEls.length; i++) {
+            var n = graphNodes[i];
+            if (!n) continue;
+            var on = (id < 0 || n.id == id || neighbors[n.id]);
+            simEls[i].classList.toggle('graph-dim', !on);
+        }
+        for (var j = 0; j < simLineEls.length; j++) {
+            var l = graphLinks[j];
+            var on2 = (id < 0 || (neighbors[l.source] && neighbors[l.target]));
+            simLineEls[j].classList.toggle('graph-link-dim', !on2);
+            simLineEls[j].classList.toggle('graph-link-hot', id >= 0 && on2);  // hover 相关线变粗变亮
+        }
+    }
+    // SSR 直达：/graph → 直接打开图谱视图（try/catch 防御：任何前置错误不阻塞图谱）
+    if (window.SSR_GRAPH) { try { openGraph(); } catch (e) {} }
+
+    /* ===== Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → 官方 exportToSvg 引擎，手写 SVG 兜底） ===== */
+    function escapeXml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    var exAscent = 0.9;  // Virgil 字形 ascent 比例（canvas 实测缓存——不依赖 dominant-baseline，所有浏览器一致）
+    // 官方渲染器懒加载：只有绘画页才注入脚本（其余页面零开销）。
+    // 完整官方包 @excalidraw/excalidraw UMD（与 Obsidian 插件同源渲染管线）：React UMD → ReactDOM UMD → ExcalidrawLib，
+    // 全局名 window.ExcalidrawLib。EXCALIDRAW_ASSET_PATH 指向本地 vendor 字体，导出的 @font-face 落在同源路径
+    var exLibPromise = null;
+    function loadExcalidrawLib() {
+        if (window.ExcalidrawLib && window.ExcalidrawLib.exportToSvg) return Promise.resolve();
+        if (!exLibPromise) {
+            exLibPromise = new Promise(function (res, rej) {
+                if (!window.EXCALIDRAW_ASSET_PATH) window.EXCALIDRAW_ASSET_PATH = '/assets/dist/';
+                var urls = ['/assets/react.production.min.js', '/assets/react-dom.production.min.js', '/assets/excalidraw.production.min.js'];
+                (function next(i) {
+                    if (i >= urls.length) {
+                        (window.ExcalidrawLib && window.ExcalidrawLib.exportToSvg) ? res() : rej(new Error('ExcalidrawLib load failed'));
+                        return;
+                    }
+                    var sc = document.createElement('script');
+                    sc.src = urls[i];
+                    sc.onload = function () { next(i + 1); };
+                    sc.onerror = function () { exLibPromise = null; rej(new Error('script load failed: ' + urls[i])); };
+                    document.head.appendChild(sc);
+                })(0);
+            });
+        }
+        return exLibPromise;
+    }
+    // 字体码兼容：Obsidian 插件 2.x 新 schema 的字体枚举与本引擎不同（5=Virgil legacy、4=Helvetica）。
+    // 不映射的话未知码会被回落成系统字体（Segoe UI Emoji），字形墨迹偏离基线——视觉上"字母脱离线外"。
+    // 线绑定文字（双击箭头插入的标签）保持原样：官方引擎自带标签定位与蒙版断线（线在字母处挖口，与 Obsidian 一致）
+    var EX_FAMAP = { 4: 2, 5: 1 };
+    function normalizeExcalidrawScene(els) {
+        els.forEach(function (e) {
+            if (e.fontFamily != null && EX_FAMAP[e.fontFamily] != null) e.fontFamily = EX_FAMAP[e.fontFamily];
+        });
+    }
+    // 官方引擎渲染：rough.js 手绘笔画、贝塞尔弯曲箭头、freedraw 笔迹、hachure 填充、绑定标签+蒙版断线全量还原
+    async function renderExcalidrawOfficial(scene, dv) {
+        await loadExcalidrawLib();
+        var els = JSON.parse(JSON.stringify((scene.elements || []).filter(function (e) { return e && !e.isDeleted && e.type !== 'frame'; })));
+        normalizeExcalidrawScene(els);
+        var svg = await window.ExcalidrawLib.exportToSvg({
+            elements: els,
+            appState: { exportBackground: true, viewBackgroundColor: scene.viewBackgroundColor || '#ffffff', exportWithDarkMode: document.documentElement.classList.contains('dark') },
+            files: scene.files || {},
+            exportPadding: 16
+        });
+        // 字体就绪再插入：导出坐标按 Virgil metrics 计算，避免先以回退字体绘制再跳变
+        try { await Promise.race([document.fonts.load('20px Virgil', 'Ag'), new Promise(function (r) { setTimeout(r, 1500); })]); } catch (e) {}
+        // 剥除导出包注入的全部 @font-face 块：内联 SVG 内嵌字体声明在部分浏览器与页面级同名 face 冲突导致
+        // 加载报 network error（实测），且会引用未 vendor 的辅助字体。统一走页面级自托管 Virgil（index.css）
+        var sts = svg.querySelectorAll('style');
+        for (var i = sts.length - 1; i >= 0; i--) {
+            if ((sts[i].textContent || '').indexOf('@font-face') !== -1 && sts[i].parentNode) sts[i].parentNode.removeChild(sts[i]);
+        }
+        svg.removeAttribute('width'); svg.removeAttribute('height');  // 只留 viewBox → .excalidraw-canvas svg 的 max-width:100% 等比缩放
+        svg.style.width = '100%'; svg.style.height = 'auto';
+        dv.innerHTML = '';
+        dv.appendChild(svg);
+    }
+    // 手写兜底渲染（官方包加载失败/导出异常时仍能出图——离线部署场景）：仅支持六种基础元素
+    async function renderExcalidrawFallback(scene, dv) {
+        var els = scene.elements || [];
+        // 等 Virgil 字体加载（文字位置依赖其 metrics），超时 1.5s 兜底
+        try { await Promise.race([document.fonts.load('20px Virgil'), new Promise(function (r) { setTimeout(r, 1500); })]); } catch (e) {}
+        // canvas 实测 Virgil ascent 比例（基线渲染的精确偏移；字体没就绪时 fallback 0.9）
+        try {
+            var cc = document.createElement('canvas'), ctx = cc.getContext('2d');
+            ctx.font = '20px Virgil, sans-serif';
+            var mm = ctx.measureText('Ag');
+            if (mm && mm.actualBoundingBoxAscent) exAscent = mm.actualBoundingBoxAscent / 20;
+        } catch (e) {}
+        // 线文本（bound text）：Excalidraw 把绑定线的文字渲染在线段中点（忽略未吸附的保存坐标——F/I/H/J 错位根因）
+        // 预构建：线 id → 中点（text 侧用 containerId=线 id 反向查找）
+        var lineMid = {};
+        els.forEach(function (a) {
+            if (a.type !== 'arrow' && a.type !== 'line') return;
+            var pts = a.points || [[0, 0], [100, 0]];
+            lineMid[a.id] = {
+                x: (a.x + pts[0][0] + a.x + pts[pts.length - 1][0]) / 2,
+                y: (a.y + pts[0][1] + a.y + pts[pts.length - 1][1]) / 2
+            };
+        });
+        var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+        els.forEach(function (e) {
+            if (e.isDeleted || e.type === 'frame') return;
+            if (e.points && e.points.length) {
+                e.points.forEach(function (p) {
+                    minX = Math.min(minX, e.x + p[0]); maxX = Math.max(maxX, e.x + p[0]);
+                    minY = Math.min(minY, e.y + p[1]); maxY = Math.max(maxY, e.y + p[1]);
+                });
+            } else {
+                minX = Math.min(minX, e.x); minY = Math.min(minY, e.y);
+                maxX = Math.max(maxX, e.x + (e.width || 0)); maxY = Math.max(maxY, e.y + (e.height || 0));
+            }
+        });
+        if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 800; maxY = 600; }
+        var pad = 40, vw = maxX - minX + pad * 2, vh = maxY - minY + pad * 2;
+        var bg = scene.viewBackgroundColor || '#ffffff';
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + (minX - pad) + ' ' + (minY - pad) + ' ' + vw + ' ' + vh + '" style="width:100%;height:auto;background:' + bg + '">';
+        svg += '<defs><marker id="ex-arrow" markerWidth="12" markerHeight="12" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#000000"/></marker></defs>';
+        els.forEach(function (e) {
+            if (e.isDeleted || e.type === 'frame') return;
+            var col = e.strokeColor || '#000';
+            var bgc = e.backgroundColor || 'transparent';
+            var sw = e.strokeWidth || 1;
+            var dash = (e.strokeStyle === 'dashed') ? ' stroke-dasharray="7,5"' : '';
+            var op = (e.opacity != null && e.opacity < 100) ? ' opacity="' + (e.opacity / 100) + '"' : '';
+            if (e.type === 'text') {
+                var fs = e.fontSize || 20;
+                var lines = String(e.text || '').split('\n');
+                var anchor = e.textAlign === 'center' ? 'middle' : (e.textAlign === 'right' ? 'end' : 'start');
+                // 绑定线文字：渲染在线段中点（Excalidraw bound text 引擎行为——替换保存坐标）；自由文字用原坐标
+                var ex = e.x, ey = e.y;
+                var lm = e.containerId ? lineMid[e.containerId] : null;
+                if (lm) { ex = lm.x - (e.width || 0) / 2; ey = lm.y - (e.height || 0) / 2; }
+                var tx = e.textAlign === 'center' ? ex + (e.width || 0) / 2 : (e.textAlign === 'right' ? ex + (e.width || 0) : ex);
+                // y 是文字顶部；基线渲染 = y + ascent*fs（字形顶部 ≈ ey——不依赖 dominant-baseline，全浏览器一致）
+                var baseY = ey + exAscent * fs;
+                var rotT = '';
+                if (e.angle) { var tc = e.x + (e.width || 0) / 2, tc2 = e.y + (e.height || 0) / 2; rotT = ' transform="rotate(' + (e.angle * 57.2958).toFixed(2) + ' ' + tc + ' ' + tc2 + ')"'; }
+                svg += '<text x="' + tx + '" y="' + baseY.toFixed(2) + '" font-size="' + fs + '" fill="' + col + '" font-family="Virgil, Segoe UI Emoji, sans-serif" text-anchor="' + anchor + '"' + rotT + op + '>';
+                for (var li = 0; li < lines.length; li++) {
+                    if (li > 0) svg += '<tspan x="' + tx + '" dy="' + (fs * 1.25) + '">';  // Excalidraw 行高 1.25
+                    svg += escapeXml(lines[li]);
+                    if (li > 0) svg += '</tspan>';
+                }
+                svg += '</text>';
+            } else if (e.type === 'arrow' || e.type === 'line') {
+                var pts = (e.points || [[0, 0], [100, 0]]).map(function (p) { return (e.x + p[0]).toFixed(1) + ',' + (e.y + p[1]).toFixed(1); });
+                var rotL = '';
+                if (e.angle) { var lc = e.x + (e.width || 0) / 2, lc2 = e.y + (e.height || 0) / 2; rotL = ' transform="rotate(' + (e.angle * 57.2958).toFixed(2) + ' ' + lc + ' ' + lc2 + ')"'; }
+                // polyline 全段 points（弯曲箭头还原）+ 箭头 marker（arrow 才有）
+                svg += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + col + '" stroke-width="' + sw + '"' + (e.type === 'arrow' ? ' marker-end="url(#ex-arrow)"' : '') + dash + op + rotL + '/>';
+            } else if (e.type === 'rectangle') {
+                var rx = (e.roundness && e.roundness.type === 'round') ? Math.min(12, (e.roundness.value || 8)) : 0;
+                var rotR = '';
+                if (e.angle) { var rc = e.x + (e.width || 0) / 2, rc2 = e.y + (e.height || 0) / 2; rotR = ' transform="rotate(' + (e.angle * 57.2958).toFixed(2) + ' ' + rc + ' ' + rc2 + ')"'; }
+                svg += '<rect x="' + e.x + '" y="' + e.y + '" width="' + (e.width || 0) + '" height="' + (e.height || 0) + '" fill="' + bgc + '" stroke="' + col + '" stroke-width="' + sw + '" rx="' + rx + '"' + dash + op + rotR + '/>';
+            } else if (e.type === 'ellipse') {
+                var rotE = '';
+                if (e.angle) { var ecx = e.x + (e.width || 0) / 2, ecy = e.y + (e.height || 0) / 2; rotE = ' transform="rotate(' + (e.angle * 57.2958).toFixed(2) + ' ' + ecx + ' ' + ecy + ')"'; }
+                svg += '<ellipse cx="' + (e.x + (e.width || 0) / 2) + '" cy="' + (e.y + (e.height || 0) / 2) + '" rx="' + ((e.width || 0) / 2) + '" ry="' + ((e.height || 0) / 2) + '" fill="' + bgc + '" stroke="' + col + '" stroke-width="' + sw + '"' + dash + op + rotE + '/>';
+            } else if (e.type === 'diamond') {
+                var cx = e.x + (e.width || 0) / 2, cy = e.y + (e.height || 0) / 2;
+                var rotD = '';
+                if (e.angle) { var dc = e.x + (e.width || 0) / 2, dc2 = e.y + (e.height || 0) / 2; rotD = ' transform="rotate(' + (e.angle * 57.2958).toFixed(2) + ' ' + dc + ' ' + dc2 + ')"'; }
+                svg += '<polygon points="' + cx + ',' + e.y + ' ' + (e.x + (e.width || 0)) + ',' + cy + ' ' + cx + ',' + (e.y + (e.height || 0)) + ' ' + e.x + ',' + cy + '" fill="' + bgc + '" stroke="' + col + '" stroke-width="' + sw + '"' + dash + op + rotD + '/>';
+            }
+        });
+        svg += '</svg>';
+        dv.innerHTML = svg;
+    }
+    // 总入口：解码 compressed-json → 官方引擎优先，任何异常回落手写兜底（自身永不抛出——两个调用点都未接 promise）
+    async function renderExcalidraw() {
+        var raw = window.EXCALIDRAW_RAW || '';
+        var m = raw.match(/```compressed-json\s*([\s\S]*?)```/);
+        var dv = $('excalidraw-view');
+        if (!dv) return;
+        if (!m || typeof LZString === 'undefined') { dv.innerHTML = '<p>Excalidraw data not found in this file.</p>'; return; }
+        var scene;
+        try { scene = JSON.parse(LZString.decompressFromBase64(m[1].replace(/\s+/g, ''))); }
+        catch (e) { dv.innerHTML = '<p>Failed to decode drawing: ' + escapeXml(e.message) + '</p>'; return; }
+        try { await renderExcalidrawOfficial(scene, dv); }
+        catch (oe) {
+            try { await renderExcalidrawFallback(scene, dv); }
+            catch (fe) { dv.innerHTML = '<p>Render failed: ' + escapeXml((fe && fe.message) || fe) + '</p>'; return; }
+        }
+        // 视图切换：文章容器显示（excalidraw 在 doc-main 内，正常左中右结构、只占中栏），md 隐藏；
+        // 绘画无目录 → 右轨两个 TOC 面板都隐藏（右栏留空）
+        hideSpecialViews();  // 清掉可能残留的 PDF/Canvas/图谱（互斥）——必须在显示本视图之前
+        dv.style.display = 'block';  // 显示画布容器（初始 display:none——忘了设置会导致空白）
+        $('archive-view').style.display = 'none';
+        $('doc-wrap').style.display = 'flex';
+        var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
+        var htp2 = $('home-toc-panel'); if (htp2) htp2.style.display = 'none';
+        var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
+        var ttl = $('doc-title');
+        if (ttl) ttl.textContent = (window.EXCALIDRAW_PATH || '').split('/').pop().replace(/\.excalidraw\.md$/i, '');
+    }
+    if (window.SSR_EXCALIDRAW) { try { renderExcalidraw(); } catch (e) { if (window.console) console.log('excalidraw err', e); } }
+
+    /* ===== Obsidian Canvas 白板渲染（.canvas：JSON nodes/edges → SVG 画布，配色跟随日夜主题） ===== */
+    // 节点颜色：Obsidian 官方色板 1-6 的近似色值；其余接受 #hex 原样
+    var CV_COLORS = { '1': '#fb464c', '2': '#faa53d', '3': '#ffe100', '4': '#21c95e', '5': '#1db5f5', '6': '#a882ff' };
+    function cvColor(c) {
+        if (c == null) return '';
+        c = String(c);
+        return CV_COLORS[c] || (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(c) ? c : '');
+    }
+    function renderCanvas() {
+        var dv = $('canvas-view'), board = $('canvas-board');
+        if (!dv || !board) return;
+        var data;
+        try { data = JSON.parse(window.CANVAS_JSON || '{}'); }
+        catch (e) { board.innerHTML = '<p style="padding:24px">Invalid canvas file: ' + escapeXml(e.message) + '</p>'; finishCanvasView(); return; }
+        try { renderCanvasScene(data, board); }
+        catch (e) { board.innerHTML = '<p style="padding:24px">Render failed: ' + escapeXml((e && e.message) || e) + '</p>'; }
+        finishCanvasView();
+    }
+    // 视图切换（同 Excalidraw）：白板无目录 → 右轨两个 TOC 面板都隐藏
+    function finishCanvasView() {
+        var dv = $('canvas-view');
+        if (!dv) return;
+        hideSpecialViews();  // 清掉可能残留的 PDF/Excalidraw/图谱（互斥）
+        dv.style.display = 'block';
+        $('archive-view').style.display = 'none';
+        $('doc-wrap').style.display = 'flex';
+        var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
+        var htp = $('home-toc-panel'); if (htp) htp.style.display = 'none';
+        var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
+        var ttl = $('doc-title');
+        if (ttl) ttl.textContent = (window.CANVAS_PATH || '').split('/').pop().replace(/\.canvas$/i, '');
+    }
+    function renderCanvasScene(data, board) {
+        var NS = 'http://www.w3.org/2000/svg';
+        var nodes = (data.nodes || []).filter(function (n) { return n && n.id && n.x != null; });
+        var byId = {};
+        nodes.forEach(function (n) { byId[n.id] = n; });
+        var pad = 80, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        nodes.forEach(function (n) {
+            var w = n.width || 0, h = n.height || 0;
+            if (n.x < minX) minX = n.x; if (n.y < minY) minY = n.y;
+            if (n.x + w > maxX) maxX = n.x + w; if (n.y + h > maxY) maxY = n.y + h;
+        });
+        if (!isFinite(minX)) { minX = -40; minY = -40; maxX = 760; maxY = 560; }
+        var svg = document.createElementNS(NS, 'svg');
+        svg.setAttribute('xmlns', NS);
+        svg.setAttribute('viewBox', (minX - pad) + ' ' + (minY - pad) + ' ' + (maxX - minX + pad * 2) + ' ' + (maxY - minY + pad * 2));
+        svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        function el(tag, attrs, parent) {
+            var e = document.createElementNS(NS, tag);
+            for (var k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
+            (parent || svg).appendChild(e);
+            return e;
+        }
+        // 边端点：节点指定边的中点；贝塞尔控制点沿该边法向外伸（Obsidian 同款平滑曲线语义）
+        function sidePt(n, side) {
+            var x = n.x || 0, y = n.y || 0, w = n.width || 0, h = n.height || 0;
+            if (side === 'top') return [x + w / 2, y];
+            if (side === 'bottom') return [x + w / 2, y + h];
+            if (side === 'left') return [x, y + h / 2];
+            return [x + w, y + h / 2];
+        }
+        var DIR = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+        function cubicAt(p0, c1, c2, p1, t) {
+            var u = 1 - t, a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+            return [a * p0[0] + b * c1[0] + c * c2[0] + d * p1[0], a * p0[1] + b * c1[1] + c * c2[1] + d * p1[1]];
+        }
+        // 分层：组节点永远垫底（Obsidian 中 group 在内容下方），内容节点按文件顺序
+        (nodes.filter(function (n) { return n.type === 'group'; })).forEach(function (g) {
+            var col = cvColor(g.color);
+            var r = el('rect', { x: g.x, y: g.y, width: g.width, height: g.height, rx: 10, 'class': 'cv-group' });
+            if (col) r.setAttribute('stroke', col);
+            if (g.label) {
+                var t = el('text', { x: (g.x || 0) + 8, y: (g.y || 0) - 8, 'class': 'cv-glabel' });
+                t.textContent = g.label;
+            }
+        });
+        (nodes.filter(function (n) { return n.type !== 'group'; })).forEach(function (n) {
+            var col = cvColor(n.color);
+            var x = n.x || 0, y = n.y || 0, w = n.width || 200, h = n.height || 60;
+            // 图片文件节点：整卡铺图（圆角裁剪，等比 cover）
+            if (n.type === 'file' && /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(n.file || '')) {
+                var cid = 'cvclip-' + String(n.id).replace(/[^a-zA-Z0-9-]/g, '');
+                var cp = el('clipPath', { id: cid });
+                el('rect', { x: x, y: y, width: w, height: h, rx: 8 }, cp);
+                svg.appendChild(cp);
+                var im = el('image', { x: x, y: y, width: w, height: h, 'clip-path': 'url(#' + cid + ')', preserveAspectRatio: 'xMidYMid slice' });
+                im.setAttribute('href', '/vault/' + encodeURI(String(n.file || '').replace(/^\.?\//, '')).replace(/%2F/gi, '/'));
+                return;
+            }
+            var rect = el('rect', { x: x, y: y, width: w, height: h, rx: 8, 'class': 'cv-node' });
+            if (col) rect.setAttribute('stroke', col);
+            var fo = document.createElementNS(NS, 'foreignObject');
+            fo.setAttribute('x', x); fo.setAttribute('y', y); fo.setAttribute('width', w); fo.setAttribute('height', h);
+            var box = document.createElement('div');
+            box.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+            if (n.type === 'file') {
+                var f = String(n.file || '');
+                var a = document.createElement('a');
+                a.className = 'cv-filecard';
+                a.href = '/' + encodeURI(f.replace(/^\.?\//, '')).replace(/%2F/gi, '/');
+                var ic = document.createElement('span'); ic.className = 'cv-icon'; ic.textContent = /\.(md|canvas)$/i.test(f) ? '📝' : (/\.(pdf)$/i.test(f) ? '📕' : '📄');
+                var nm = document.createElement('span'); nm.className = 'cv-fname'; nm.textContent = f.split('/').pop();
+                a.appendChild(ic); a.appendChild(nm);
+                box.appendChild(a);
+            } else if (n.type === 'link') {
+                var u = String(n.url || '');
+                var host = u.replace(/^https?:\/\//i, '').split('/')[0];
+                var la = document.createElement('a');
+                la.className = 'cv-linkcard'; la.href = u; la.target = '_blank'; la.rel = 'noopener';
+                var lic = document.createElement('span'); lic.className = 'cv-icon'; lic.textContent = '🔗';
+                var lnm = document.createElement('span'); lnm.className = 'cv-fname'; lnm.textContent = host || u;
+                la.appendChild(lic); la.appendChild(lnm);
+                box.appendChild(la);
+            } else {
+                // text 节点：复用站点渲染栈（marked + DOMPurify），支持行内 markdown
+                box.className = 'cv-content';
+                box.innerHTML = DOMPurify.sanitize(marked.parse(String(n.text || ''), { gfm: true, breaks: true }));
+            }
+            fo.appendChild(box);
+            svg.appendChild(fo);
+        });
+        // 连线（画在节点之后：Obsidian 连线浮于卡片上方）
+        (data.edges || []).forEach(function (ed) {
+            var a = byId[ed.fromNode], b = byId[ed.toNode];
+            if (!a || !b) return;
+            var fs = ed.fromSide || 'right', ts = ed.toSide || 'left';
+            var p1 = sidePt(a, fs), p2 = sidePt(b, ts);
+            var d1 = DIR[fs] || [1, 0], d2 = DIR[ts] || [-1, 0];
+            var dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+            var k = Math.max(30, Math.min(dist / 2, 120));
+            var c1 = [p1[0] + d1[0] * k, p1[1] + d1[1] * k], c2 = [p2[0] + d2[0] * k, p2[1] + d2[1] * k];
+            var col = cvColor(ed.color);
+            var path = el('path', { d: 'M ' + p1[0] + ' ' + p1[1] + ' C ' + c1[0] + ' ' + c1[1] + ', ' + c2[0] + ' ' + c2[1] + ', ' + p2[0] + ' ' + p2[1], 'class': 'cv-edge' });
+            if (col) path.setAttribute('stroke', col);
+            // 箭头：终点沿进入方向手绘小三角（不用 marker——每条线换色无需重复定义 marker）
+            var ax = p2[0] - c2[0], ay = p2[1] - c2[1], L = Math.hypot(ax, ay) || 1;
+            ax /= L; ay /= L;
+            var s = 8, px = -ay, py = ax;
+            var tri = el('polygon', {
+                points: p2[0] + ',' + p2[1] + ' '
+                    + (p2[0] - ax * s + px * s * 0.45) + ',' + (p2[1] - ay * s + py * s * 0.45) + ' '
+                    + (p2[0] - ax * s - px * s * 0.45) + ',' + (p2[1] - ay * s - py * s * 0.45),
+                'class': 'cv-arrow'
+            });
+            if (col) tri.setAttribute('fill', col);
+            if (ed.label) {
+                var mid = cubicAt(p1, c1, c2, p2, 0.5);
+                var lab = ed.label;
+                var tw = Math.max(24, lab.length * 7 + 14);  // 中英混排近似宽度
+                var g = el('g', { 'class': 'cv-label' });
+                el('rect', { x: mid[0] - tw / 2, y: mid[1] - 11, width: tw, height: 22, rx: 5 }, g);
+                var t = el('text', { x: mid[0], y: mid[1] + 4, 'text-anchor': 'middle' }, g);
+                t.textContent = lab;
+            }
+        });
+        board.innerHTML = '';
+        board.appendChild(svg);
+    }
+    // SSR 直达的触发在 enterApp 的 SSR_CANVAS 分支内（时序原因，见该处注释）；SPA 点击走 selectFile 分支
+
+    // 搜索功能：整页切换，实时过滤文档
+    var searchView = $('search-view');
+    var searchInput = $('search-input');
+    var searchResults = $('search-results');
+    function collectFiles() {
+        var files = [];
+        (function walk(nodes, cat) {
+            nodes.forEach(function (n) {
+                if (n.type === 'file' && /\.(md|canvas)$/i.test(n.name)) files.push({ name: n.name, path: n.path, cat: cat });
+                else if (n.children) walk(n.children, n.name);
+            });
+        })(state.tree, '');
+        return files;
+    }
+    function openSearch() {
+        // 搜索面板从顶部栏下方滑出 + 按钮图标 morph 为叉子
+        try { toggleAi(false); } catch (e) {}  // AI 面板 z-index 高于搜索层：先关掉避免盖住搜索结果
+        $('content').style.display = 'none';
+        searchView.classList.add('open');
+        $('vp-search-btn').classList.add('open');
+        searchInput.value = '';
+        searchResults.innerHTML = '';
+        // 等面板滑出动画完成后聚焦，避免页面跳动
+        setTimeout(function () { searchInput.focus({ preventScroll: true }); }, 320);
+    }
+    function closeSearch() {
+        searchView.classList.remove('open');
+        $('vp-search-btn').classList.remove('open');
+        $('content').style.display = '';
+    }
+    function renderSearch(q) {
+        if (!q) { searchResults.innerHTML = ''; return; }
+        // 标签搜索：#标签 匹配笔记内容里的 #标签
+        var tagMatch = q.match(/^#(.+)$/);
+        if (tagMatch) {
+            var tag = tagMatch[1].toLowerCase();
+            var files = collectFiles();
+            var results = [];
+            var checked = 0;
+            if (!files.length) { searchResults.innerHTML = '<div class="search-empty">' + 'No notes with this tag' + '</div>'; return; }
+            files.forEach(function (f) {
+                api('/api/file?path=' + encodeURIComponent(f.path)).then(function (data) {
+                    var c = data.content || '';
+                    if (c.toLowerCase().indexOf('#' + tag) > -1) results.push(f);
+                    checked++;
+                    if (checked >= files.length) renderSearchItems(results);
+                }).catch(function () {
+                    checked++;
+                    if (checked >= files.length) renderSearchItems(results);
+                });
+            });
+            return;
+        }
+        // 全文搜索：lunr 索引
+        if (!window._lunrIndex) {
+            buildSearchIndex().then(function () { doLunrSearch(q); });
+            searchResults.innerHTML = '<div class="search-empty">Building index…</div>';
+            return;
+        }
+        doLunrSearch(q);
+    }
+    // 构建全文索引：加载所有文章内容 → lunr 索引
+    function buildSearchIndex() {
+        var files = collectFiles();
+        var docs = [];
+        var chain = Promise.resolve();
+        files.forEach(function (f) {
+            chain = chain.then(function () {
+                return api('/api/file?path=' + encodeURIComponent(f.path)).then(function (data) {
+                    docs.push({
+                        id: f.path,
+                        path: f.path,
+                        name: f.name.replace(/^\d+-/, '').replace(/\.md$/i, ''),
+                        cat: f.cat || '',
+                        content: data.content || ''
+                    });
+                }).catch(function () {});
+            });
+        });
+        return chain.then(function () {
+            window._lunrDocs = docs;
+            window._lunrIndex = lunr(function () {
+                this.ref('id');
+                this.field('name', { boost: 10 });
+                this.field('content');
+                docs.forEach(function (d) { this.add(d); }, this);
+            });
+        });
+    }
+    // lunr 搜索结果
+    function doLunrSearch(q) {
+        var results = [];
+        try {
+            var hits = window._lunrIndex.search(q);
+            results = hits.map(function (h) {
+                return window._lunrDocs.filter(function (d) { return d.id === h.ref; })[0];
+            }).filter(Boolean);
+        } catch (e) {
+            // 搜索语法错误（如特殊字符）→ 退化为标题匹配
+            var kw = q.toLowerCase();
+            results = collectFiles().filter(function (f) {
+                return f.name.toLowerCase().indexOf(kw) > -1;
+            });
+        }
+        renderSearchItems(results);
+    }
+    function renderSearchItems(files) {
+        if (!files.length) {
+            searchResults.innerHTML = '<div class="search-empty">' + 'No matching notes' + '</div>';
+            return;
+        }
+        var html = files.map(function (f) {
+            var dispName = f.name.replace(/^\d+-/, '').replace(/\.md$/, '');
+            // 内容匹配片段（截取关键词上下文）
+            var snippet = '';
+            if (f.content) {
+                var kwMatch = searchInput.value.trim().toLowerCase();
+                var c = f.content.replace(/[#*`_>\[\]|!-]/g, ' ').replace(/\s+/g, ' ').toLowerCase();
+                var idx = kwMatch ? c.indexOf(kwMatch) : -1;
+                if (idx > -1) {
+                    var start = Math.max(0, idx - 40);
+                    snippet = '…' + f.content.slice(start, idx + kwMatch.length + 60).replace(/\n/g, ' ') + '…';
+                }
+            }
+            return '<div class="search-item" data-path="' + esc(f.path) + '">' +
+                '<div class="search-item-main">' +
+                (f.cat ? '<span class="search-cat">' + esc(f.cat) + '</span>' : '') +
+                '<span class="search-name">' + esc(dispName) + '</span>' +
+                '</div>' +
+                (snippet ? '<div class="search-snippet">' + esc(snippet) + '</div>' : '') +
+                '<span class="search-arrow">↵</span></div>';
+        }).join('');
+        searchResults.innerHTML = html;
+        searchResults.querySelectorAll('.search-item').forEach(function (el) {
+            el.addEventListener('click', function () {
+                var path = el.dataset.path;
+                closeSearch();
+                selectFile({ path: path });
+            });
+        });
+    }
+    // 点击面板外部关闭搜索（面板打开时）
+    document.addEventListener('click', function (e) {
+        if (!searchView.classList.contains('open')) return;
+        if (searchView.contains(e.target)) return;
+        if ($('vp-search-btn').contains(e.target)) return;
+        closeSearch();
+    });
+    // 搜索按钮：打开时是叉子（点击关闭），关闭时是放大镜（点击打开）
+    // AI 对话：顶栏按钮展开面板，问知识库（/api/ask：检索 + DeepSeek 生成回答）
+    // 总开关关闭：隐藏 AI 按钮（面板无入口）
+    var aiBtn = $('vp-ai-btn');
+    if (!window.AI_ENABLED && aiBtn) aiBtn.style.display = 'none';
+
+    var aiView = $('ai-view');
+    var aiMsgs = $('ai-msgs');
+    var aiInput = $('ai-input');
+    /* AI = 面板内容的第二种渲染。toggleAi 只切 body.ai-open 模式：
+       桌面端左栏原地换内容；窄屏端把抽屉拉开/收起（抽屉里此刻渲染的是 AI） */
+    function toggleAi(open) {
+        if (open === undefined) open = !document.body.classList.contains('ai-open');
+        if (open && searchView.classList.contains('open')) closeSearch();
+        document.body.classList.toggle('ai-open', open);
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        if (!desktop) setFrontDrawer(open);
+        else if (open) setTimeout(function () { aiInput.focus({ preventScroll: true }); }, 100);
+    }
+    /* 把 AI 内容块挂进当前断点对应的面板容器（桌面=左栏 / 窄屏=抽屉） */
+    function placeAi() {
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        var target = desktop ? document.getElementById('left-sidebar') : drawerEl;
+        if (target && aiView.parentNode !== target) target.appendChild(aiView);
+    }
+    function aiAddMsg(text, role) {
+        var d = document.createElement('div');
+        d.className = 'ai-msg ' + (role === 'user' ? 'ai-user' : 'ai-bot');
+        d.textContent = text;
+        aiMsgs.appendChild(d);
+        aiMsgs.scrollTop = aiMsgs.scrollHeight;
+        return d;
+    }
+    function aiAsk() {
+        var q = aiInput.value.trim();
+        if (!q) return;
+        aiAddMsg(q, 'user');
+        aiInput.value = '';
+        var loading = aiAddMsg('Thinking...', 'bot');
+        loading.classList.add('ai-typing');
+        fetch('/api/ask', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: q })
+        }).then(function (r) { return r.json(); }).then(function (d) {
+            loading.remove();
+            if (!d.ok) {
+                aiAddMsg('Error: ' + (d.error || 'unknown error'), 'bot');
+                return;
+            }
+            var bot = aiAddMsg(d.answer, 'bot');
+            if (d.sources && d.sources.length) {
+                var src = document.createElement('div');
+                src.className = 'ai-src';
+                src.appendChild(document.createTextNode('Sources: '));
+                d.sources.forEach(function (s, i) {
+                    var a = document.createElement('a');
+                    a.href = '/' + s.path;
+                    a.textContent = s.name;
+                    a.addEventListener('click', function (e) {
+                        e.preventDefault();
+                        toggleAi(false);
+                        selectFile({ path: s.path });
+                    });
+                    src.appendChild(a);
+                    if (i < d.sources.length - 1) src.appendChild(document.createTextNode(' · '));
+                });
+                bot.appendChild(src);
+            }
+        }).catch(function (err) {
+            loading.remove();
+            aiAddMsg('Network error: ' + (err && err.message ? err.message : 'unknown'), 'bot');
+        });
+    }
+    $('vp-ai-btn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        // 同级内容切换：桌面端已处于 AI 则保持（幂等）；窄屏端点按钮 = 开/关抽屉（AI 内容）
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        toggleAi(desktop ? true : undefined);
+    });
+    // 跨断点：缩到窄屏且 AI 开着 → 自动关闭只留内容区；容器归属变化时重新挂载
+    window.addEventListener('resize', function () {
+        placeAi();
+        var desktop = window.matchMedia && window.matchMedia('(min-width:769px)').matches;
+        if (!desktop && document.body.classList.contains('ai-open')) {
+            document.body.classList.remove('ai-open');
+            setFrontDrawer(false);
+        }
+    });
+    $('ai-send').addEventListener('click', aiAsk);
+    aiInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); aiAsk(); }
+        else if (e.key === 'Escape') { toggleAi(false); }
+    });
+
+    $('vp-search-btn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (searchView.classList.contains('open')) {
+            closeSearch();
+        } else {
+            openSearch();
+        }
+    });
+    searchInput.addEventListener('input', function () { renderSearch(searchInput.value); });
+    searchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            var first = searchResults.querySelector('.search-item');
+            if (first) first.click();
+        } else if (e.key === 'Escape') {
+            closeSearch();
+        }
+    });
+
+    // 主题切换按钮（桌面右侧 / 移动最左）：点击切换日夜模式
+    function bindThemeBtn(id) {
+        $(id).addEventListener('click', function (e) {
+            e.stopPropagation();
+            var dark = !document.documentElement.classList.contains('dark');
+            applyTheme(dark);
+        });
+    }
+    bindThemeBtn('vp-theme-btn');
+    bindThemeBtn('vp-theme-btn-m');
+
+    // 菜单按钮：切换全屏侧滑菜单（文章目录树，预渲染零延迟）
+    var drawerEl = $('vp-drawer');
+    var frontDrawerMd = $('front-drawer-md');
+    function setFrontDrawer(open) {
+        drawerEl.classList.toggle('open', open);
+        document.body.classList.toggle('drawer-open', open); // 锁定页面滚动
+        var nw = document.getElementById('nav-wrap');
+        if (nw) nw.classList.toggle('no-blur', open); // 顶部栏实心化防透字
+    }
+    placeAi(); // 初始挂载：桌面→左栏 / 窄屏→抽屉
+    // 预渲染：PHP 内联的 FRONT_MENU_MD（vault/ 文章目录树）
+    if (window.FRONT_MENU_MD) {
+        try {
+            frontDrawerMd.innerHTML = DOMPurify.sanitize(marked.parse(window.FRONT_MENU_MD, { gfm: true }));
+            // 兼容写法：找 li 的直接子 UL / 向上找 li 祖先（不用 :scope/closest）
+            function childUl(li) {
+                for (var i = 0; i < li.children.length; i++) {
+                    if (li.children[i].tagName === 'UL') return li.children[i];
+                }
+                return null;
+            }
+            function parentLi(el) {
+                var n = el.parentNode;
+                while (n && n !== frontDrawerMd && n.tagName !== 'LI') n = n.parentNode;
+                return n && n.tagName === 'LI' ? n : null;
+            }
+            // 为每个目录项重建相对路径（用于强制展开匹配）
+            function buildDirPaths(root) {
+                function walkUl(ul, prefix) {
+                    var items = ul.children;
+                    for (var i = 0; i < items.length; i++) {
+                        var li = items[i];
+                        var nameNode = li.firstChild;
+                        var name = nameNode ? nameNode.textContent.trim() : '';
+                        if (!name) continue;
+                        var path = prefix ? prefix + '/' + name : name;
+                        li.dataset.path = path;
+                        var sub = null;
+                        for (var j = 0; j < li.children.length; j++) {
+                            if (li.children[j].tagName === 'UL') { sub = li.children[j]; break; }
+                        }
+                        if (sub) walkUl(sub, path);
+                    }
+                }
+                // 从容器内第一个 ul 开始遍历（root 是 div，不能直接当 ul 用）
+                var rootUl = root.querySelector('ul');
+                if (rootUl) walkUl(rootUl, '');
+            }
+            buildDirPaths(frontDrawerMd);
+            // 折叠树：父项点击折叠/展开
+            var lis = frontDrawerMd.querySelectorAll('li');
+            for (var i = 0; i < lis.length; i++) {
+                (function (li) {
+                    var sub = childUl(li);
+                    if (!sub) return;
+                    li.classList.add('has-children');
+                    // 插入左侧箭头 SVG（chevron：颜色 currentColor 随主题、stroke-width 可控）
+                    var arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    arrow.setAttribute('class', 'dir-arrow');
+                    arrow.setAttribute('width', '15');
+                    arrow.setAttribute('height', '15');
+                    arrow.setAttribute('viewBox', '0 0 24 24');
+                    arrow.setAttribute('fill', 'none');
+                    arrow.setAttribute('stroke', 'currentColor');
+                    arrow.setAttribute('stroke-width', '3');
+                    arrow.setAttribute('stroke-linecap', 'round');
+                    arrow.setAttribute('stroke-linejoin', 'round');
+                    arrow.innerHTML = '<path d="M9 6l6 6-6 6"/>';
+                    li.insertBefore(arrow, li.firstChild);
+                    // 默认折叠状态（偏好设置控制）；强制展开目录不受影响
+                    if (window.FRONT_DRAWER_EXPANDED === false) {
+                        var forceExpand = false;
+                        var dirs = window.FRONT_EXPANDED_DIRS || [];
+                        var p = li.dataset.path || '';
+                        for (var k = 0; k < dirs.length; k++) {
+                            var d = dirs[k];
+                            if (d && (p === d || p.indexOf(d + '/') === 0)) { forceExpand = true; break; }
+                        }
+                        if (!forceExpand) li.classList.add('collapsed');
+                    }
+                    li.addEventListener('click', function (ev) {
+                        if (sub.contains(ev.target)) return;
+                        ev.preventDefault();
+                        li.classList.toggle('collapsed');
+                    });
+                })(lis[i]);
+            }
+            // Graph view 虚拟条目：保持默认文档链接样式（与普通文章条目一模一样）
+            var as = frontDrawerMd.querySelectorAll('a');
+            // 叶子链接：点击打开文章 + 关闭抽屉
+            for (var j = 0; j < as.length; j++) {
+                (function (a) {
+                    var li = parentLi(a);
+                    if (li && childUl(li)) return; // 父项跳过（折叠处理）
+                    a.addEventListener('click', function (ev) {
+                        ev.preventDefault();
+                        var href = a.getAttribute('href') || '';
+                        // Graph view 虚拟条目：前端直接打开图谱（不整页跳转）
+                        if (href === '/graph') {
+                            openGraph();
+                            setFrontDrawer(false);
+                            return;
+                        }
+                        var h = href.replace(/^#/, '');
+                        if (!h) return;
+                        setFrontDrawer(false);
+                        selectFile({ path: decodeURI(h) });
+                    });
+                })(as[j]);
+            }
+            // 虚拟页别名条目（admin/graph）：按配置路径深度注入目录树，样式与普通文档完全一致；点击整页跳转（服务端 302 到真实路由）
+            function liName(li) {
+                // 优先用 buildDirPaths 写入的 data-path（目录行首子节点是箭头 SVG，不能取 firstChild）
+                if (li.dataset && li.dataset.path) return li.dataset.path.split('/').pop();
+                var t = '';
+                for (var i = 0; i < li.childNodes.length; i++) {
+                    var nd = li.childNodes[i];
+                    if (nd.nodeType === 1 && nd.tagName === 'UL') break;
+                    if (nd.nodeType === 3) t += nd.textContent;
+                    else if (nd.nodeType === 1 && (nd.tagName === 'A' || nd.tagName === 'SPAN')) t += nd.textContent;
+                }
+                return t.trim();
+            }
+            function injectAliasEntry(rawPath) {
+                var aliasPath = String(rawPath || '').replace(/^\/+|\/+$/g, '');
+                if (!aliasPath || /\.md$/i.test(aliasPath)) return;
+                var segs = aliasPath.split('/');
+                var parentUl = frontDrawerMd.querySelector('ul');
+                for (var si = 0; si < segs.length && parentUl; si++) {
+                    var want = segs[si];
+                    var found = null;
+                    var items = parentUl.children;
+                    for (var ii = 0; ii < items.length; ii++) {
+                        if (liName(items[ii]) === want) { found = items[ii]; break; }
+                    }
+                    if (si === segs.length - 1) {
+                        // 叶子：普通文档样式的 li>a；同名真实文章已存在则跳过防劫持
+                        if (found) {
+                            var exA = found.querySelector('a');
+                            if (exA && /\.md(\?|#|$)/i.test(exA.getAttribute('href') || '')) return;
+                        }
+                        if (!found) {
+                            var leafLi = document.createElement('li');
+                            var leafA = document.createElement('a');
+                            leafA.setAttribute('href', '/' + aliasPath);
+                            leafA.textContent = want;
+                            leafLi.appendChild(leafA);
+                            parentUl.appendChild(leafLi);
+                            found = leafLi;
+                        } else if (!found.querySelector('a')) {
+                            var wrapA = document.createElement('a');
+                            wrapA.setAttribute('href', '/' + aliasPath);
+                            wrapA.textContent = want;
+                            found.insertBefore(wrapA, found.firstChild);
+                        }
+                        (function (target, url) {
+                            target.addEventListener('click', function (ev) {
+                                ev.preventDefault();
+                                ev.stopPropagation();
+                                setFrontDrawer(false);
+                                window.location.href = url;
+                            });
+                        })(found.querySelector('a'), '/' + aliasPath);
+                    } else {
+                        // 中间目录：复用已有文件夹；缺失则创建（文本节点 + 子 UL）
+                        if (!found) {
+                            var dirLi = document.createElement('li');
+                            var dirTxt = document.createElement('span');
+                            dirTxt.textContent = want;
+                            dirLi.appendChild(dirTxt);
+                            var dirUl = document.createElement('ul');
+                            dirLi.appendChild(dirUl);
+                            parentUl.appendChild(dirLi);
+                            found = dirLi;
+                        }
+                        var nextUl = childUl(found);
+                        if (!nextUl) { nextUl = document.createElement('ul'); found.appendChild(nextUl); }
+                        parentUl = nextUl;
+                    }
+                }
+            }
+            injectAliasEntry(window.GRAPH_ALIAS_PATH);
+            // 根层级的虚拟入口（Graph-View，含未配别名时服务端直出的 Graph-View）：
+            // 按一级目录行样式展示但不加折叠箭头
+            (function markAliasDirs() {
+                var rootUl = frontDrawerMd.querySelector('ul');
+                if (!rootUl) return;
+                var clean = function (s) { return '/' + String(s || '').replace(/^\/+|\/+$/g, ''); };
+                var aliases = [clean(window.GRAPH_ALIAS_PATH), '/graph'];
+                [].forEach.call(rootUl.children, function (li) {
+                    var a = li.querySelector('a');
+                    if (!a || childUl(li)) return;
+                    var href = (a.getAttribute('href') || '').replace(/#.*$/, '');
+                    if (aliases.indexOf(href) !== -1) li.classList.add('alias-dir');
+                });
+            })();
+        } catch (e) {}
+    }
+    $('vp-menu-btn').addEventListener('click', function (e) {
+        e.stopPropagation();
+        // 菜单按钮 = "目录"入口：桌面端切回目录渲染；窄屏打开抽屉并确保里面是目录
+        if (window.matchMedia && window.matchMedia('(min-width:769px)').matches) {
+            if (document.body.classList.contains('ai-open')) toggleAi(false);
+            return;
+        }
+        // 关着→开(目录)；开着但是AI→切回目录(面板保持)；开着且是目录→关闭
+        var open = drawerEl.classList.contains('open');
+        if (!open || document.body.classList.contains('ai-open')) {
+            document.body.classList.remove('ai-open');
+            setFrontDrawer(true);
+        } else {
+            setFrontDrawer(false);
+        }
+    });
+    // 点击侧滑菜单空白处关闭
+    drawerEl.addEventListener('click', function (e) {
+        if (e.target === drawerEl || e.target === frontDrawerMd) {
+            setFrontDrawer(false);
+        }
+    });
+
+    /* ---------- 桌面端左侧常驻目录栏：克隆抽屉处理完的 DOM（含箭头/折叠状态），事件用委托 ---------- */
+    (function () {
+        var leftTree = $('left-drawer-md');
+        if (!leftTree || !window.FRONT_MENU_MD || !frontDrawerMd.innerHTML) return;
+        leftTree.innerHTML = frontDrawerMd.innerHTML;
+        function subUl(li) {
+            for (var i = 0; i < li.children.length; i++) {
+                if (li.children[i].tagName === 'UL') return li.children[i];
+            }
+            return null;
+        }
+        leftTree.addEventListener('click', function (ev) {
+            var t = ev.target;
+            var a = t.closest ? t.closest('a') : null;
+            var li = t.closest ? t.closest('li') : null;
+            // 父项标签（非子树内部）→ 折叠/展开
+            if (li) {
+                var sub = subUl(li);
+                if (sub && !sub.contains(t)) {
+                    ev.preventDefault();
+                    li.classList.toggle('collapsed');
+                    return;
+                }
+            }
+            // 叶子链接 → 打开文章（父项链接交给上面的折叠逻辑）
+            if (a) {
+                var n = a.parentNode, isParent = false;
+                while (n && n !== leftTree) {
+                    if (n.tagName === 'LI' && subUl(n)) { isParent = true; break; }
+                    n = n.parentNode;
+                }
+                if (isParent) return;
+                ev.preventDefault();
+                var href = a.getAttribute('href') || '';
+                if (href === '/graph') { openGraph(); return; }  // Graph 虚拟条目（未配置别名时的树末尾入口）
+                // 别名条目（graph）：整页跳转（服务端 302 到真实路由）
+                var aliasG = String(window.GRAPH_ALIAS_PATH || '').replace(/^\/+|\/+$/g, '');
+                if (aliasG && href === '/' + aliasG) { window.location.href = href; return; }
+                var h = href.replace(/^#/, '');
+                if (!h) return;
+                selectFile({ path: decodeURI(h) });
+            }
+        });
+    })();
+
+    /* ---------- 浏览器返回/前进：hash 变化时同步视图 ---------- */
+    // 站内文章链接（/xxx.md）：SPA 切换（无刷新）+ pushState 路径化 URL；刷新/直达走服务端渲染
+    document.addEventListener('click', function (e) {
+        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (!a) return;
+        var href = a.getAttribute('href') || '';
+        if (/(\.md|\.canvas)$/i.test(href) && href.charAt(0) === '/') {
+            e.preventDefault();
+            var p = href.substring(1);
+            try { p = decodeURI(p); } catch (err) {}  // 菜单/内链 href 带 URL 编码 → 解码后再查（防双重编码）
+            try { history.pushState(null, '', href); } catch (err) {}
+            selectFile({ path: p });
+        }
+    });
+    function handleHash() {
+        var h = location.hash.replace(/^#/, '');
+        if (!h) {
+            // hash 为空 → 回到首页（渲染首页文章正文）
+            $('md-view').style.display = 'none';
+            $('doc-wrap').style.display = 'none';
+            $('archive-view').style.display = '';
+            $('toc-panel').style.display = 'none';
+            renderHome();
+            // 重置滚动位置（避免回归档时错位）
+            $('content').scrollTop = 0;
+            return;
+        }
+        if (/^\d+$/.test(h) && window._docMap && window._docMap[h]) {
+            // 数字 ID 直达（旧版兼容）
+            if (window._docMap[h] !== state.path) {
+                selectFile({ path: window._docMap[h] });
+            }
+        } else if (h) {
+            // 完整路径直达（新逻辑：#posts/draft/xxx.md）
+            var p = decodeURI(h);
+            // 兜底：纯文件名（无路径前缀）时查 _docMap 显示名映射
+            if (p.indexOf('/') === -1 && window._docMap && window._docMap[p]) {
+                p = window._docMap[p];
+            }
+            if (p !== state.path) {
+                selectFile({ path: p });
+            }
+        }
+    }
+    window.addEventListener('hashchange', handleHash);
+    // SPA 路径导航（pushState）的返回/前进：popstate 时按当前路径恢复文章或回首页
+    window.addEventListener('popstate', function () {
+        var h = decodeURI(location.hash.replace(/^#/, ''));
+        // hash 本身是文档路由（#dir/note.md，页内 wikilink 的往返）→ 按 hash 走，
+        // 不能落到 pathname 分支：片段导航时 pathname 还是旧文章，会把刚打开的文章覆盖回去
+        if (h && /\.(md|canvas)$/i.test(h)) {
+            handleHash();
+            return;
+        }
+        var p = location.pathname.replace(/^\//, '');
+        if (/(\.md|\.canvas)$/i.test(p)) {
+            selectFile({ path: p });
+        } else if (location.hash) {
+            handleHash();
+        } else {
+            hideSpecialViews();  // 返回首页：清掉可能残留的 PDF/画布/图谱（互斥）
+            $('md-view').style.display = 'none';
+            $('doc-wrap').style.display = 'none';
+            $('archive-view').style.display = '';
+            $('toc-panel').style.display = 'none';
+            $('content').scrollTop = 0;
+        }
+    });
+
+    /* ---------- 初始化 ---------- */
+    (function init() {
+        // 已移除访问密码，直接进入（URL hash 直达在 loadTree 完成后处理）
+        enterApp();
+    })();
+})();
+
+// 滚动条宽度测量：#content 内部滚动条的宽度写入 CSS 变量 --sbw，
+// 供 .doc-wrap/.archive-flex translate 补偿（否则滚动条会让居中偏左约半个滚动条宽）
+(function () {
+    var ce = document.getElementById('content');
+    if (!ce) return;
+    function measureSbw() {
+        var s = Math.max(0, ce.offsetWidth - ce.clientWidth);
+        document.documentElement.style.setProperty('--sbw', s + 'px');
+    }
+    measureSbw();
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureSbw).observe(ce);
+})();
