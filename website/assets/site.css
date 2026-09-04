@@ -859,3 +859,38 @@ html.dark .tag-item { border-bottom-color:#333; }
 .tag-item-name { color:var(--vp-c-brand,#5672cd); cursor:pointer; font-weight:500; }
 .tag-item-name:hover { text-decoration:underline; }
 .tag-item-count { margin-top:14px; font-size:12.5px; color:var(--vp-c-text-mute,#999); }
+
+/* ===== RSS Feeds 阅读器 ===== */
+.rss-view { position:fixed; top:56px; left:0; right:0; bottom:0; z-index:50; display:none; flex-direction:column; background:var(--vp-c-bg); }
+.rss-header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--line,#e2e2e3); }
+.rss-header .doc-title { margin:0; font-size:20px; }
+.rss-feeds-list { flex:1; overflow-y:auto; padding:16px 24px; }
+.rss-feed-card { background:var(--vp-c-bg-soft); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; cursor:pointer; transition:box-shadow .2s ease, border-color .2s ease; }
+.rss-feed-card:hover { box-shadow:0 4px 16px rgba(0,0,0,.08); border-color:var(--vp-c-brand); }
+html.dark .rss-feed-card:hover { box-shadow:0 4px 16px rgba(0,0,0,.3); }
+.rss-feed-card-title { font-weight:600; font-size:16px; color:var(--vp-c-text-1); margin-bottom:6px; }
+.rss-feed-card-url { font-size:12px; color:var(--vp-c-text-3); word-break:break-all; margin-bottom:8px; }
+.rss-feed-card-meta { display:flex; gap:16px; font-size:12px; color:var(--vp-c-text-3); }
+.rss-articles { flex:1; overflow-y:auto; padding:16px 24px; display:none; flex-direction:column; }
+.rss-articles-header { display:flex; align-items:center; gap:12px; padding-bottom:12px; border-bottom:1px solid var(--line); margin-bottom:16px; }
+.rss-articles-header .doc-title { margin:0; font-size:18px; }
+.rss-articles-list { flex:1; }
+.rss-article-item { background:var(--vp-c-bg-soft); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin-bottom:12px; cursor:pointer; transition:border-color .2s ease; }
+.rss-article-item:hover { border-color:var(--vp-c-brand); }
+.rss-article-item-title { font-weight:600; font-size:15px; color:var(--vp-c-text-1); margin-bottom:6px; line-height:1.4; }
+.rss-article-item-date { font-size:12px; color:var(--vp-c-text-3); margin-bottom:8px; }
+.rss-article-item-desc { font-size:13px; color:var(--vp-c-text-2); line-height:1.6; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.rss-article-view { flex:1; overflow-y:auto; padding:16px 24px; display:none; flex-direction:column; max-width:800px; margin:0 auto; width:100%; }
+.rss-article-header { display:flex; align-items:center; gap:12px; padding-bottom:12px; border-bottom:1px solid var(--line); margin-bottom:16px; }
+.rss-article-content { flex:1; line-height:1.8; font-size:15px; }
+.rss-article-content img { max-width:100%; height:auto; border-radius:6px; }
+.rss-article-content a { color:var(--vp-c-brand); }
+.rss-article-content a:hover { text-decoration:underline; }
+.rss-article-content blockquote { border-left:3px solid var(--vp-c-brand); padding-left:12px; margin:16px 0; color:var(--vp-c-text-2); font-style:italic; }
+.rss-article-content pre { background:var(--vp-c-bg-soft); border:1px solid var(--line); border-radius:6px; padding:12px; overflow-x:auto; margin:16px 0; }
+.rss-article-content code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; }
+.rss-article-content pre code { background:none; padding:0; font-size:inherit; }
+.rss-article-content hr { border:none; border-top:1px solid var(--line); margin:24px 0; }
+html.dark .rss-feed-card { background:var(--vp-c-bg-soft); border-color:#3a3a4a; }
+html.dark .rss-article-item { background:var(--vp-c-bg-soft); border-color:#3a3a4a; }
+html.dark .rss-article-content pre { background:var(--vp-c-bg-soft); border-color:#3a3a4a; }

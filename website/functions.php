@@ -731,3 +731,160 @@ function extract_frontmatter_summary(string $raw): string {
     $body = preg_replace('/\s+/u', ' ', $body);
     return mb_substr(trim($body), 0, 200);
 }
+
+/* ---------- RSS Feeds（外部源订阅） ---------- */
+
+/** RSS 缓存目录 */
+function rss_cache_dir(): string {
+    static $d = null;
+    if ($d === null) {
+        $d = BP_CACHE_DIR . '/rss';
+        if (!is_dir($d)) @mkdir($d, 0775, true);
+    }
+    return $d;
+}
+
+/** 生成 feed 的缓存文件名（url 的 md5） */
+function rss_cache_file(string $url): string {
+    return rss_cache_dir() . '/' . md5($url) . '.json';
+}
+
+/** 抓取并解析单个 RSS/Atom feed，返回标准化条目数组
+ *  结构：[ ['title','link','pubDate','description','guid'], ... ]
+ *  失败返回 []，不抛异常
+ */
+function rss_fetch_feed(string $url, int $timeout = 10): array {
+    $cacheFile = rss_cache_file($url);
+    $ttl = 3600; // 默认 1 小时，后续可从 config 读取
+    // 缓存命中且未过期
+    if (is_file($cacheFile) && (time() - filemtime($cacheFile) < $ttl)) {
+        $cached = @json_decode(@file_get_contents($cacheFile), true);
+        if (is_array($cached)) return $cached;
+    }
+    // 抓取
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 5,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_USERAGENT => 'BrainPress RSS Reader/1.0',
+        CURLOPT_SSL_VERIFYPEER => false, // 兼容自签名/内网源
+        CURLOPT_SSL_VERIFYHOST => false,
+    ]);
+    $xml = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($xml === false || $httpCode !== 200) return [];
+    // 解析 XML（支持 RSS 2.0 和 Atom 1.0）
+    $items = [];
+    libxml_use_internal_errors(true);
+    $doc = simplexml_load_string($xml);
+    libxml_clear_errors();
+    if ($doc === false) return [];
+    // RSS 2.0: /rss/channel/item
+    if (isset($doc->channel->item)) {
+        foreach ($doc->channel->item as $item) {
+            $title = (string)($item->title ?? '');
+            $link = (string)($item->link ?? '');
+            $pubDate = isset($item->pubDate) ? strtotime((string)$item->pubDate) : time();
+            $desc = (string)($item->description ?? '');
+            $guid = (string)($item->guid ?? $link);
+            if ($title !== '' && $link !== '') {
+                $items[] = ['title' => $title, 'link' => $link, 'pubDate' => $pubDate, 'description' => $desc, 'guid' => $guid];
+            }
+        }
+    }
+    // Atom 1.0: /feed/entry
+    elseif (isset($doc->entry)) {
+        $ns = $doc->getNamespaces(true);
+        foreach ($doc->entry as $entry) {
+            $title = (string)($entry->title ?? '');
+            $link = '';
+            if (isset($entry->link)) {
+                foreach ($entry->link as $l) {
+                    $attrs = $l->attributes();
+                    if ((string)($attrs['rel'] ?? '') === 'alternate' || (string)($attrs['rel'] ?? '') === '') {
+                        $link = (string)($attrs['href'] ?? '');
+                        break;
+                    }
+                }
+            }
+            $pubDate = isset($entry->updated) ? strtotime((string)$entry->updated) : (isset($entry->published) ? strtotime((string)$entry->published) : time());
+            $desc = (string)($entry->summary ?? $entry->content ?? '');
+            $guid = (string)($entry->id ?? $link);
+            if ($title !== '' && $link !== '') {
+                $items[] = ['title' => $title, 'link' => $link, 'pubDate' => $pubDate, 'description' => $desc, 'guid' => $guid];
+            }
+        }
+    }
+    // 按时间倒序
+    usort($items, fn($a, $b) => $b['pubDate'] - $a['pubDate']);
+    // 写缓存（原子写）
+    $tmp = $cacheFile . '.tmp-' . getmypid();
+    @file_put_contents($tmp, json_encode($items, JSON_UNESCAPED_UNICODE));
+    @rename($tmp, $cacheFile);
+    return $items;
+}
+
+/** 获取所有启用的 RSS feeds 的配置列表（供前端目录树用） */
+function rss_enabled_feeds(array $config): array {
+    $out = [];
+    foreach (($config['rss_feeds'] ?? []) as $f) {
+        if (empty($f['on'])) continue;
+        $url = trim((string)($f['url'] ?? ''));
+        if ($url === '') continue;
+        $title = trim((string)($f['title'] ?? ''));
+        if ($title === '') {
+            // 从 URL 推断标题
+            $title = parse_url($url, PHP_URL_HOST) ?: 'RSS Feed';
+        }
+        $out[] = ['url' => $url, 'title' => $title];
+    }
+    return $out;
+}
+
+/** 合并 RSS feeds 到文件树（作为顶层目录节点，children 为该源的各篇文章；与 IMA 相同的静态树结构） */
+function merge_rss_tree(array $tree, array $config): array {
+    if (empty($config['rss_feeds'])) return $tree;
+    $feeds = rss_enabled_feeds($config);
+    if (!$feeds) return $tree;
+    // 记录已有顶层名字（主 vault + custom mounts 优先）
+    $seen = [];
+    foreach ($tree as $t) $seen[$t['name']] = true;
+    foreach ($feeds as $f) {
+        $name = $f['title'];
+        // 避免重名：若已存在则加后缀
+        $baseName = $name;
+        $suffix = 1;
+        while (isset($seen[$name])) {
+            $name = $baseName . ' ' . $suffix++;
+        }
+        $seen[$name] = true;
+        // 抓取该源文章（有 1h 缓存；失败则跳过该源目录）
+        $timeout = (int)($config['rss_timeout'] ?? 10);
+        $items = rss_fetch_feed($f['url'], $timeout);
+        $children = [];
+        foreach ($items as $it) {
+            $dateStr = isset($it['pubDate']) && $it['pubDate'] ? date('Y-m-d', (int)$it['pubDate']) : '';
+            $disp = $dateStr !== '' ? '[' . $dateStr . '] ' . $it['title'] : $it['title'];
+            $children[] = [
+                'name' => $disp,
+                'path' => 'rss://' . $f['url'] . '/' . ($it['guid'] ?? $it['link']),
+                'type' => 'file',
+                'rss_item' => true,
+            ];
+        }
+        if ($children === []) continue; // 抓取失败或空源：不显示
+        $tree[] = [
+            'name' => $name,
+            'path' => 'rss://' . $f['url'],
+            'type' => 'dir',
+            'children' => $children,
+            'rss_feed' => true,
+            'rss_url' => $f['url'],
+        ];
+    }
+    return $tree;
+}

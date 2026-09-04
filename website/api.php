@@ -172,6 +172,39 @@ function handle_api(string $uri, string $method, array $config): never
             ]);
         }
 
+        // RSS Feed 文章：rss://<feedurl>/<guid> → 从订阅源抓取该文章，返回 description 作为 markdown（与 IMA 同走 /api/file 通用渲染流程）
+        if (strpos($rel, 'rss://') === 0) {
+            // 匹配启用的 feed（feed url 含 /，故用前缀匹配定位 feed）
+            $feedUrl = null;
+            $itemKey = null;
+            foreach ($config['rss_feeds'] ?? [] as $f) {
+                if (empty($f['on'])) continue;
+                $fu = trim((string)($f['url'] ?? ''));
+                if ($fu === '') continue;
+                $prefix = 'rss://' . $fu . '/';
+                if (strpos($rel, $prefix) === 0) {
+                    $feedUrl = $fu;
+                    $itemKey = substr($rel, strlen($prefix));
+                    break;
+                }
+            }
+            if ($feedUrl === null) fail('文件不存在');
+            $items = rss_fetch_feed($feedUrl);
+            $item = null;
+            foreach ($items as $a) {
+                if (($a['guid'] ?? '') === $itemKey || ($a['link'] ?? '') === $itemKey) { $item = $a; break; }
+            }
+            if ($item === null) fail('文件不存在');
+            $md = ($item['description'] ?? '') . "\n\n---\n\n[Read original](" . ($item['link'] ?? '') . ")";
+            ok([
+                'path' => $rel,
+                'content' => $md,
+                'mtime' => date('Y-m-d H:i:s'),
+                'size' => strlen($md),
+                'rss' => true,
+            ]);
+        }
+
         // 本地路径（vault/ 下）→ 读本地；否则 → 读桶
         $localFull = realpath(PANEL_DIR . '/vault/' . $rel);
         $isLocal = ($localFull !== false && strpos($localFull, realpath(PANEL_DIR . '/vault') . '/') === 0);
@@ -542,6 +575,37 @@ function handle_api(string $uri, string $method, array $config): never
         }
         echo "</urlset>\n";
         exit;
+    }
+
+    // RSS Feeds 列表：返回启用的外部订阅源配置（前端目录树用）
+    if ($uri === '/api/rss-feeds' && $method === 'GET') {
+        $feeds = rss_enabled_feeds($config);
+        ok(['feeds' => $feeds]);
+    }
+
+    // 单个 RSS Feed 文章列表：按需抓取并返回条目（前端点击展开时调用）
+    if ($uri === '/api/rss-feed' && $method === 'GET') {
+        $url = (string)($_GET['url'] ?? '');
+        if ($url === '') fail('Missing url', 400);
+        // 验证该 URL 在配置的启用列表中
+        $enabled = rss_enabled_feeds($config);
+        $found = false;
+        foreach ($enabled as $f) { if ($f['url'] === $url) { $found = true; break; } }
+        if (!$found) fail('Feed not configured or disabled', 403);
+        $timeout = (int)($config['rss_timeout'] ?? 10);
+        $items = rss_fetch_feed($url, $timeout);
+        // 返回前端渲染所需字段
+        $articles = [];
+        foreach ($items as $it) {
+            $articles[] = [
+                'title' => $it['title'],
+                'link' => $it['link'],
+                'pubDate' => $it['pubDate'],
+                'description' => $it['description'],
+                'guid' => $it['guid'],
+            ];
+        }
+        ok(['articles' => $articles, 'feed_url' => $url]);
     }
 
     // 知识库写 API（Agent 远程控制）：Bearer Token 认证（config.api_token，空=禁用）

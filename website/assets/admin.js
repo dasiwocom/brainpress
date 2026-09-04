@@ -62,6 +62,10 @@ var CUSTOM_COUNT = 5;
 for (var ci = 1; ci <= CUSTOM_COUNT; ci++) {
     bindSwitch('switch-custom-' + ci);
 }
+var RSS_COUNT = 5;
+for (var ri = 1; ri <= RSS_COUNT; ri++) {
+    bindSwitch('switch-rss-' + ri);
+}
 bindSwitch('switch-light');
 bindSwitch('switch-drawer');
 bindSwitch('switch-ai-enabled');
@@ -105,6 +109,15 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (d.render_webdav === true) $('switch-webdav').classList.add('on'); } catch (e) {}
     try { if (d.render_minio !== false) $('switch-minio').classList.add('on'); } catch (e) {}
     try { if (d.render_ima === true) $('switch-ima').classList.add('on'); } catch (e) {}
+    try {
+        var rfs = d.rss_feeds || [];
+        for (var i = 1; i <= RSS_COUNT; i++) {
+            var s = rfs[i - 1] || { url: '', title: '', on: false };
+            $('rss-feed-' + i + '-url').value = s.url || '';
+            $('rss-feed-' + i + '-title').value = s.title || '';
+            if (s.on) $('switch-rss-' + i).classList.add('on');
+        }
+    } catch (e) { console.log('restore rss:', e); }
     try { if (d.default_light) $('switch-light').classList.add('on'); } catch (e) {}
     try { if (d.front_drawer_expanded !== false) $('switch-drawer').classList.add('on'); } catch (e) {}
     try { if (d.ai_mode !== 'strict') $('switch-ai-mode').classList.add('on'); } catch (e) {}
@@ -315,6 +328,7 @@ function curMsg() {
     if (document.getElementById('view-mounts').style.display !== 'none') {
         return mountTab === 'minio' ? $('msg-minio') : mountTab === 'custom' ? $('msg-custom') : $('msg-vault');
     }
+    if (document.getElementById('view-rss').style.display !== 'none') return $('msg-rss');
     if (document.getElementById('view-prefs').style.display !== 'none') return $('msg-prefs');
     if (document.getElementById('view-site').style.display !== 'none') return $('msg-site');
     if (document.getElementById('view-ai').style.display !== 'none') {
@@ -335,6 +349,18 @@ function customState() {
         arr.push({
             path: $('custom-path-' + i).value.trim(),
             on: $('switch-custom-' + i).classList.contains('on')
+        });
+    }
+    return arr;
+}
+// 收集 5 条 RSS feed 状态
+function rssState() {
+    var arr = [];
+    for (var i = 1; i <= RSS_COUNT; i++) {
+        arr.push({
+            url: $('rss-feed-' + i + '-url').value.trim(),
+            title: $('rss-feed-' + i + '-title').value.trim(),
+            on: $('switch-rss-' + i).classList.contains('on')
         });
     }
     return arr;
@@ -404,6 +430,7 @@ function saveConfig() {
         ima_client_id: $('ima-client-id').value.trim(),
         ima_api_key: $('ima-api-key').value.trim(),
         custom_paths: customState(),
+        rss_feeds: rssState(),
         exclude_paths: excludeItems.slice(),
         pinned_dirs: pinnedDirs.slice(),
         pinned_articles: pinnedArticles.slice(),
@@ -476,6 +503,10 @@ $('site-password').addEventListener('blur', function () {
 // pinned-dir 已改为列表式（输入框 + Add），无失焦保存逻辑
 var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'ima-client-id', 'ima-api-key', 'site-title', 'home-article', 'content-width', 'footer-html', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
 for (var bi = 1; bi <= CUSTOM_COUNT; bi++) blurIds.push('custom-path-' + bi);
+for (var bi = 1; bi <= RSS_COUNT; bi++) {
+    blurIds.push('rss-feed-' + bi + '-url');
+    blurIds.push('rss-feed-' + bi + '-title');
+}
 blurIds.forEach(function (id) {
     $(id).addEventListener('blur', saveConfig);
 });
@@ -540,7 +571,7 @@ function fillAgentView() {
 $('btn-agent-copy-url').addEventListener('click', function () { fallbackCopy($('agent-base-url').textContent); });
 // 视图切换：挂载设置 / 偏好设置 / 站点设置 / AI（Chat+Agent 双档） / 图谱设置 / 目录管理
 function showView(name) {
-    var views = ['dav', 'mounts', 'minio', 'prefs', 'site', 'ai', 'graph', 'pinned', 'expanded', 'hidden', 'ima'];
+    var views = ['dav', 'mounts', 'rss', 'minio', 'prefs', 'site', 'ai', 'graph', 'pinned', 'expanded', 'hidden', 'ima'];
     for (var i = 0; i < views.length; i++) {
         $('view-' + views[i]).style.display = views[i] === name ? '' : 'none';
     }

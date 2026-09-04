@@ -22,6 +22,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'render_minio' => $config['render_minio'] ?? true,
             'render_ima' => $config['render_ima'] ?? false,
             'custom_paths' => $config['custom_paths'] ?? [],
+            'rss_feeds' => $config['rss_feeds'] ?? [],
             'exclude_paths' => $config['exclude_paths'] ?? [],
             'pinned_dirs' => $config['pinned_dirs'] ?? [],
             'pinned_articles' => $config['pinned_articles'] ?? [],
@@ -115,6 +116,17 @@ if (strpos($uri, '/api/admin/') === 0) {
             ];
         }
         $config['custom_paths'] = $customPaths;
+        // RSS feeds（最多 5 条：每条 = url + title + 开关）
+        $rawFeeds = $body['rss_feeds'] ?? [];
+        $rssFeeds = [];
+        for ($i = 0; $i < 5; $i++) {
+            $rssFeeds[] = [
+                'url' => trim((string)($rawFeeds[$i]['url'] ?? '')),
+                'title' => trim((string)($rawFeeds[$i]['title'] ?? '')),
+                'on' => !empty($rawFeeds[$i]['on']),
+            ];
+        }
+        $config['rss_feeds'] = $rssFeeds;
         // Exclude list: strip empty entries before saving
         $config['exclude_paths'] = array_values(array_filter(array_map('trim', (array)($body['exclude_paths'] ?? []))));
         // Tree: pinned dirs + pinned articles + expanded dirs (all lists)
@@ -285,6 +297,7 @@ if ($uri === '/admin') {
     // Side drawer menu: PHP-generated (top-level categories + child views), click switches view
     $adminMenuMd = "- [Sources](#)\n"
         . "  - [Default Mount](#view=mounts)\n"
+        . "  - [RSS Feeds](#view=rss)\n"
         . "  - [MinIO](#view=minio)\n"
         . "  - [ima](#view=ima)\n"
         . "- [Tree](#)\n"
@@ -406,7 +419,20 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                 <div class="field-row"><input type="text" id="custom-path-3" placeholder="Path 3"><button class="switch" id="switch-custom-3" aria-label="toggle custom 3 render"></button></div>
                 <div class="field-row"><input type="text" id="custom-path-4" placeholder="Path 4"><button class="switch" id="switch-custom-4" aria-label="toggle custom 4 render"></button></div>
                 <div class="field-row"><input type="text" id="custom-path-5" placeholder="Path 5"><button class="switch" id="switch-custom-5" aria-label="toggle custom 5 render"></button></div>
-                <div class="msg" id="msg-custom"></div>
+<div class="msg" id="msg-custom"></div>
+            </div>
+        </div>
+
+        <!-- View: RSS Feeds (standalone config page) -->
+        <div id="view-rss" style="display:none">
+            <div class="section">
+                <p class="desc">Configure up to 5 RSS feed sources. Each enabled feed appears as a top-level directory in the sidebar tree. Articles are fetched on demand and rendered as Markdown (description used as content).</p>
+                <div class="field-row"><input type="text" id="rss-feed-1-url" placeholder="Feed URL · https://example.com/feed.xml"><input type="text" id="rss-feed-1-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-1" aria-label="toggle rss feed 1"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-2-url" placeholder="Feed URL"><input type="text" id="rss-feed-2-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-2" aria-label="toggle rss feed 2"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-3-url" placeholder="Feed URL"><input type="text" id="rss-feed-3-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-3" aria-label="toggle rss feed 3"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-4-url" placeholder="Feed URL"><input type="text" id="rss-feed-4-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-4" aria-label="toggle rss feed 4"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-5-url" placeholder="Feed URL"><input type="text" id="rss-feed-5-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-5" aria-label="toggle rss feed 5"></button></div>
+                <div class="msg" id="msg-rss"></div>
             </div>
         </div>
 

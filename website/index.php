@@ -173,7 +173,13 @@ if (preg_match('#\.html$#i', $uri)) {
 // 服务端渲染 Graph View：/graph 或 /graph?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）
 $ssrGraph = preg_match('#^/graph(/|\\?|$)#', $uri) ? true : false;
 
+// RSS 伪路径（rss://…/url/guid）直接访问时无害化：若是索引页则正常渲染；否则重定向回首页（这些路径只作为侧边栏点击由前端/API处理，不建立真实路由）
 if ($uri !== '/' && $uri !== '/index.php' && $ssrArticlePath === '' && $ssrPdfPath === '' && $ssrExcalidrawPath === '' && $ssrCanvasPath === '' && !$ssrGraph) {
+    $decodeUri = urldecode(rawurldecode($uri));
+    if (preg_match('#^/?rss://#i', $decodeUri)) {
+        header('Location: /', true, 302);
+        exit;
+    }
     http_response_code(404);
     exit;
 }
@@ -188,7 +194,7 @@ $frontMenuMd = '';
 $frontTree = (($config['render_webdav'] ?? false) && is_dir(PANEL_DIR . '/vault'))
     ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true)
     : [];
-$frontMenuMd = tree_to_md(merge_ima_tree(merge_custom_trees($frontTree, $config), $config));
+$frontMenuMd = tree_to_md(merge_rss_tree(merge_ima_tree(merge_custom_trees($frontTree, $config), $config), $config));
 // Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
 if (trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
     $frontMenuMd = rtrim($frontMenuMd) . "\n- [Graph-View](/graph)";

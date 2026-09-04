@@ -910,6 +910,8 @@
     }
 
     async function selectFile(node) {
+        // RSS 伪路径可能带前导斜杠（来自树 href）：归一化后走通用 /api/file 渲染（与 IMA 同流程）
+        if (/^\/rss:\/\//.test(node.path)) node.path = node.path.slice(1);
         state.path = node.path;
         // PDF 文件：走阅读器（pdf.js），不走 md 渲染管线
         if (/\.pdf$/i.test(node.path)) {
@@ -967,6 +969,23 @@
         } catch (e) {
             toast(e.message);
         }
+    }
+
+    // 展开树节点（移除 collapsed class）
+    function expandTreeNode(path) {
+        var roots = [frontDrawerMd, $('left-drawer-md')].filter(Boolean);
+        roots.forEach(function (root) {
+            var li = root.querySelector('li[data-path="' + path.replace(/"/g, '\\"') + '"]');
+            if (li) {
+                li.classList.remove('collapsed');
+                // 递归展开所有祖先
+                var p = li.parentElement;
+                while (p && p !== root) {
+                    if (p.tagName === 'LI') p.classList.remove('collapsed');
+                    p = p.parentElement;
+                }
+            }
+        });
     }
 
     // 给代码块加复制按钮
@@ -1823,6 +1842,7 @@
         if (window.console) console.log('GRAPH OPENED');
         loadGraph();
     }
+
     function loadGraph() {
         fetch('/api/graph').then(function (r) { return r.json(); }).then(function (d) {
             if (!d.ok) return;
@@ -2243,6 +2263,7 @@
     }
     // SSR 直达：/graph → 直接打开图谱视图（try/catch 防御：任何前置错误不阻塞图谱）
     if (window.SSR_GRAPH) { try { openGraph(); } catch (e) {} }
+    // SSR 直达：/graph → 直接打开 Graph（?dir= 由 fetch 参数决定）
 
     /* ===== Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → 官方 exportToSvg 引擎，手写 SVG 兜底） ===== */
     function escapeXml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -3135,10 +3156,31 @@
         if (nw) nw.classList.toggle('no-blur', open); // 顶部栏实心化防透字
     }
     placeAi(); // 初始挂载：桌面→左栏 / 窄屏→抽屉
-    // 预渲染：PHP 内联的 FRONT_MENU_MD（vault/ 文章目录树）
-    if (window.FRONT_MENU_MD) {
+    // 将 state.tree 转为 markdown（前端版 tree_to_md）
+    function treeToMd(items, prefix) {
+        prefix = prefix || '';
+        var lines = [];
+        items.forEach(function (item) {
+            if (item.type === 'dir') {
+                var childMd = treeToMd(item.children || [], prefix + '  ');
+                if (childMd === '') return;
+                lines.push(prefix + '- ' + item.name);
+                lines.push(childMd);
+            } else {
+                if (item.rss_item || item.rss_placeholder) return; // RSS 占位/文章不进菜单 markdown（动态加载）
+                if (is_media(item.name) || is_image(item.name)) return;
+                var name = item.name.replace(/\.(md|pdf|canvas|html)$/i, '');
+                var href = item.path.replace(/%2F/g, '/');
+                lines.push(prefix + '- [' + name + '](/' + href + ')');
+            }
+        });
+        return lines.join('\n');
+    }
+
+    // 渲染目录树到 DOM（抽屉 + 左侧栏）
+    function renderTreeToDom(md) {
         try {
-            frontDrawerMd.innerHTML = DOMPurify.sanitize(marked.parse(window.FRONT_MENU_MD, { gfm: true }));
+            frontDrawerMd.innerHTML = DOMPurify.sanitize(marked.parse(md, { gfm: true }));
             // 兼容写法：找 li 的直接子 UL / 向上找 li 祖先（不用 :scope/closest）
             function childUl(li) {
                 for (var i = 0; i < li.children.length; i++) {
@@ -3169,7 +3211,6 @@
                         if (sub) walkUl(sub, path);
                     }
                 }
-                // 从容器内第一个 ul 开始遍历（root 是 div，不能直接当 ul 用）
                 var rootUl = root.querySelector('ul');
                 if (rootUl) walkUl(rootUl, '');
             }
@@ -3181,7 +3222,6 @@
                     var sub = childUl(li);
                     if (!sub) return;
                     li.classList.add('has-children');
-                    // 插入左侧箭头 SVG（chevron：颜色 currentColor 随主题、stroke-width 可控）
                     var arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                     arrow.setAttribute('class', 'dir-arrow');
                     arrow.setAttribute('width', '15');
@@ -3194,7 +3234,6 @@
                     arrow.setAttribute('stroke-linejoin', 'round');
                     arrow.innerHTML = '<path d="M9 6l6 6-6 6"/>';
                     li.insertBefore(arrow, li.firstChild);
-                    // 默认折叠状态（偏好设置控制）；强制展开目录不受影响
                     if (window.FRONT_DRAWER_EXPANDED === false) {
                         var forceExpand = false;
                         var dirs = window.FRONT_EXPANDED_DIRS || [];
@@ -3212,22 +3251,16 @@
                     });
                 })(lis[i]);
             }
-            // Graph view 虚拟条目：保持默认文档链接样式（与普通文章条目一模一样）
-            var as = frontDrawerMd.querySelectorAll('a');
             // 叶子链接：点击打开文章 + 关闭抽屉
+            var as = frontDrawerMd.querySelectorAll('a');
             for (var j = 0; j < as.length; j++) {
                 (function (a) {
                     var li = parentLi(a);
-                    if (li && childUl(li)) return; // 父项跳过（折叠处理）
+                    if (li && childUl(li)) return;
                     a.addEventListener('click', function (ev) {
                         ev.preventDefault();
                         var href = a.getAttribute('href') || '';
-                        // Graph view 虚拟条目：前端直接打开图谱（不整页跳转）
-                        if (href === '/graph') {
-                            openGraph();
-                            setFrontDrawer(false);
-                            return;
-                        }
+                        if (href === '/graph') { openGraph(); setFrontDrawer(false); return; }
                         var h = href.replace(/^#/, '');
                         if (!h) return;
                         setFrontDrawer(false);
@@ -3235,9 +3268,8 @@
                     });
                 })(as[j]);
             }
-            // 虚拟页别名条目（admin/graph）：按配置路径深度注入目录树，样式与普通文档完全一致；点击整页跳转（服务端 302 到真实路由）
+            // Graph alias 虚拟条目注入
             function liName(li) {
-                // 优先用 buildDirPaths 写入的 data-path（目录行首子节点是箭头 SVG，不能取 firstChild）
                 if (li.dataset && li.dataset.path) return li.dataset.path.split('/').pop();
                 var t = '';
                 for (var i = 0; i < li.childNodes.length; i++) {
@@ -3261,7 +3293,6 @@
                         if (liName(items[ii]) === want) { found = items[ii]; break; }
                     }
                     if (si === segs.length - 1) {
-                        // 叶子：普通文档样式的 li>a；同名真实文章已存在则跳过防劫持
                         if (found) {
                             var exA = found.querySelector('a');
                             if (exA && /\.md(\?|#|$)/i.test(exA.getAttribute('href') || '')) return;
@@ -3282,14 +3313,12 @@
                         }
                         (function (target, url) {
                             target.addEventListener('click', function (ev) {
-                                ev.preventDefault();
-                                ev.stopPropagation();
+                                ev.preventDefault(); ev.stopPropagation();
                                 setFrontDrawer(false);
                                 window.location.href = url;
                             });
                         })(found.querySelector('a'), '/' + aliasPath);
                     } else {
-                        // 中间目录：复用已有文件夹；缺失则创建（文本节点 + 子 UL）
                         if (!found) {
                             var dirLi = document.createElement('li');
                             var dirTxt = document.createElement('span');
@@ -3307,8 +3336,7 @@
                 }
             }
             injectAliasEntry(window.GRAPH_ALIAS_PATH);
-            // 根层级的虚拟入口（Graph-View，含未配别名时服务端直出的 Graph-View）：
-            // 按一级目录行样式展示但不加折叠箭头
+            // 根层级虚拟入口标记
             (function markAliasDirs() {
                 var rootUl = frontDrawerMd.querySelector('ul');
                 if (!rootUl) return;
@@ -3321,7 +3349,54 @@
                     if (aliases.indexOf(href) !== -1) li.classList.add('alias-dir');
                 });
             })();
+            // 克隆到左侧常驻栏
+            var leftTree = $('left-drawer-md');
+            if (leftTree) {
+                leftTree.innerHTML = frontDrawerMd.innerHTML;
+                function subUl(li) {
+                    for (var i = 0; i < li.children.length; i++) {
+                        if (li.children[i].tagName === 'UL') return li.children[i];
+                    }
+                    return null;
+                }
+                leftTree.removeEventListener('click', leftTree._treeClickHandler);
+                leftTree._treeClickHandler = function (ev) {
+                    var t = ev.target;
+                    var a = t.closest ? t.closest('a') : null;
+                    var li = t.closest ? t.closest('li') : null;
+                    if (li) {
+                        var sub = subUl(li);
+                        if (sub && !sub.contains(t)) {
+                            ev.preventDefault();
+                            li.classList.toggle('collapsed');
+                            return;
+                        }
+                    }
+                    if (a) {
+                        var n = a.parentNode, isParent = false;
+                        while (n && n !== leftTree) {
+                            if (n.tagName === 'LI' && subUl(n)) { isParent = true; break; }
+                            n = n.parentNode;
+                        }
+                        if (isParent) return;
+                        ev.preventDefault();
+                        var href = a.getAttribute('href') || '';
+                        if (href === '/graph') { openGraph(); return; }
+                        var aliasG = String(window.GRAPH_ALIAS_PATH || '').replace(/^\/+|\/+$/g, '');
+                        if (aliasG && href === '/' + aliasG) { window.location.href = href; return; }
+                        var h = href.replace(/^#/, '');
+                        if (!h) return;
+                        selectFile({ path: decodeURI(h) });
+                    }
+                };
+                leftTree.addEventListener('click', leftTree._treeClickHandler);
+            }
         } catch (e) {}
+    }
+
+// 预渲染：PHP 内联的 FRONT_MENU_MD（vault/ 文章目录树）
+    if (window.FRONT_MENU_MD) {
+        renderTreeToDom(window.FRONT_MENU_MD);
     }
     $('vp-menu-btn').addEventListener('click', function (e) {
         e.stopPropagation();
@@ -3397,6 +3472,13 @@
         var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
         if (!a) return;
         var href = a.getAttribute('href') || '';
+        // RSS 伪路径（侧边栏文章/源目录）→ 交给 selectFile 用通用 /api/file 渲染，绝不导航
+        var rssTest = decodeURIComponent((href.charAt(0) === '/' ? href.substring(1) : href));
+        if (/^rss:\/\//.test(rssTest)) {
+            e.preventDefault();
+            selectFile({ path: rssTest });
+            return;
+        }
         if (/(\.md|\.canvas|\.html)$/i.test(href) && href.charAt(0) === '/') {
             e.preventDefault();
             var p = href.substring(1);
