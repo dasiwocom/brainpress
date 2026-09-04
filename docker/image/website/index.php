@@ -55,6 +55,10 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
             readfile($full);
             exit;
         }
+        // ima mount static files (PDF, etc.): proxy-fetch then forward (download requires X-IMA-* headers)
+        if (ima_index_lookup($config, $rel) !== null) {
+            if (ima_stream_file($config, $rel)) exit;
+        }
         fail('Not Found', 404);
     }
 }
@@ -107,6 +111,15 @@ if (preg_match('#\.md$#i', $uri)) {
                 $ssrArticleContent = $rawContent;
             }
         }
+    } elseif (ima_index_lookup($config, $rel) !== null) {
+        // ima mount md: proxy-fetch body and inline it (open-and-read)
+        if (!is_excluded($rel, $config['exclude_paths'] ?? [])) {
+            $raw = ima_read_raw($config, $rel);
+            if ($raw !== null) {
+                $ssrArticlePath = $rel;
+                $ssrArticleContent = $raw['bytes'];
+            }
+        }
     }
 }
 
@@ -116,6 +129,11 @@ if (preg_match('#\.pdf$#i', $uri)) {
     $pdfRel = urldecode(ltrim($uri, '/'));
     $pdfFull = resolve_vault_file($pdfRel, $config);
     if ($pdfFull !== null) {
+        if (!is_excluded($pdfRel, $config['exclude_paths'] ?? [])) {
+            $ssrPdfPath = $pdfRel;
+        }
+    } elseif (ima_index_lookup($config, $pdfRel) !== null) {
+        // ima mount PDF: frontend streams it via /vault/<rel> (server proxy)
         if (!is_excluded($pdfRel, $config['exclude_paths'] ?? [])) {
             $ssrPdfPath = $pdfRel;
         }
@@ -154,7 +172,7 @@ $frontMenuMd = '';
 $frontTree = (($config['render_webdav'] ?? false) && is_dir(PANEL_DIR . '/vault'))
     ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [])
     : [];
-$frontMenuMd = tree_to_md(merge_custom_trees($frontTree, $config));
+$frontMenuMd = tree_to_md(merge_ima_tree(merge_custom_trees($frontTree, $config), $config));
 // Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
 if (trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
     $frontMenuMd = rtrim($frontMenuMd) . "\n- [Graph-View](/graph)";
@@ -220,8 +238,9 @@ var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
 <link rel="stylesheet" href="/assets/vs.min.css">
 <link rel="stylesheet" href="/assets/vs2015.min.css">
 <script src="/assets/highlight.min.js"></script>
+<script src="/assets/nginx.min.js"></script>
 <script src="/assets/lz-string.min.js"></script>
-    <link rel="stylesheet" href="/assets/site.css?v=20260829b">
+    <link rel="stylesheet" href="/assets/site.css?v=20260904c">
 <style>/* 阅读列宽（后台可调）：覆盖 site.css 的默认值 */
 :root { --vp-content-w:<?php echo $contentW; ?>px; }
 </style>
@@ -297,14 +316,15 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                     <div class="md" id="md-view" style="display:none"></div>
                     <!-- PDF 阅读器（pdf.js 渲染，翻页/缩放/夜间反转） -->
                     <div id="pdf-view" style="display:none"></div>
-                    <!-- Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → SVG） -->
-                    <div id="excalidraw-view" style="display:none"><div class="excalidraw-canvas" id="excalidraw-canvas"></div></div>
-                    <!-- Obsidian Canvas 白板渲染（.canvas：JSON → SVG 节点/连线画布） -->
-                    <div id="canvas-view" style="display:none"><div class="canvas-board" id="canvas-board"></div></div>
                     <!-- 反向链接（被谁引用） -->
                     <div id="backlinks"></div>
                 </div>
             </div>
+            <!-- Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → SVG）
+                 与 Graph 同级：fixed 铺满中+右（保留左树）——离开 .doc-main 避免 max-width 容器限制 -->
+            <div id="excalidraw-view" style="display:none"><div class="excalidraw-canvas" id="excalidraw-canvas"></div></div>
+            <!-- Obsidian Canvas 白板渲染（.canvas：JSON → SVG 节点/连线画布）与 Graph 同级，同上 -->
+            <div id="canvas-view" style="display:none"><div class="canvas-board" id="canvas-board"></div></div>
             <!-- Graph View：独立图谱页（/graph，铺满内容区，只显示所有文章的关系图） -->
             <div class="graph-view" id="graph-view" style="display:none">
                 <div class="graph-canvas-wrap" id="graph-canvas-wrap">
@@ -390,7 +410,10 @@ var CANVAS_JSON = <?php echo $ssrCanvasPath !== '' ? json_encode($ssrCanvasConte
 var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
 // 站点标题（PDF/Canvas/Excalidraw 视图动态 document.title 用）
 var SITE_TITLE = <?php echo json_encode($siteTitle); ?>;
+// 文章页脚：开关 + 自定义 HTML（Site 设置；默认 "Created with BrainPress v3.0.0 © 2026"，BrainPress 链接到项目主页）
+var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : 'false'; ?>;
+var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
-<script src="/assets/site.js?v=20260829b"></script>
+<script src="/assets/site.js?v=20260904b"></script>
 </body>
 </html>

@@ -88,6 +88,23 @@ Browser ◀──render── index.php (single PHP entry)
 4. 访问网站，然后前往 `/admin` 设置管理员密码。
 5. 可选：在管理面板 → **WebDAV** 创建 WebDAV 同步账号（Obsidian 同步），并添加 LLM API 密钥以启用 AI 对话。
 
+### 不想配置 Nginx？
+
+仓库自带本地开发服务器脚本（PHP 内置服务器 + 路由模拟），一条命令即可在本地跑通全部功能（在 `website/` 目录内执行）：
+
+```bash
+./start.sh          # 启动/重启（默认 http://127.0.0.1:8080）
+./start.sh 9090     # 指定端口
+./start.sh stop     # 停止
+```
+
+| 文件 | 说明 |
+|------|------|
+| `start.sh` | 启动脚本：拉起 `php -S` 并挂载 `router.php` |
+| `router.php` | 开发路由：把生产环境的 Nginx 伪静态规则（`/admin` 转发、`.md`/`.pdf` 重写、敏感文件 404）用 PHP 等价模拟；自定义挂载目录的流式兜底已收敛进 index.php |
+
+> 这两个文件**仅用于本地开发**。生产部署使用 Nginx/Apache 时完全不需要它们，但保留在仓库中不影响运行。
+
 ## Nginx 配置说明
 
 ```nginx
@@ -125,14 +142,24 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log) { return 404; }
 
 ```
 brainpress/
-├── assets/          # CSS / JS / 字体 / 供应商库（本地）
-├── vault/           # 你的笔记 + PDF + 绘图 + 白板
-├── admin.php        # 管理面板入口
-├── config.json      # 所有配置（密钥）
-├── functions.php    # 核心库
-├── index.php        # 前端入口
-└── README.md
+├── website/             # 🌐 网站版（nginx/PHP 部署；开发与部署只跟这个目录打交道）
+│   ├── assets/          #   CSS / JS / 字体 / 供应商库（本地）
+│   ├── vault/           #   你的笔记 + PDF + 绘图 + 白板
+│   ├── admin.php        #   后台管理入口
+│   ├── api.php          #   公开 API 处理器（index.php 内部加载）
+│   ├── dav.php          #   WebDAV 端点处理器（index.php 内部加载）
+│   ├── config.json      #   所有配置（密钥；公开仓库前请清空真实密钥）
+│   ├── functions.php    #   核心函数库（含扫描缓存）
+│   ├── index.php        #   前台主入口
+│   ├── router.php       #   💻 仅本地开发：nginx 规则模拟
+│   └── start.sh         #   💻 仅本地开发：一键启动脚本
+├── docker/              # 🐳 Docker 版（完全自包含的独立项目，部署教程见 docker/README.md）
+├── landing/             # 🏠 官网展示页（纯静态）
+├── electron/            # 🖥️ 桌面端
+└── README.md            # 总索引（各项目的细节文档在各自目录里）
 ```
+
+> **Docker 版**已独立成 `docker/` 项目：自带网站代码副本、示例库种子和完整文档，与网站版互不共享任何文件——更新只能通过 `docker/sync-website.sh` 从网站版复制。部署（宝塔面板）、数据备份、发布到 Docker Hub 的步骤全部见 **`docker/README.md`**。
 
 ## 公共 API
 

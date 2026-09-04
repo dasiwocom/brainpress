@@ -340,6 +340,10 @@ html.dark .search-view { background:transparent; -webkit-backdrop-filter:saturat
 }
 html.dark .doc-title { color:#dfdfd6; }
 .md { max-width:760px; flex:1; min-width:0; font-size:16px; line-height:25px; color:#3c3c43; font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; }
+/* 文章页脚（Site → Footer HTML；支持 HTML，如 "Created with BrainPress v3.0.0 © 2026"） */
+.md-footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line); font-size:12px; color:var(--vp-c-text-mute); line-height:1.6; }
+.md-footer a { color:var(--vp-c-brand); text-decoration:none; }
+.md-footer a:hover { text-decoration:underline; }
 /* 图片限制在容器内（桌面/移动都生效，防止大图溢出屏幕） */
 .md img { max-width:100%; height:auto; border-radius:6px; }
 /* 文章目录（右侧 TOC） */
@@ -435,8 +439,10 @@ html.dark .toc-link:hover { color:var(--vp-c-brand); }
         translate: calc(var(--sbw, 0px) / 2) 0;
     }
     .archive-view { max-width:none; }
-    /* Graph 页占中+右：从左轨道右缘铺到视口右边（特异性高于下方基础规则） */
-    #content .graph-view { left:var(--rail-w); }
+    /* Graph/Canvas/Excalidraw 铺满中+右：从左轨道右缘铺到视口右边（特异性高于基础 fixed 规则）
+       三者都位于 #content 内；graph/excalidraw 用 .类 覆盖，canvas 直接用更高特异性的 id 覆盖 */
+    #content .graph-view, #content #excalidraw-view { left:var(--rail-w); }
+    #content #canvas-view { left:var(--rail-w); }
 }
 
 /* 紧凑桌面（769–1399）：先藏右轨（TOC），左轨固定 280px，内容在剩余空间居中、不够宽则自动压缩。
@@ -480,6 +486,19 @@ html.dark .md pre code { color:#dcdcdc; }
 /* 日间代码块背景：与页面白底有区分 */
 .md pre { background:#f4f4f6; }
 html.dark .md pre { background:var(--vp-c-bg-soft); }
+/* 代码块行号（Quartz/Obsidian 同款）：pre 内 table，行号列固定宽、右对齐、选中不可见 */
+.md pre .code-lines { border-collapse:collapse; margin:0; width:100%; table-layout:fixed; }
+.md pre .code-lines td { border:none; padding:0; font-size:13px; line-height:1.6; vertical-align:top; }
+.md pre .code-lines .code-line-num {
+    width:2.4em; min-width:2.4em; padding-right:1em; text-align:right; user-select:none;
+    color:rgba(120,120,120,.7); background:transparent;
+}
+.md pre .code-lines .code-line-body { padding-left:1em; white-space:pre; color:inherit; }
+.md pre .code-lines .code-line-num::selection { background:transparent; }
+html.dark .md pre .code-lines .code-line-num { color:rgba(180,180,180,.45); }
+/* pre 的 padding 让位给表格：行号从最左开始，正文与行号之间由 td padding 分隔 */
+.md pre { padding:16px 0; }
+.md pre .code-lines .code-line-body { padding-right:20px; }
 /* 代码块复制按钮（VitePress 风格：40px 图标按钮） */
 .md pre .code-copy {
     position:absolute; top:12px; right:12px; z-index:3;
@@ -651,6 +670,8 @@ html.dark .md a:hover { color:var(--vp-c-brand); }
    工具栏钉顶 + 页面铺满框体零间距纵向滚动；深色模式保持白纸不反色 */
 #pdf-view { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
 #pdf-view > * { min-height:0; }
+/* 阅读列宽同文章正文（.md max-width:760px 居中）：PDF 不再占满整栏，与文章内容区对齐 */
+#pdf-view { max-width:760px; margin-left:auto; margin-right:auto; }
 /* 嵌入语境：与 .md .ob-embed.loaded 同权重且靠后，保证框体样式生效 */
 .ob-pdf,
 .md .ob-embed.ob-pdf {
@@ -697,8 +718,9 @@ html.dark .md a:hover { color:var(--vp-c-brand); }
 }
 .ob-pdf-zoomsel:hover { background-color:var(--hover); color:var(--vp-c-text-1); }
 html.dark .ob-pdf-zoomsel option { color:#ddd; background:#1e1e22; }
-/* 页面区：铺满框体零间距，页间仅一条细缝线 */
-.ob-pdf-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
+/* 页面区：铺满框体零间距，页间仅一条细缝线；overflow-x 隐藏保证纸张绝不横向越界（防“左伸”溢出） */
+.ob-pdf-body { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; }
+.ob-pdf { max-width:100%; box-sizing:border-box; }
 .ob-pdf-pages { display:flex; flex-direction:column; gap:0; }
 .ob-pdf-page { position:relative; width:100%; background:#fff; border-bottom:1px solid rgba(0,0,0,.09); }
 .ob-pdf-page:last-child { border-bottom:none; }
@@ -722,14 +744,19 @@ html.dark .ob-pdf-page { border-bottom-color:rgba(255,255,255,.07); }
 .ob-pdf-outline a:hover { background:var(--hover); }
 
 /* Excalidraw 绘画渲染（.excalidraw.md：SVG 画布自适应） */
-.excalidraw-view { padding:24px 8px 40px; }
-.excalidraw-canvas svg { max-width:100%; height:auto; display:block; border-radius:8px; box-shadow:0 1px 8px rgba(0,0,0,.12); }
-html.dark .excalidraw-canvas svg { box-shadow:0 1px 8px rgba(0,0,0,.4); }
+#excalidraw-view { position:fixed; top:56px; right:0; bottom:0; left:0; z-index:50; display:none; background:var(--vp-c-bg); padding:0; overflow:auto; }
+.excalidraw-canvas { width:100%; min-height:100%; touch-action:manipulation; }
+.excalidraw-canvas svg { max-width:none; width:100%; height:auto; display:block; border-radius:8px; }
 
-/* Obsidian Canvas 白板渲染（.canvas：SVG 节点/连线，颜色跟随日夜主题） */
-.canvas-view { padding:24px 8px 40px; }
-.canvas-board { width:100%; overflow-x:auto; }
-.canvas-board svg { min-width:100%; height:auto; display:block; }
+/* Obsidian Canvas 白板渲染（.canvas：SVG 节点/连线，颜色跟随日夜主题）
+   全屏体验（同 Graph）：fixed 铺满中+右、保留左树目录、隐藏右轨 TOC；支持平移/缩放/拖卡片（touch-action:none） */
+#canvas-view { position:fixed; top:56px; right:0; bottom:0; left:0; z-index:50; display:none; background:var(--vp-c-bg); padding:0; }
+.canvas-board { width:100%; height:100%; overflow:hidden; position:relative; touch-action:none; cursor:grab; }
+.canvas-board.dragging { cursor:grabbing; user-select:none; }
+.canvas-board svg { width:100%; height:100%; display:block; }
+.canvas-board .cv-view { will-change:transform; transform-origin:0 0; }
+.cv-card { cursor:pointer; }
+.cv-card.dragging { cursor:grabbing; }
 .cv-node { fill:var(--vp-c-bg); stroke:var(--line); stroke-width:1.2; }
 .cv-group { fill:transparent; stroke:#98981d; stroke-width:1.2; stroke-dasharray:5 4; }
 html.dark .cv-group { stroke:#b8b857; }
@@ -764,10 +791,11 @@ html.dark .graph-link { stroke:#3a3a4a; }
 .graph-link-hot { opacity:1; stroke-width:2; }
 .graph-link-dim { opacity:.06; }
 .graph-label { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-size:10.5px; font-weight:600; line-height:1.2; fill:var(--vp-c-text-2); paint-order:stroke; stroke:var(--vp-c-bg); stroke-width:3px; stroke-linejoin:round; pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .18s ease; }
-.graph-node { cursor:pointer; transition:opacity .2s ease; will-change:transform; }
+.graph-node { cursor:pointer; transition:opacity .2s ease; will-change:transform; touch-action:manipulation; }
 .graph-node circle { fill:#5672cd; transition:transform .2s ease; transform-box:fill-box; transform-origin:center; }
 html.dark .graph-node circle { fill:#3e63dd; }
-.graph-node:hover circle { transform:scale(1.3); }
+.graph-node .graph-hit { cursor:pointer; pointer-events:all; }
+.graph-node:hover circle:not(.graph-hit) { transform:scale(1.3); }
 /* hover 高亮：非邻居淡化（class 切换——轻量） */
 .graph-dim { opacity:.15; }
 

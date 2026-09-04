@@ -702,6 +702,7 @@
         // 文档标题 = 文件名（去扩展名），清除旧翻译标记
         var docName = nodePath.split('/').pop().replace(/\.md$/i, '');
         $('doc-title').textContent = docName;
+        $('doc-title').style.display = '';
         delete $('doc-title').dataset.orig;
         // 视图切换：内容就绪后一次性显示
         hideSpecialViews();  // 清掉可能残留的 PDF/画布/图谱（互斥）
@@ -710,8 +711,16 @@
         $('doc-wrap').style.display = 'flex';
         $('md-view').style.display = '';
         $('content').scrollTop = 0;
+        // 文章页脚（Site 设置控制；支持 HTML——默认 "Created with BrainPress v3.0.0 © 2026"）
+        if (window.ARTICLE_FOOTER && window.ARTICLE_FOOTER_HTML) {
+            var foot = document.createElement('div');
+            foot.className = 'md-footer';
+            foot.innerHTML = window.ARTICLE_FOOTER_HTML;
+            $('md-view').appendChild(foot);
+        }
         renderToc();
         addCodeCopy();
+        addCodeLineNumbers();
         processObsidian();
         // 树可能先于文章就绪（retry 已在空视图上跑过）：渲染完成后补一次解析，双保险且幂等
         if (state.tree && state.tree.length) retryObsidian();
@@ -806,6 +815,43 @@
                 }
             });
             pre.appendChild(btn);
+        });
+    }
+    /* 代码块行号（Quartz/Obsidian 同款）：每行左侧带行号。逐行重高亮，跨行注释/字符串的
+       连续高亮可能不完整（取舍），但行号稳定、可选中复制。 */
+    function addCodeLineNumbers() {
+        $('md-view').querySelectorAll('pre').forEach(function (pre) {
+            if (pre.querySelector('.code-lines') || !pre.querySelector('code')) return;
+            var code = pre.querySelector('code');
+            var lang = ((code.className.match(/language-([\w+-]+)/) || [])[1] || '').toLowerCase();
+            var text = code.textContent || '';
+            var lines = text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+            if (lines.length < 2) return;  // 单行不编号（保持简洁）
+            if (lines.length === 1 && lines[0] === '') return;
+            var table = document.createElement('table');
+            table.className = 'code-lines';
+            var tb = document.createElement('tbody');
+            var lng = hljs.getLanguage && hljs.getLanguage(lang);
+            lines.forEach(function (line, i) {
+                var tr = document.createElement('tr');
+                var num = document.createElement('td');
+                num.className = 'code-line-num';
+                num.textContent = String(i + 1);
+                var body = document.createElement('td');
+                body.className = 'code-line-body';
+                var html;
+                try {
+                    html = lng ? hljs.highlight(line, { language: lang }).value : escapeXml(line);
+                } catch (e) { html = escapeXml(line); }
+                // 保证空行保高（行号对齐）
+                if (!html || html === '') html = '&nbsp;';
+                body.innerHTML = html;
+                tr.appendChild(num); tr.appendChild(body);
+                tb.appendChild(tr);
+            });
+            table.appendChild(tb);
+            code.style.display = 'none';
+            pre.appendChild(table);
         });
     }
     function fallbackCopy(text) {
@@ -1020,7 +1066,13 @@
         miss.textContent = '![[' + name + ']]';
         miss.title = 'Embed target not found';
         el.replaceWith(miss);
-        if (state.tree && state.tree.length) setTimeout(retryObsidian, 0);
+        // 重试只用于"树未就绪、路径猜错"的场景。树已加载且 findAsset 确认资产不存在 → 永久缺失，
+        // 停止重试（否则视频/图片 onerror → embedFail → retry → 重新挂载 → 又 404，无限 抖动）。
+        if (state.tree && state.tree.length) {
+            if (findAsset(name)) setTimeout(retryObsidian, 0);
+        } else {
+            setTimeout(retryObsidian, 0);
+        }
     }
     // 嵌入统一挂载：按扩展名分派 图片/视频/音频/画布/笔记（含块引用提取）。
     // 树未就绪时 resolveAsset 只能同目录兜底猜路径 → 失败落成 missing[data-name]，loadTree 后统一重试
@@ -1525,11 +1577,11 @@
             var arr = dirGroups[d];
             var ang = (sector / Math.max(1, dKeys.length)) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
             sector++;
-            var rad = Math.min(W, H) * 0.38;
+            var rad = Math.min(W, H) * 0.46;
             var ccx = cx + Math.cos(ang) * rad, ccy = cy + Math.sin(ang) * rad;
             arr.forEach(function (n, i) {
                 var a = (i / Math.max(1, arr.length)) * Math.PI * 2;
-                var r = Math.min(110, Math.sqrt(arr.length) * 24);
+                var r = Math.min(150, Math.sqrt(arr.length) * 34);
                 n.x = ccx + Math.cos(a) * r + (Math.random() - 0.5) * 30;
                 n.y = ccy + Math.sin(a) * r + (Math.random() - 0.5) * 30;
                 n.vx = 0; n.vy = 0; n.fixed = false;
@@ -1565,14 +1617,22 @@
             line.setAttribute('class', 'graph-link');
             line.setAttribute('data-s', l.source);
             line.setAttribute('data-t', l.target);
+            // 连接越重要的线越粗（取两端度数——Obsidian 的 link thickness 观感，结构更立体）
+            line.setAttribute('stroke-width', Math.min(3.2, 0.6 + Math.max(degree[l.source] || 0, degree[l.target] || 0) * 0.12));
             line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
             line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
             graphSvgG.appendChild(line);
             simLineEls.push(line);
         });
         simEls = [];
+        // 节点尺寸：Obsidian/Quartz 同款"连接越多越大"——sqrt(deg) 增长且不封顶，枢纽明显比孤立大 2~3 倍
+        var maxDeg = 0;
+        nodes.forEach(function (n) { if ((degree[n.id] || 0) > maxDeg) maxDeg = degree[n.id] || 0; });
         nodes.forEach(function (n) {
-            var r = (5 + Math.min(1.2, (degree[n.id] || 0) * 0.25)) * 0.7;  // 整体缩小 30%：孤立 ≈3.5、有链接最多 ≈4.3
+            var base = 4.2, d = degree[n.id] || 0;
+            var r = base + Math.sqrt(d) * 1.8;
+            // 兜底：最大的没必要无限大，但保留足够差异（cap 在很靠后，枢纽仍是大号）
+            r = Math.min(r, base + Math.sqrt(maxDeg) * 1.8);
             n.r = r;
             var node = document.createElementNS(GNS, 'g');
             node.setAttribute('class', 'graph-node');
@@ -1581,6 +1641,12 @@
             c.setAttribute('r', r);
             c.setAttribute('fill', graphColors[n.dir] || '#888');
             node.appendChild(c);
+            // 透明 hit-area：视觉小圆点 + 更大的不可见触摸/点击区（移动端 ≥ 22px 半径才点得准，Obsidian 同为"可视化小、可点区大"）
+            var hit = document.createElementNS(GNS, 'circle');
+            hit.setAttribute('r', Math.max(13, r + 7));
+            hit.setAttribute('fill', 'transparent');
+            hit.setAttribute('class', 'graph-hit');
+            node.appendChild(hit);
             var t = document.createElementNS(GNS, 'text');
             t.setAttribute('text-anchor', 'middle');
             t.setAttribute('class', 'graph-label');
@@ -1711,7 +1777,7 @@
         var nodes = graphNodes;
         if (!nodes.length || simAlpha <= 0) return;
         var a = simAlpha;
-        var REP = 3300, SPRING = 0.06, REST = 105;
+        var REP = 6200, SPRING = 0.055, REST = 135;
         // 多体斥力（O(n²) 直接累加——vault 级节点量最优解，无需四叉树）
         for (var i = 0; i < nodes.length; i++) {
             if (nodes[i].fixed) continue;
@@ -1749,8 +1815,8 @@
         // 积分：中心引力 + 阻尼（velocityDecay 0.6=d3 默认）+ 位移
         nodes.forEach(function (n) {
             if (n.fixed) return;
-            n.vx += (cx - n.x) * 0.02 * a;
-            n.vy += (cy - n.y) * 0.02 * a;
+            n.vx += (cx - n.x) * 0.015 * a;
+            n.vy += (cy - n.y) * 0.015 * a;
             n.vx *= 0.6; n.vy *= 0.6;
             // 安全钳制（正常物理下到不了这个值——只防极端情况弹飞）
             if (n.vx > 12) n.vx = 12; if (n.vx < -12) n.vx = -12;
@@ -2044,12 +2110,62 @@
         hideSpecialViews();  // 清掉可能残留的 PDF/Canvas/图谱（互斥）——必须在显示本视图之前
         dv.style.display = 'block';  // 显示画布容器（初始 display:none——忘了设置会导致空白）
         $('archive-view').style.display = 'none';
+        $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
         var htp2 = $('home-toc-panel'); if (htp2) htp2.style.display = 'none';
         var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
         var ttl = $('doc-title');
-        if (ttl) ttl.textContent = (window.EXCALIDRAW_PATH || '').split('/').pop().replace(/\.excalidraw\.md$/i, '');
+        // 全屏沉浸：隐藏文章标题（.excalidraw 打开无标题栏，画布吃满中+右）
+        if (ttl) { ttl.textContent = ''; ttl.style.display = 'none'; }
+        // 交互（同 Canvas 体验）：滚轮/双指缩放、空白拖拽平移；画布铺满中+右
+        enableExcalidrawPanZoom(dv);
+    }
+    // Excalidraw pan/zoom：svg 按自然尺寸渲染，外层 holder 承载 translate+scale（同 Canvas 的 cv-view 语义）
+    function enableExcalidrawPanZoom(dv) {
+        var svg = dv.querySelector('svg');
+        if (!svg) return;
+        var wrap = dv.querySelector('.excalidraw-canvas') || dv;
+        if (wrap.dataset.pz) return;
+        wrap.dataset.pz = '1';
+        var nat = svg.getBoundingClientRect();
+        svg.style.width = nat.width + 'px';
+        svg.style.maxWidth = 'none';
+        var holder = document.createElement('div');
+        holder.style.cssText = 'transform-origin:0 0;will-change:transform;';
+        svg.parentNode.replaceChild(holder, svg);
+        holder.appendChild(svg);
+        wrap.style.overflow = 'hidden';
+        var k = 1, tx = 0, ty = 0;
+        function apply() { holder.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')'; }
+        var cw = wrap.clientWidth || 600, ch = wrap.clientHeight || 400;
+        if (nat.width > cw || nat.height > ch) {
+            var f = Math.min(cw / nat.width, ch / nat.height, 1.2);
+            k = f; tx = (cw - nat.width * f) / 2; ty = (ch - nat.height * f) / 2;
+        }
+        apply();
+        wrap.style.cursor = 'grab';
+        wrap.addEventListener('wheel', function (ev) {
+            ev.preventDefault();
+            var r = wrap.getBoundingClientRect();
+            var px = ev.clientX - r.left, py = ev.clientY - r.top;
+            var k2 = k * (ev.deltaY < 0 ? 1.12 : 0.892);
+            k2 = Math.max(0.15, Math.min(8, k2));
+            tx = px - (px - tx) * (k2 / k);
+            ty = py - (py - ty) * (k2 / k);
+            k = k2; apply();
+        }, { passive: false });
+        var down = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        wrap.addEventListener('pointerdown', function (ev) {
+            if (ev.button !== 0) return;
+            if (ev.target.closest('a')) return;
+            down = true; sx = ev.clientX; sy = ev.clientY; ox = tx; oy = ty;
+            if (wrap.setPointerCapture) { try { wrap.setPointerCapture(ev.pointerId); } catch (e) {} }
+        });
+        wrap.addEventListener('pointermove', function (ev) { if (!down) return; tx = ox + (ev.clientX - sx); ty = oy + (ev.clientY - sy); apply(); });
+        function up() { down = false; }
+        wrap.addEventListener('pointerup', up);
+        wrap.addEventListener('pointercancel', up);
     }
     if (window.SSR_EXCALIDRAW) { try { renderExcalidraw(); } catch (e) { if (window.console) console.log('excalidraw err', e); } }
 
@@ -2064,12 +2180,12 @@
     function renderCanvas() {
         var dv = $('canvas-view'), board = $('canvas-board');
         if (!dv || !board) return;
+        finishCanvasView();   // 先显示视图，保证 board.clientWidth 有真实值供首帧缩放适配
         var data;
         try { data = JSON.parse(window.CANVAS_JSON || '{}'); }
-        catch (e) { board.innerHTML = '<p style="padding:24px">Invalid canvas file: ' + escapeXml(e.message) + '</p>'; finishCanvasView(); return; }
-        try { renderCanvasScene(data, board); }
+        catch (e) { board.innerHTML = '<p style="padding:24px">Invalid canvas file: ' + escapeXml(e.message) + '</p>'; return; }
+        try { renderCanvasScene(data, board, { interactive: true }); }
         catch (e) { board.innerHTML = '<p style="padding:24px">Render failed: ' + escapeXml((e && e.message) || e) + '</p>'; }
-        finishCanvasView();
     }
     // 视图切换（同 Excalidraw）：白板无目录 → 右轨两个 TOC 面板都隐藏
     function finishCanvasView() {
@@ -2078,14 +2194,17 @@
         hideSpecialViews();  // 清掉可能残留的 PDF/Excalidraw/图谱（互斥）
         dv.style.display = 'block';
         $('archive-view').style.display = 'none';
+        $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
         var htp = $('home-toc-panel'); if (htp) htp.style.display = 'none';
         var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
+        // Canvas 全屏沉浸：隐藏文章标题，中+右全部让给画布（Obsidian 打开 .canvas 无标题栏）
         var ttl = $('doc-title');
-        if (ttl) ttl.textContent = (window.CANVAS_PATH || '').split('/').pop().replace(/\.canvas$/i, '');
+        if (ttl) { ttl.textContent = ''; ttl.style.display = 'none'; }
     }
-    function renderCanvasScene(data, board) {
+    function renderCanvasScene(data, board, opts) {
+        var interactive = !!(opts && opts.interactive);
         var NS = 'http://www.w3.org/2000/svg';
         var nodes = (data.nodes || []).filter(function (n) { return n && n.id && n.x != null; });
         var byId = {};
@@ -2097,15 +2216,36 @@
             if (n.x + w > maxX) maxX = n.x + w; if (n.y + h > maxY) maxY = n.y + h;
         });
         if (!isFinite(minX)) { minX = -40; minY = -40; maxX = 760; maxY = 560; }
+        var cw = maxX - minX + pad * 2, ch = maxY - minY + pad * 2;
         var svg = document.createElementNS(NS, 'svg');
         svg.setAttribute('xmlns', NS);
-        svg.setAttribute('viewBox', (minX - pad) + ' ' + (minY - pad) + ' ' + (maxX - minX + pad * 2) + ' ' + (maxY - minY + pad * 2));
-        svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        // 交互模式：svg 铺满容器、无 viewBox 自适应；内容挂进可平移缩放的 cv-view 分组（同 Obsidian 视口语义）
+        var cvv = svg;
+        if (interactive) {
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '100%');
+            cvv = document.createElementNS(NS, 'g');
+            cvv.setAttribute('class', 'cv-view');
+            svg.appendChild(cvv);
+        } else {
+            svg.setAttribute('viewBox', (minX - pad) + ' ' + (minY - pad) + ' ' + cw + ' ' + ch);
+            svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        }
         function el(tag, attrs, parent) {
             var e = document.createElementNS(NS, tag);
             for (var k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]);
-            (parent || svg).appendChild(e);
+            (parent || cvv).appendChild(e);
             return e;
+        }
+        // 卡片分组：交互模式把每个内容节点的元素包进 <g class="cv-card">，拖拽改其自身 translate（世界坐标偏移）
+        var cards = {};
+        function startCard(id) {
+            var g = document.createElementNS(NS, 'g');
+            g.setAttribute('class', 'cv-card');
+            g.setAttribute('data-id', id);
+            cvv.appendChild(g);
+            cards[id] = { g: g, tx: 0, ty: 0 };
+            return g;
         }
         // 边端点：节点指定边的中点；贝塞尔控制点沿该边法向外伸（Obsidian 同款平滑曲线语义）
         function sidePt(n, side) {
@@ -2135,15 +2275,18 @@
             var x = n.x || 0, y = n.y || 0, w = n.width || 200, h = n.height || 60;
             // 图片文件节点：整卡铺图（圆角裁剪，等比 cover）
             if (n.type === 'file' && /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(n.file || '')) {
+                var hostCard = startCard(n.id);
                 var cid = 'cvclip-' + String(n.id).replace(/[^a-zA-Z0-9-]/g, '');
                 var cp = el('clipPath', { id: cid });
                 el('rect', { x: x, y: y, width: w, height: h, rx: 8 }, cp);
-                svg.appendChild(cp);
-                var im = el('image', { x: x, y: y, width: w, height: h, 'clip-path': 'url(#' + cid + ')', preserveAspectRatio: 'xMidYMid slice' });
+                hostCard.appendChild(cp);
+                var im = el('image', { x: x, y: y, width: w, height: h, 'clip-path': 'url(#' + cid + ')', preserveAspectRatio: 'xMidYMid slice' }, hostCard);
                 im.setAttribute('href', '/vault/' + encodeURI(String(n.file || '').replace(/^\.?\//, '')).replace(/%2F/gi, '/'));
+                cards[n.id].baseX = x; cards[n.id].baseY = y;
                 return;
             }
-            var rect = el('rect', { x: x, y: y, width: w, height: h, rx: 8, 'class': 'cv-node' });
+            hostCard = startCard(n.id);
+            var rect = el('rect', { x: x, y: y, width: w, height: h, rx: 8, 'class': 'cv-node' }, hostCard);
             if (col) rect.setAttribute('stroke', col);
             var fo = document.createElementNS(NS, 'foreignObject');
             fo.setAttribute('x', x); fo.setAttribute('y', y); fo.setAttribute('width', w); fo.setAttribute('height', h);
@@ -2173,9 +2316,11 @@
                 box.innerHTML = DOMPurify.sanitize(marked.parse(String(n.text || ''), { gfm: true, breaks: true }));
             }
             fo.appendChild(box);
-            svg.appendChild(fo);
+            hostCard.appendChild(fo);
+            cards[n.id].baseX = x; cards[n.id].baseY = y;
         });
-        // 连线（画在节点之后：Obsidian 连线浮于卡片上方）
+        // 连线（画在节点之后：Obsidian 连线浮于卡片上方）；交互模式存 refs 供卡片拖拽时跟随
+        var edges = [];
         (data.edges || []).forEach(function (ed) {
             var a = byId[ed.fromNode], b = byId[ed.toNode];
             if (!a || !b) return;
@@ -2208,9 +2353,158 @@
                 var t = el('text', { x: mid[0], y: mid[1] + 4, 'text-anchor': 'middle' }, g);
                 t.textContent = lab;
             }
+            if (interactive) edges.push({ path: path, tri: tri, a: a, b: b, fs: fs, ts: ts });
         });
         board.innerHTML = '';
         board.appendChild(svg);
+        if (interactive) initCanvasInteractions(board, svg, cvv, minX - pad, minY - pad, cw, ch, cards, byId, edges);
+    }
+    /* Canvas 交互（Obsidian 体验）：空白拖拽平移、滚轮/双指缩放、点卡片进笔记、拖卡片移动（连线跟随）。
+       平移缩放作用于 cv-view 的 translate/scale；卡片拖拽改卡片自身 translate（世界单位）并同步节点坐标。 */
+    function initCanvasInteractions(board, svg, cvv, ox, oy, cw, ch, cards, byId, edges) {
+        var tx = 0, ty = 0, k = 1;
+        var DIR = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+        // 内容世界坐标范围：[ox..ox+cw]。首帧自动缩放适配并居中（同 Obsidian 打开即见全貌）
+        (function firstFit() {
+            var bw = board.clientWidth || 600, bh = board.clientHeight || 400;
+            var vw = cw || 1, vh = ch || 1;
+            k = Math.min(bw / vw, bh / vh, 1.5);
+            tx = (bw - vw * k) / 2 - ox * k;
+            ty = (bh - vh * k) / 2 - oy * k;
+            applyView();
+        })();
+        function applyView() {
+            cvv.setAttribute('transform', 'translate(' + tx + ',' + ty + ') scale(' + k + ')');
+        }
+        // wheel 缩放（rAF 节流 + 围绕光标）
+        var wheelPending = false;
+        board.addEventListener('wheel', function (ev) {
+            ev.preventDefault();
+            var rect = board.getBoundingClientRect();
+            var px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+            var k2 = k * (ev.deltaY < 0 ? 1.12 : 0.892);
+            k2 = Math.max(0.15, Math.min(6, k2));
+            tx = px - (px - tx) * (k2 / k);
+            ty = py - (py - ty) * (k2 / k);
+            k = k2;
+            applyView();
+        }, { passive: false });
+        // 指针：单指空白=平移，双指=缩放；卡片=拖拽
+        var pointers = {}, lastPinch = 0, pan = null, dragCard = null;
+        board.addEventListener('pointerdown', function (ev) {
+            pointers[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+            var ids = Object.keys(pointers);
+            if (ids.length >= 2) {
+                pan = null; dragCard = null;
+                var a = pointers[ids[0]], b = pointers[ids[1]];
+                lastPinch = Math.hypot(a.x - b.x, a.y - b.y);
+                return;
+            }
+            if (ev.target && ev.target.closest('.cv-card')) {
+                var cid = ev.target.closest('.cv-card').getAttribute('data-id');
+                var c = cards[cid];
+                if (!c || !byId[cid]) return;
+                dragCard = { c: c, id: cid, sx: ev.clientX, sy: ev.clientY, moved: false };
+                ev.stopPropagation(); ev.preventDefault();
+                c.g.classList.add('dragging');
+                board.classList.add('dragging');
+                return;
+            }
+            pan = { x: ev.clientX, y: ev.clientY, ax: 0, ay: 0 };
+        });
+        board.addEventListener('pointermove', function (ev) {
+            if (pointers[ev.pointerId]) { pointers[ev.pointerId].x = ev.clientX; pointers[ev.pointerId].y = ev.clientY; }
+            var ids = Object.keys(pointers);
+            // 双指缩放（围绕两指中点）
+            if (ids.length >= 2 && lastPinch > 0) {
+                var a = pointers[ids[0]], b = pointers[ids[1]];
+                var d = Math.hypot(a.x - b.x, a.y - b.y);
+                var rect = board.getBoundingClientRect();
+                var mx = (a.x + b.x) / 2 - rect.left, my = (a.y + b.y) / 2 - rect.top;
+                var k2 = k * (d / lastPinch);
+                k2 = Math.max(0.15, Math.min(6, k2));
+                tx = mx - (mx - tx) * (k2 / k);
+                ty = my - (my - ty) * (k2 / k);
+                k = k2;
+                lastPinch = d;
+                applyView();
+                return;
+            }
+            if (dragCard) {
+                var dx = ev.clientX - dragCard.sx, dy = ev.clientY - dragCard.sy;
+                if (Math.abs(dx) + Math.abs(dy) > 4) dragCard.moved = true;
+                if (dragCard.moved) {
+                    var c = dragCard.c;
+                    c.tx += dx / k; c.ty += dy / k;
+                    byId[dragCard.id].x = c.baseX + c.tx;
+                    byId[dragCard.id].y = c.baseY + c.ty;
+                    c.g.setAttribute('transform', 'translate(' + c.tx + ',' + c.ty + ')');
+                    dragCard.sx = ev.clientX; dragCard.sy = ev.clientY;
+                    updateEdges();
+                }
+                return;
+            }
+            if (!pan) return;
+            pan.ax += ev.clientX - pan.x; pan.ay += ev.clientY - pan.y;
+            pan.x = ev.clientX; pan.y = ev.clientY;
+            if (!pan.r) {
+                pan.r = requestAnimationFrame(function () {
+                    pan.r = 0;
+                    tx += pan.ax; ty += pan.ay; pan.ax = 0; pan.ay = 0;
+                    applyView();
+                });
+            }
+        });
+        function endPtr(ev) {
+            delete pointers[ev.pointerId];
+            if (Object.keys(pointers).length < 2) lastPinch = 0;
+            if (Object.keys(pointers).length === 0) pan = null;
+            if (dragCard) {
+                dragCard.c.g.classList.remove('dragging'); board.classList.remove('dragging');
+                var wasDrag = dragCard.moved;
+                var cid = dragCard.id;
+                dragCard = null;
+                // 未拖拽 = 单击 → 打开卡片目标（文件/链接卡带 <a>；Obsidian 语义）
+                if (!wasDrag && ev.target) {
+                    var a = ev.target.closest('a[href]');
+                    var note = ev.target.closest('.cv-content a[data-note]');
+                    if (a) {
+                        var href = a.getAttribute('href');
+                        if (href && (a.classList.contains('cv-filecard') || a.classList.contains('cv-linkcard'))) {
+                            if (a.classList.contains('cv-linkcard')) { window.open(href, '_blank', 'noopener'); return; }
+                            selectFile({ path: href.replace(/^\//, '') }); return;
+                        }
+                    } else if (note) {
+                        selectFile({ path: note.getAttribute('data-note').replace(/^\//, '') }); return;
+                    }
+                }
+            }
+        }
+        board.addEventListener('pointerup', endPtr);
+        board.addEventListener('pointercancel', endPtr);
+        function updateEdges() {
+            edges.forEach(function (e) {
+                var p1 = sidePt2(e.a, e.fs), p2 = sidePt2(e.b, e.ts);
+                var d1 = DIR[e.fs] || [1, 0], d2 = DIR[e.ts] || [-1, 0];
+                var dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+                var kk = Math.max(30, Math.min(dist / 2, 120));
+                var c1 = [p1[0] + d1[0] * kk, p1[1] + d1[1] * kk], c2 = [p2[0] + d2[0] * kk, p2[1] + d2[1] * kk];
+                e.path.setAttribute('d', 'M ' + p1[0] + ' ' + p1[1] + ' C ' + c1[0] + ' ' + c1[1] + ', ' + c2[0] + ' ' + c2[1] + ', ' + p2[0] + ' ' + p2[1]);
+                var ax = p2[0] - c2[0], ay = p2[1] - c2[1], L = Math.hypot(ax, ay) || 1;
+                ax /= L; ay /= L;
+                var s = 8, px = -ay, py = ax;
+                e.tri.setAttribute('points', p2[0] + ',' + p2[1] + ' '
+                    + (p2[0] - ax * s + px * s * 0.45) + ',' + (p2[1] - ay * s + py * s * 0.45) + ' '
+                    + (p2[0] - ax * s - px * s * 0.45) + ',' + (p2[1] - ay * s - py * s * 0.45));
+            });
+        }
+        function sidePt2(n, side) {
+            var x = n.x || 0, y = n.y || 0, w = n.width || 0, h = n.height || 0;
+            if (side === 'top') return [x + w / 2, y];
+            if (side === 'bottom') return [x + w / 2, y + h];
+            if (side === 'left') return [x, y + h / 2];
+            return [x + w, y + h / 2];
+        }
     }
     // SSR 直达的触发在 enterApp 的 SSR_CANVAS 分支内（时序原因，见该处注释）；SPA 点击走 selectFile 分支
 

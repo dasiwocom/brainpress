@@ -1,318 +1,155 @@
----
+<div align="center">
 
 # 🧠 BrainPress
 
-**如果 Obsidian 是你的第二大脑，那 BrainPress 就是大脑印刷机。**  
+**如果 Obsidian 是你的第二大脑，BrainPress 就是大脑印刷机。**  
 **If Obsidian is your second brain, then BrainPress is your brain printer.**
 
 用 Obsidian 写笔记，用 BrainPress 印成书。  
-Write with Obsidian, print with BrainPress.
+*Write with Obsidian, print with BrainPress.*
 
 ---
 
-## 📖 这是什么？ | What is this?
+![PHP](https://img.shields.io/badge/PHP-8.0%2B-777BB4?style=flat-square&logo=php&logoColor=white)
+![License](https://img.shields.io/badge/license-personal-5672cd?style=flat-square)
+![Self-hosted](https://img.shields.io/badge/self--hosted-✔-3e63dd?style=flat-square)
+![No build](https://img.shields.io/badge/no--build-✔-22c55e?style=flat-square)
+![No DB](https://img.shields.io/badge/no--database-✔-22c55e?style=flat-square)
+![Docker ready](https://img.shields.io/badge/docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white)
 
-**BrainPress** 是一个**自托管的 Markdown 知识库系统**。你只需把笔记文件夹指向它，它就会即时渲染成一个可浏览、可搜索、可 AI 问答的网站——**无需构建、无需数据库、无需 Node.js**。
+[**文档 · Docs**](https://github.com/yourorg/brainpress) · [**Docker 版 · Docker**](./docker/README.md) · [**API 参考 · API Reference**](#-public-api)
 
-同时，它也内置了 **PDF 阅读器**和 **WebDAV 同步端点**，可以直接与 Obsidian 的 Remotely Save 插件配合使用。
-
-> 这个项目最初是为 **AI 记忆可视化** 设计的：AI 在服务器上自动写下踩坑笔记，你通过网页监控它的学习过程。现在它也完全适合人类使用。
-
-**BrainPress** is a **self-hosted Markdown knowledge base system**. Point it at a folder of notes, and it instantly renders a browsable, searchable, AI‑chat‑ready website — **no build step, no database, no Node toolchain**.
-
-It also includes a **PDF reader** and a **WebDAV sync endpoint**, so you can pair it with Obsidian’s Remotely Save plugin.
-
-> The project was originally built for **AI memory visualization**: AI automatically writes down lessons learned, and you monitor its progress through a web interface. Today it works just as well for human users.
+</div>
 
 ---
 
-## ✨ 核心特性 | Core Features
+## ✨ 这是什么？ | What is this?
 
-| 中文 | English |
-|------|---------|
-| 📄 **Markdown 即时渲染** — 修改笔记，刷新即生效 | **Real‑time Markdown rendering** — edit a note, refresh to see changes |
-| ✍️ **Obsidian 语法完整支持** — Callout、数学公式、高亮、嵌套标签、块ID、脚注、双链与嵌入 | **Full Obsidian syntax** — callouts, math (KaTeX), highlights, nested tags, block IDs, footnotes, wiki links & embeds |
-| 🌳 **自动目录树** — 基于文件夹结构生成侧边栏 | **Auto‑generated sidebar tree** — driven by your folder structure |
-| 🌗 **日夜模式切换** — 一键切换深色/浅色 | **Dark / Light mode** — one‑click toggle |
-| 📖 **PDF 阅读器** — 内置 pdf.js：大纲/页码导航/缩放/全屏，笔记内嵌与直接访问同一套界面 | **Built‑in PDF reader** (pdf.js): outline, page navigation, zoom, fullscreen — one shared UI for embeds and direct access |
-| 🤖 **AI 智能问答** — 基于知识库内容回答（DeepSeek API） | **AI chat** — answers from your vault (DeepSeek API) |
-| ☁️ **多种存储** — 本地 / WebDAV / S3 (MinIO) | **Multiple storage backends** — Local / WebDAV / S3 (MinIO) |
-| 🔒 **后台管理** — 密码保护，图形化配置 | **Admin panel** — password‑protected, GUI configuration |
-| 🔗 **Obsidian 同步** — 通过 WebDAV 端点一键同步 | **Obsidian sync** — via built‑in WebDAV endpoint |
-| 📡 **公开 API** — 清单、搜索、文件读写、AI 问答 | **Public API** — listing, search, file CRUD, AI chat |
+**BrainPress** 是一个**自托管的 Markdown 知识库系统**：指向一个笔记文件夹，它立即渲染成一个可浏览、可搜索、可 AI 问答的网站——**无需构建、无需数据库、无需 Node.js**。随手搭配 **PDF 阅读器**、**知识图谱**、**Excalidraw 绘图**与 **Obsidian Canvas 白板**。
+
+同时内置 **WebDAV 同步端点**，可与 Obsidian 的 **Remotely Save** 插件一键同步。
+
+> 最初为 **AI 记忆可视化** 而生——AI 在服务器上自动写下踩坑笔记，你用网页看它的学习过程；如今它同样适合人类。
+
+<p align="center">
+  <i>截图待补充 · screenshot placeholder</i>
+</p>
 
 ---
 
-## 🏗️ 架构 | Architecture
+## 🎯 核心特性 | Features
 
-```
-Obsidian ──WebDAV sync──▶ vault/ (Markdown + PDFs)
-                             │
-Browser ◀──render── index.php (single PHP entry)
-        ◀──ask───  POST /api/ask (retrieval + DeepSeek)
-```
-
-| 路径 | 作用 |
-|------|------|
-| `index.php` | 前台入口：路由、SSR 预处理与页面壳（文章渲染/搜索/AI 聊天由前端资源完成） |
-| `admin.php` | 后台入口：登录、配置管理（nginx 将 `/admin` 和 `/api/admin/*` 转发至此） |
-| `functions.php` | 共享层：配置加载、认证、S3 客户端、文件扫描 |
-| `api.php` | 公开 API 处理器：`/api/*` 端点（由 index.php 内部加载，nginx 无需感知） |
-| `dav.php` | WebDAV 端点处理器：Obsidian Remotely Save 同步（由 index.php 内部加载） |
-| `assets/` | 本地库与前台/后台样式脚本（marked、DOMPurify、highlight.js、pdf.js、KaTeX、React + @excalidraw/excalidraw、site.css/js、admin.css/js、字体），无 CDN |
-| `vault/` | 内容源：每个 `.md` 为一篇文章，每个 `.pdf` 在阅读器中打开，`.canvas` 渲染为 Obsidian Canvas 白板（支持挂载目录） |
-| `config.json` | 全部配置（含密钥，必须阻止 Web 访问；公开仓库需先清空敏感字段） |
-| `router.php` | 仅本地开发：用 PHP 内置服务器模拟 nginx 伪静态规则（生产环境不需要） |
-| `start.sh` | 仅本地开发：一键启动/停止内置服务器 |
-
-| Path | Purpose |
-|------|---------|
-| `index.php` | Frontend entry: routing, SSR prep and page shell (rendering/search/chat live in the front-end assets) |
-| `admin.php` | Admin panel (nginx routes `/admin` and `/api/admin/*` here) |
-| `functions.php` | Shared: config, auth, S3 client, file helpers |
-| `api.php` | Public API handlers: `/api/*` endpoints (loaded by index.php internally) |
-| `dav.php` | WebDAV endpoint handler: Obsidian Remotely Save sync (loaded by index.php internally) |
-| `assets/` | Local libraries + front/admin CSS & JS (marked, DOMPurify, highlight.js, pdf.js, KaTeX, React + @excalidraw/excalidraw, site.css/js, admin.css/js, fonts) – no CDN |
-| `vault/` | Content source: every `.md` is a page, every `.pdf` is a reader view, `.canvas` renders as an Obsidian Canvas board (mount dirs supported) |
-| `config.json` | All configuration (secrets included – must be blocked from the web; scrub sensitive fields before publishing) |
-| `router.php` | Dev only: emulates the nginx rewrite rules for PHP's built-in server (not needed in production) |
-| `start.sh` | Dev only: one‑command start/stop for the built-in server |
-
----
-
-## ⚙️ 配置速览 | Quick Config
-
-`config.json` 中的关键字段：
-
-| Key | 含义 |
-|-----|------|
-| `password_hash` | 管理员密码（bcrypt），首次访问 `/admin` 时设置 |
-| `webdav_user` / `webdav_pass` | WebDAV 同步账号密码（供 Obsidian 使用） |
-| `render_webdav` / `render_minio` | 启用远程存储开关 |
-| `minio_*` | S3 兼容存储（MinIO）配置 |
-| `custom_paths` | 额外本地路径（最多 5 个） |
-| `exclude_paths` | 前端隐藏路径（目录树、搜索、直接访问均不可见） |
-| `pinned_dirs` / `pinned_articles` | 置顶目录/文章（相对路径匹配主 vault，绝对路径匹配挂载目录整棵子树） |
-| `expanded_dirs` | 默认展开的目录（同上双写法） |
-| `site_title` | 网站标题 |
-| `home_article` | 主页文章路径（相对于 `vault/`） |
-| `default_light` | 强制浅色主题 |
-| `api_token` | 写 API 的 Bearer Token（空则禁用写 API） |
-| `ai_enabled` | AI 问答总开关 |
-| `ai_api_key` | DeepSeek API Key |
-| `ai_model` | 模型名称，如 `deepseek-chat` |
-| `ai_mode` | `hybrid`（知识库优先，回退通用）或 `strict`（仅从知识库回答） |
-
-所有配置均可在后台（`/admin` → 系统设置）中图形化修改。
-
-Key fields in `config.json`:
-
-| Key | Meaning |
-|-----|---------|
-| `password_hash` | Admin password (bcrypt). Set on first visit to `/admin`. |
-| `webdav_user` / `webdav_pass` | WebDAV credentials for Obsidian sync |
-| `render_webdav` / `render_minio` | Toggle remote storage sources |
-| `minio_*` | S3‑compatible (MinIO) settings |
-| `custom_paths` | Up to 5 extra local paths |
-| `exclude_paths` | Paths hidden from frontend (tree, search, direct access) |
-| `pinned_dirs` / `pinned_articles` | Pinned directories / articles |
-| `expanded_dirs` | Directories expanded by default |
-| `site_title` | Site title |
-| `home_article` | Homepage article (relative to `vault/`) |
-| `default_light` | Force light theme |
-| `api_token` | Bearer token for write API (empty = disabled) |
-| `ai_enabled` | Master switch for AI chat |
-| `ai_api_key` | DeepSeek API key |
-| `ai_model` | Model name, e.g. `deepseek-chat` |
-| `ai_mode` | `hybrid` (vault first, fallback to general) or `strict` (vault only) |
-
-All settings can be edited via the admin panel (`/admin` → System Settings).
+- 📄 **实时 Markdown 渲染** — 改笔记、刷新即生效，无需重新构建
+- ✍️ **完整 Obsidian 语法** — Callout、KaTeX 公式、高亮、嵌套标签、块 ID、脚注、双链 `[[]]` 与嵌入 `![[]]`；代码块带行号（Quartz 同款）
+- 🌳 **自动目录树** — 由文件夹结构驱动，支持置顶、强制展开、隐藏路径
+- 📖 **内置 PDF 阅读器** — pdf.js：大纲、翻页、缩放、全屏；`![[book.pdf]]` 嵌入与直达同界面（与文章内容区同宽对齐）
+- 🎨 **Excalidraw + Canvas** — `.excalidraw.md` 绘图与 `.canvas` 白板全屏铺满中+右（保留左树）、平移/缩放；Canvas 支持拖拽卡片（连线实时跟随）与单击进笔记
+- 🕸️ **知识图谱** — `/graph` 视图，d3-force 物理引擎；节点大小随连接数增大（枢纽更明显）、移动端加大命中点、布局更分散
+- 🤖 **AI 智能问答** — 基于知识库的 RAG 回答（OpenAI 兼容端点 / DeepSeek / Ollama）
+- ☁️ **多存储后端** — 本地 / WebDAV / S3 (MinIO) / ima / 自定义挂载
+- 🔒 **后台管理面板** — 密码保护，图形化配置；一级菜单重构为 Sources / Tree / Settings（Unix 风格）
+- 🔗 **Obsidian 一键同步** — 内置 WebDAV 端点
+- 📡 **公开 API** — 清单、搜索、文件读写、AI 问答、图谱数据
+- 🌗 **日夜模式** + 字体预设 + 仅本地资源（无 CDN）
 
 ---
 
 ## 🚀 快速开始 | Quick Start
 
-1. **环境要求**：PHP 8.0+（含 `curl`、`mbstring` 扩展），Nginx 或 Apache。
-2. 将项目文件夹上传至服务器，把笔记（`.md`）和 PDF 放入 `website/vault/` 目录（网站本体在 `website/` 里）。
-3. 仓库自带的 `website/config.json` 为安全默认值（无密钥），部署后直接在后台改配置即可。
-4. 配置 Nginx（见下文）或 Apache，网站根目录指向 `website/`，确保 `config.json` 被阻止 Web 访问。
-5. 访问网站首页，然后访问 `/admin` 设置管理员密码。
-6. 可选：配置 WebDAV 账号（供 Obsidian 同步），填写 DeepSeek API Key 启用 AI 问答。
+**环境要求**：PHP 8.0+（含 `curl`、`mbstring`）、Nginx 或 Apache。
 
-1. **Requirements**: PHP 8.0+ (with `curl`, `mbstring`), Nginx or Apache.
-2. Upload the folder, place notes (`.md`) and PDFs into `website/vault/` (the site itself lives in `website/`).
-3. The bundled `website/config.json` ships with safe defaults (no secrets) – configure everything from the admin panel after deployment.
-4. Configure Nginx (see below) or Apache with the web root pointing at `website/`, block `config.json` from web access.
-5. Visit the site, then go to `/admin` to set the admin password.
-6. Optionally set up WebDAV credentials (for Obsidian sync) and add a DeepSeek API key for AI chat.
+1. 上传 `website/` 到服务器，把笔记放进 `website/vault/`
+2. 配置 Nginx（要点见下）或 Apache，阻止 `config.json` 的 Web 访问
+3. 访问网站 → `/admin` 设置管理员密码
+4. （可选）在后台配置 WebDAV 账号（Obsidian 同步）与 LLM API Key（AI）
 
----
-
-## 🐳 Docker 版（独立项目）
-
-Docker 发行版已独立成 **`docker/` 项目**：自带网站代码副本、示例库种子和完整文档，与网站版互不共享任何文件——更新只能通过 `docker/sync-website.sh` 从网站版复制。
-
-部署教程（宝塔面板）、数据备份、镜像发布到 Docker Hub 的步骤，全部见 **[docker/README.md](docker/README.md)**。
-
----
-
-## 💻 本地开发 | Local Development
-
-不想配 Nginx？项目自带开发服务器脚本（PHP 内置服务器 + 路由模拟），一条命令即可在本地跑通全部功能（在 `website/` 目录里执行）：
+本地没有 Nginx？在 `website/` 里直接 `./start.sh`（PHP 内置服务器 + 路由模拟）。
 
 ```bash
-cd website
-./start.sh          # 启动/重启（默认 http://127.0.0.1:8080）
-./start.sh 9090     # 指定端口
-./start.sh stop     # 停止
+cd website && ./start.sh   # http://127.0.0.1:8080
 ```
 
-| 文件 | 说明 |
-|------|------|
-| `start.sh` | 启动脚本：拉起 `php -S` 并挂载 `router.php` |
-| `router.php` | 开发路由：把生产环境的 Nginx 伪静态规则（`/admin` 转发、`.md`/`.pdf` 重写、敏感文件 404）用 PHP 等价模拟；自定义挂载目录的流式兜底已收敛进 index.php |
-
-> 这两个文件**仅用于本地开发**。生产部署使用 Nginx/Apache 时完全不需要它们，但保留在仓库中不影响运行。
-
-No Nginx at hand? The repo ships a dev server script (PHP built-in server + router emulation) that runs everything locally (run inside `website/`):
-
-```bash
-cd website
-./start.sh          # start/restart (default http://127.0.0.1:8080)
-./start.sh 9090     # custom port
-./start.sh stop     # stop
-```
-
-| File | Purpose |
-|------|---------|
-| `start.sh` | Launcher: starts `php -S` with `router.php` attached |
-| `router.php` | Dev router: reproduces the production Nginx rules (`/admin` forwarding, `.md`/`.pdf` rewrites, sensitive-file 404s) in PHP; the custom-mount streaming fallback lives inside index.php |
-
-> Both files are **for local development only** — production deployments behind Nginx/Apache don't need them, though keeping them in the repo is harmless.
-
----
-
-## 🧩 Nginx 配置要点 | Nginx Notes
+### Nginx 配置要点
 
 ```nginx
-# vault 静态文件（图片、PDF 原件）直接提供；
-# 缺失时回退 index.php（自定义挂载目录里的资源由此流式输出）
-location ^~ /vault/ { try_files $uri @brainpress; }
-
-# .md 文件 → 动态渲染（改写至 index.php）
-location ~* \.md$ { rewrite ^(.*)$ /index.php last; }
-
-# .pdf 文件 → 阅读器页面（非直接下载）
-location ~* \.pdf$ { rewrite ^(.*)$ /index.php last; }
-
-# .canvas 文件 → Obsidian Canvas 白板渲染页面
-location ~* \.canvas$ { rewrite ^(.*)$ /index.php last; }
-
-# 后台管理
-location ^~ /admin { ... }
-location ^~ /api/admin/ { ... }
-
-# 阻止敏感文件（config.json, .user.ini, .env, 备份等）
+location ^~ /vault/  { try_files $uri @brainpress; }          # 静态资源
+location ~* \.md$    { rewrite ^(.*)$ /index.php last; }     # Markdown 渲染
+location ~* \.pdf$   { rewrite ^(.*)$ /index.php last; }     # PDF 阅读器
+location ~* \.canvas$ { rewrite ^(.*)$ /index.php last; }    # Canvas 白板
+location ^~ /admin   { ... }                                  # 后台
+location ^~ /api/admin/ { ... }                               # 后台 API
+# 阻止敏感文件
 location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log) { return 404; }
 ```
 
----
-
-## 🔒 安全提示 | Security Notes
-
-- `config.json` 包含所有密钥（密码哈希、API Key、WebDAV 密码等）——**必须阻止 Web 访问**（Nginx 返回 404）。
-- ⚠️ 若仓库公开：上传前确认 `config.json` 中无真实密钥；一旦在后台写入真实密码/Key 后再 push，它们会永久留在 git 历史中。
-- 管理员密码以 bcrypt 哈希存储，永不明文。
-- AI Key 仅服务器端使用，不会发送到前端。
-- 备份应存放在 Web 根目录之外（如 `/www/wwwroot/backup/`）。
-- `vault/` 目录仅需 PHP 用户可写。
-
-- `config.json` contains all secrets (password hash, API key, WebDAV credentials) – **must be blocked from the web** (Nginx returns 404).
-- ⚠️ For public repos: make sure `config.json` holds no real credentials before pushing – once real passwords/keys are committed, they stay in git history forever.
-- Admin password is stored as bcrypt hash, never plaintext.
-- AI key stays on the server, never exposed to the client.
-- Backups should live outside the web root.
-- `vault/` should be writable only by the PHP user.
+> 详细部署、Apache、安全加固见 **[部署文档 · Deployment](./website/vault/BrainPress/Deployment.md)**。
 
 ---
 
-## 📂 项目结构 | Folder Structure
+## 🐳 Docker 版 | Docker Edition
+
+Docker 版是自包含的独立项目（自带代码副本、示例库与完整文档），部署/备份/发布到 Docker Hub 的步骤见 **[Docker README](./docker/README.md)**。
+
+---
+
+## 📋 项目结构 | Project Structure
 
 ```
 brainpress/
-├── website/             # 🌐 网站版项目（nginx/PHP 部署，部署/开发只跟这个目录打交道）
-│   ├── assets/          #   CSS / JS / 字体（本地库 + site/admin 前后台样式脚本）
-│   ├── vault/           #   📖 你的笔记 + PDF 文件
-│   ├── admin.php        #   后台管理入口
-│   ├── api.php          #   公开 API 处理器（index.php 内部加载）
-│   ├── dav.php          #   WebDAV 端点处理器（index.php 内部加载）
-│   ├── config.json      #   ⚙️ 所有配置（默认无密钥；公开仓库前清空真实密钥）
-│   ├── functions.php    #   核心函数库
-│   ├── index.php        #   前台主入口（路由 + SSR + 页面壳）
-│   ├── router.php       #   💻 仅本地开发：nginx 规则模拟
-│   └── start.sh         #   💻 仅本地开发：一键启动脚本
-├── docker/              # 🐳 Docker 版项目（⚠️ 完全自包含的独立项目，不共享上面任何文件）
-│   ├── website/         #   代码副本（由 sync-website.sh 从网站版复制更新）
-│   ├── vault-seed/      #   首次启动播种的官方示例库
-│   ├── Dockerfile · docker-compose.yml · apache-site.conf · entrypoint.sh · php.ini · config.template.json
-│   ├── sync-website.sh  #   同步工具：网站版 → 本项目
-│   └── brainpress-docker.zip  # 📦 发行压缩包（上传服务器解压即用）
-├── landing/             # 🏠 官网展示页（纯静态）
-├── electron/            # 🖥️ 桌面端
-└── README.md            # 总索引（各项目的细节文档在各自目录里）
+├── website/        # 🌐 网站版（nginx/PHP 部署，开发/部署只跟这个目录打交道）
+├── docker/         # 🐳 Docker 版（独立项目，详见 docker/README.md）
+├── landing/        # 🏠 官网展示页（纯静态）
+├── electron/       # 🖥️ 桌面端
+└── README.md       # 本文件（总索引）
 ```
 
 ---
 
-## 🔌 公开 API | Public API
+## 📡 公开 API | Public API
 
 | Endpoint | 说明 |
 |----------|------|
 | `GET /api/list` | 侧边栏目录树（遵循隐藏/置顶规则） |
 | `GET /api/file?path=` | 获取某篇 Markdown 原始内容 |
 | `GET /api/search?q=` | 全文搜索 |
+| `GET /api/graph` | 知识图谱节点与连线 |
 | `GET /api/article-list` | 文章清单（轻量） |
 | `GET /api/llms.txt` | LLM 友好站点清单（llms.txt 规范） |
 | `POST /api/ask` | AI 问答（需启用 AI） |
 | `POST/DELETE /api/note` | 创建/覆盖/删除笔记（需 Bearer Token） |
 
-详细文档参见 `vault/BrainPress/API-Reference.md`。
+详细参数见 **[API 参考 · API Reference](./website/vault/BrainPress/API-Reference.md)**。
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/list` | Sidebar tree (respects hidden/pinned rules) |
-| `GET /api/file?path=` | Raw markdown content of a note |
-| `GET /api/search?q=` | Full‑text search |
-| `GET /api/article-list` | Lightweight article inventory |
-| `GET /api/llms.txt` | LLM‑friendly site manifest (llms.txt spec) |
-| `POST /api/ask` | AI chat (requires AI enabled) |
-| `POST/DELETE /api/note` | Create/overwrite/delete a note (Bearer token required) |
+---
 
-Full details in `vault/BrainPress/API-Reference.md`.
+## 📚 文档 | Documentation
+
+详细文档以 Markdown 存在 vault 中（中文 `.zh.md`）：
+
+| 文档 | 说明 |
+|------|------|
+| [**Introduction**](./website/vault/BrainPress/Introduction.zh.md) | 总览、架构、快速配置、API |
+| [**Getting Started**](./website/vault/BrainPress/GettingStarted.zh.md) | 上手教程 |
+| [**Configuration**](./website/vault/BrainPress/Configuration.zh.md) | 全部配置字段 |
+| [**Deployment**](./website/vault/BrainPress/Deployment.zh.md) | 部署与安全 |
+| [**API Reference**](./website/vault/BrainPress/API-Reference.zh.md) | 公开 API 详解 |
+
+---
+
+## 🔒 安全提示 | Security Notes
+
+- `config.json` 含全部密钥（密码哈希、API Key、WebDAV 密码）——**必须阻止 Web 访问**。
+- ⚠️ 若仓库公开：上传前确认 `config.json` 无真实密钥；一旦 commit 真实密钥会永久留在 git 历史。
+- 管理员密码以 bcrypt 哈希存储；AI Key 仅服务器端使用，永不发往前端。
+- 备份存放在 Web 根目录之外；`vault/` 仅需 PHP 用户可写。
 
 ---
 
 ## 📄 许可证 | License
 
-**作者**：Ryan  
-**性质**：个人项目，自由使用、自由修改。  
-**Author**: Ryan  
-**License**: Personal project – free to use and modify.
+**作者**：Ryan · **性质**：个人项目，自由使用、自由修改。  
+*Personal project — free to use and modify.*
 
 ---
 
-## 🧭 下一步 | Next Steps
-
-- **全文搜索** 优化（已支持，可改进排序）
-- **目录树记忆**（刷新后保持折叠状态）
-- **笔记双链 `[[]]`** 支持
-- **阅读进度** 记录
-- **导出为 Markdown 压缩包**
-- 更完善的 **AI 对话** 体验
-
----
-
-**用 Obsidian 写，用 BrainPress 印。**  
-**Write with Obsidian, print with BrainPress.**
-
----
+<div align="center"><b>用 Obsidian 写，用 BrainPress 印。</b><br><i>Write with Obsidian, print with BrainPress.</i></div>

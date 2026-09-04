@@ -88,6 +88,23 @@ Key fields in `config.json` (every key is also editable in the admin panel):
 4. Visit the site, then go to `/admin` to set the admin password.
 5. Optional: create WebDAV sync accounts (Obsidian sync) in Admin → **WebDAV**, and add an LLM API key to enable AI chat.
 
+### No Nginx at hand?
+
+The repo ships a local dev-server script (PHP built-in server + router emulation) that runs everything locally (run inside `website/`):
+
+```bash
+./start.sh          # start/restart (default http://127.0.0.1:8080)
+./start.sh 9090     # custom port
+./start.sh stop     # stop
+```
+
+| File | Purpose |
+|------|---------|
+| `start.sh` | Launcher: starts `php -S` with `router.php` attached |
+| `router.php` | Dev router: reproduces the production Nginx rules (`/admin` forwarding, `.md`/`.pdf` rewrites, sensitive-file 404s) in PHP; the custom-mount streaming fallback lives inside index.php |
+
+> Both files are **for local development only** — production deployments behind Nginx/Apache don't need them, though keeping them in the repo is harmless.
+
 ## Nginx notes
 
 ```nginx
@@ -125,14 +142,24 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log) { return 404; }
 
 ```
 brainpress/
-├── assets/          # CSS / JS / fonts / vendor (local)
-├── vault/           # your notes + PDFs + drawings + canvases
-├── admin.php        # admin panel entry
-├── config.json      # all configuration (secrets)
-├── functions.php    # core library
-├── index.php        # frontend entry
-└── README.md
+├── website/             # 🌐 Website edition (nginx/PHP deploy; dev & deploy only touch this dir)
+│   ├── assets/          #   CSS / JS / fonts / vendor (local)
+│   ├── vault/           #   your notes + PDFs + drawings + canvases
+│   ├── admin.php        #   admin panel entry
+│   ├── api.php          #   public API handlers (loaded by index.php)
+│   ├── dav.php          #   WebDAV endpoint handler (loaded by index.php)
+│   ├── config.json      #   all configuration (secrets; scrub before publishing)
+│   ├── functions.php    #   core library (with scan cache)
+│   ├── index.php        #   frontend entry
+│   ├── router.php       #   💻 dev only: nginx rule emulation
+│   └── start.sh         #   💻 dev only: one-command launcher
+├── docker/              # 🐳 Docker edition (fully self-contained; docs in docker/README.md)
+├── landing/             # 🏠 Landing page (pure static)
+├── electron/            # 🖥️ Desktop app
+└── README.md            # Master index (per-project docs live in their own dirs)
 ```
+
+> The **Docker edition** is a separate `docker/` project: it bundles its own copy of the site code, a seed vault and full docs, and shares no files with the website edition — updates only flow via `docker/sync-website.sh`. Deployment, backup and Docker Hub publishing steps are all in **`docker/README.md`**.
 
 ## Public API
 

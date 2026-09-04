@@ -68,6 +68,9 @@ bindSwitch('switch-ai-enabled');
 bindSwitch('switch-ai-mode');
 bindSwitch('switch-graph-labels');
 bindSwitch('switch-pin-nav');
+bindSwitch('switch-footer');
+// 脚注：失焦保存（支持 HTML）
+$('footer-html').addEventListener('change', saveConfig);
 // 字体切换：选择后立即保存 + 实时预览
 $('font-preset').addEventListener('change', function () {
     saveConfig();
@@ -112,6 +115,8 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { $('site-title').value = d.site_title || 'BrainPress'; } catch (e) {}
     try { $('home-article').value = d.home_article || ''; } catch (e) {}
     try { $('content-width').value = d.content_width || 840; } catch (e) {}
+    try { if (d.article_footer !== false) $('switch-footer').classList.add('on'); } catch (e) {}
+    try { $('footer-html').value = d.article_footer_html || ''; } catch (e) {}
     try { $('api-token').value = d.api_token || ''; } catch (e) {}
     try { $('ai-api-base').value = d.ai_api_base || ''; } catch (e) {}
     try { $('ai-api-key').value = d.ai_api_key || ''; } catch (e) {}
@@ -316,7 +321,9 @@ function curMsg() {
         return aiTab === 'agent' ? $('msg-agent') : $('msg-ai');
     }
     if (document.getElementById('view-graph').style.display !== 'none') return $('msg-graph');
-    if (document.getElementById('view-tree').style.display !== 'none') return $('msg-tree');
+    if (document.getElementById('view-pinned').style.display !== 'none') return $('msg-pinned');
+    if (document.getElementById('view-expanded').style.display !== 'none') return $('msg-expanded');
+    if (document.getElementById('view-hidden').style.display !== 'none') return $('msg-hidden');
     if (document.getElementById('view-minio').style.display !== 'none') return $('msg-minio');
     if (document.getElementById('view-ima').style.display !== 'none') return $('msg-ima');
     return $('msg-vault');
@@ -411,6 +418,8 @@ function saveConfig() {
         site_title: $('site-title').value.trim(),
         home_article: $('home-article').value.trim(),
         content_width: parseInt($('content-width').value, 10) || '',
+        article_footer: $('switch-footer').classList.contains('on'),
+        article_footer_html: $('footer-html').value.trim(),
         api_token: $('api-token').value.trim(),
         webdav_mounts: collectDavRows(),
         ai_api_base: $('ai-api-base').value.trim(),
@@ -465,7 +474,7 @@ $('site-password').addEventListener('blur', function () {
     });
 });
 // pinned-dir 已改为列表式（输入框 + Add），无失焦保存逻辑
-var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'ima-client-id', 'ima-api-key', 'site-title', 'home-article', 'content-width', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
+var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'ima-client-id', 'ima-api-key', 'site-title', 'home-article', 'content-width', 'footer-html', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
 for (var bi = 1; bi <= CUSTOM_COUNT; bi++) blurIds.push('custom-path-' + bi);
 blurIds.forEach(function (id) {
     $(id).addEventListener('blur', saveConfig);
@@ -531,7 +540,7 @@ function fillAgentView() {
 $('btn-agent-copy-url').addEventListener('click', function () { fallbackCopy($('agent-base-url').textContent); });
 // 视图切换：挂载设置 / 偏好设置 / 站点设置 / AI（Chat+Agent 双档） / 图谱设置 / 目录管理
 function showView(name) {
-    var views = ['dav', 'mounts', 'minio', 'prefs', 'site', 'ai', 'graph', 'tree', 'ima'];
+    var views = ['dav', 'mounts', 'minio', 'prefs', 'site', 'ai', 'graph', 'pinned', 'expanded', 'hidden', 'ima'];
     for (var i = 0; i < views.length; i++) {
         $('view-' + views[i]).style.display = views[i] === name ? '' : 'none';
     }

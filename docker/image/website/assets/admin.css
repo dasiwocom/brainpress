@@ -24,7 +24,7 @@ body { overflow:hidden; }
 #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; position:relative; }
 #content {
     flex:1; overflow-y:auto; overflow-x:hidden; min-height:0; min-width:0;
-    padding:84px var(--gutter) 40px; position:relative;
+    padding:88px var(--gutter) 40px; position:relative;
 }
 /* 左轨道：桌面端常驻目录栏 */
 #left-sidebar {
@@ -67,7 +67,7 @@ body { overflow:hidden; }
         box-sizing:border-box;
         padding:56px 0 0;
     }
-    #content { padding:84px 0 40px; }
+    #content { padding:88px 0 40px; }
 }
 @media (min-width:769px) and (max-width:1399px) {
     #left-sidebar { flex:0 0 280px; max-width:280px; }
@@ -83,7 +83,7 @@ body { overflow:hidden; }
 }
 .doc-main { flex:1 1 0; min-width:0; max-width:none; }
 @media (max-width:768px) {
-    .doc-wrap { display:block; padding:56px 14px 48px; width:100%; max-width:none; }
+    .doc-wrap { display:block; padding:88px 14px 48px; width:100%; max-width:none; }
     .field-label { width:110px; }
     #left-sidebar, #right-sidebar { display:none !important; }
     :root { --gutter:14px; }
@@ -316,9 +316,7 @@ body.drawer-open { overflow:hidden; }
     border-radius:4px; padding:0 16px; font-size:14px; font-weight:600;
     cursor:pointer; font-family:inherit; outline:none; height:36px; box-sizing:border-box;
 }
-html.dark .btn { color:#1b1b1f; }
 .btn.primary { background:var(--vp-c-brand); }
-/* WebDAV 多账号行：账号 / 密码 / 目录 + 删除 */
 .dav-row {
     display:grid; grid-template-columns:1fr 1fr 1.3fr 30px; gap:8px; align-items:center;
     margin-bottom:8px;
@@ -353,10 +351,16 @@ html.dark .btn { color:#1b1b1f; }
 }
 
 .render-row { display:flex; align-items:center; justify-content:space-between; min-height:46px; border-bottom:1px solid var(--line); }
-/* Tree 页：区块靠 section-title 分隔，行底线全部去掉（避免每行一条线） */
-#view-tree .render-row,
-#view-tree .field-row,
-#view-tree .exclude-row { border-bottom:none; }
+/* Tree 页（Pinned / Expanded / Hidden 三视图）：区块靠 section-title 分隔，行底线全部去掉 */
+#view-pinned .render-row,
+#view-pinned .field-row,
+#view-pinned .exclude-row,
+#view-expanded .render-row,
+#view-expanded .field-row,
+#view-expanded .exclude-row,
+#view-hidden .render-row,
+#view-hidden .field-row,
+#view-hidden .exclude-row { border-bottom:none; }
 .render-label { font-size:13.5px; font-weight:600; color:var(--vp-c-text-1); }
 .switch {
     position:relative; width:44px; height:24px; border-radius:12px;

@@ -16,6 +16,8 @@ require __DIR__ . '/ima.php';
 const PANEL_DIR  = __DIR__;
 // 配置文件路径：环境变量 BP_CONFIG_FILE 可覆盖（Docker 部署把配置放进持久化目录，代码目录保持只读）
 define('CONFIG_FILE', getenv('BP_CONFIG_FILE') ?: PANEL_DIR . '/config.json');
+// 扫描缓存目录（默认代码目录下 cache/；Docker 等只读代码目录可用 BP_CACHE_DIR 指到可写持久化目录）
+define('BP_CACHE_DIR', getenv('BP_CACHE_DIR') ?: PANEL_DIR . '/cache');
 const MAX_FILE_SIZE = 1048576; // 1MB
 
 $config = json_decode((string)@file_get_contents(CONFIG_FILE), true) ?: [];
@@ -199,6 +201,80 @@ function is_media(string $path): bool {
     return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus'], true);
 }
 
+/** 扫描缓存：每个目录的 scandir 结果按 dir mtime 缓存，避免同一请求/相邻请求反复列目录。
+ *  - 进程内静态缓存：同一请求内多次 scan 同一目录不重复 scandir。
+ *  - 磁盘缓存（BP_CACHE_DIR/scan.php）：跨请求复用；目录 mtime 不变即认为内容没变（增删改都会更新
+ *    父目录 mtime，天然失效）。缓存损坏/写失败自动降级为实时 scandir，不影响正确性。
+ */
+function scandir_tree_cache_path(): string {
+    static $p = null;
+    if ($p === null) {
+        $p = BP_CACHE_DIR . '/scan.php';
+        if (!is_dir(BP_CACHE_DIR)) { @mkdir(BP_CACHE_DIR, 0775, true); }
+    }
+    return $p;
+}
+
+/** 读取磁盘缓存结构 [signature => [dir => [mtime, entries]]] */
+function scandir_tree_cache_load(): array {
+    $f = scandir_tree_cache_path();
+    if (!is_file($f)) return [];
+    $data = @(include $f);
+    return is_array($data) ? $data : [];
+}
+
+/** 写入磁盘缓存：原子写（临时文件 + rename），失败静默；条目数超上限时截断最旧的一半（目录持久累积会无限增长） */
+function scandir_tree_cache_save(array $cache): void {
+    if (count($cache) > 20000) {
+        $cache = array_slice($cache, 0, 10000, true);
+    }
+    $f = scandir_tree_cache_path();
+    $tmp = $f . '.tmp-' . getmypid();
+    $out = "<?php return " . var_export($cache, true) . ";\n";
+    if (@file_put_contents($tmp, $out) === false) return;
+    @rename($tmp, $f);
+}
+
+/** 带缓存的 scandir：返回目录条目数组（含 . .. 及隐藏项，交由调用方过滤），保证与 scandir 一致 */
+function scandir_tree_cached(string $dir): array {
+    static $mem = [];          // 进程内：dir => [mtime, entries]
+    static $disk = null;       // 磁盘缓存整体（懒加载一次）
+    static $dirty = false;
+
+    if ($disk === null) {
+        $disk = scandir_tree_cache_load();
+    }
+    $mtime = @filemtime($dir);
+    // 1) 进程内缓存命中
+    if (isset($mem[$dir]) && $mem[$dir][0] === $mtime) {
+        return $mem[$dir][1];
+    }
+    // 2) 磁盘缓存命中（mtime 一致）
+    if (isset($disk[$dir]) && is_array($disk[$dir]) && $disk[$dir][0] === $mtime) {
+        $entries = $disk[$dir][1];
+    } else {
+        // 3) 重新列目录
+        $entries = @scandir($dir);
+        if ($entries === false) $entries = [];
+        $mtime = @filemtime($dir);
+        $disk[$dir] = [$mtime, $entries];
+        $dirty = true;
+    }
+    // 写回进程内缓存
+    $mem[$dir] = [$mtime, $entries];
+    // 请求结束时把脏块落盘（一次性）
+    if ($dirty) {
+        static $registered = false;
+        if (!$registered) {
+            $registered = true;
+            register_shutdown_function(function () use (&$disk) {
+                if ($disk !== null) scandir_tree_cache_save($disk);
+            });
+        }
+    }
+    return $entries;
+}
+
 /** 递归扫描工作区，返回文件树；$excludes 命中的目录/文件不出现在树中；$pinnedDirs 置顶目录、$pinnedArticles 置顶文章（排最前）；
  *  $forMount=true 用于自定义挂载：不收录图片（挂载目录没有静态服务路由，图片是死链，只会造成脏乱显示） */
 function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false): array {
@@ -206,7 +282,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
         return []; // vault 目录缺失时优雅兜底（空树），不报错
     }
     $items = [];
-    $entries = scandir($dir);
+    $entries = scandir_tree_cached($dir);
     foreach ($entries as $entry) {
         if ($entry === '.' || $entry === '..') {
             continue;
