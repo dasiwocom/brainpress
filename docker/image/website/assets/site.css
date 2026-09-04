@@ -744,8 +744,8 @@ html.dark .ob-pdf-page { border-bottom-color:rgba(255,255,255,.07); }
 .ob-pdf-outline a:hover { background:var(--hover); }
 
 /* Excalidraw 绘画渲染（.excalidraw.md：SVG 画布自适应） */
-#excalidraw-view { position:fixed; top:56px; right:0; bottom:0; left:0; z-index:50; display:none; background:var(--vp-c-bg); padding:0; overflow:auto; }
-.excalidraw-canvas { width:100%; min-height:100%; touch-action:manipulation; }
+#excalidraw-view { position:fixed; top:56px; right:0; bottom:0; left:0; z-index:50; display:none; background:var(--vp-c-bg); padding:0; overflow:hidden; }
+.excalidraw-canvas { position:relative; width:100%; height:100%; touch-action:none; }
 .excalidraw-canvas svg { max-width:none; width:100%; height:auto; display:block; border-radius:8px; }
 
 /* Obsidian Canvas 白板渲染（.canvas：SVG 节点/连线，颜色跟随日夜主题）
@@ -802,3 +802,53 @@ html.dark .graph-node circle { fill:#3e63dd; }
 /* 抽屉固定入口已移除：Graph view 现作为虚拟条目直接进文章树（见 $frontMenuMd 拼接） */
 
 #toast.show { opacity:1; }
+
+/* Mermaid 图表渲染 */
+.mermaid-holder { text-align:center; color:var(--vp-c-text-mute, #666); padding:12px; min-height:40px; }
+.mermaid { max-width:100%; overflow-x:auto; }
+.mermaid svg { max-width:100%; height:auto; display:inline-block; }
+html.dark .mermaid svg { filter:none; }
+.mermaid-holder .error { color:var(--vp-c-text-mute, #999); font-size:13px; }
+
+/* Popover 链接预览卡片 */
+.note-popover { position:fixed; z-index:1000; width:300px; max-width:80vw; max-height:220px; overflow:auto;
+    background:var(--vp-c-bg,#fff); border:1px solid var(--line,#d0d0d0); border-radius:8px;
+    box-shadow:0 8px 30px rgba(0,0,0,.15); padding:10px 12px; font-size:13px; line-height:1.5;
+    color:var(--vp-c-text,#333); pointer-events:none; opacity:0; transform:translateY(4px);
+    transition:opacity .12s ease, transform .12s ease; }
+html.dark .note-popover { background:#1e1e1e; border-color:#3a3a4a; color:#e0e0e0; }
+.note-popover.show { opacity:1; transform:translateY(0); }
+.note-popover .np-title { font-weight:600; margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid var(--line,#e0e0e0); }
+.note-popover .np-body { color:inherit; white-space:pre-wrap; word-break:break-word; }
+.note-popover .np-loading, .note-popover .np-missing { color:var(--vp-c-text-mute,#999); }
+
+/* 面包屑导航 */
+.breadcrumb { font-size:12.5px; color:var(--vp-c-text-mute,#888); margin-bottom:6px; display:flex; flex-wrap:wrap; gap:4px; align-items:center; max-width:760px; margin-left:auto; margin-right:auto; padding-left:1px;
+}
+.breadcrumb a { color:inherit; text-decoration:none; }
+.breadcrumb a:hover { text-decoration:underline; color:var(--vp-c-brand,#5672cd); }
+.breadcrumb .bc-sep { opacity:.5; }
+
+/* 最近笔记（首页） */
+.recent-notes { margin-top:28px; }
+.recent-notes .rn-title { font-size:15px; font-weight:600; color:var(--vp-c-text-2,#666); margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid var(--line,#eee); }
+.recent-notes .rn-item { display:flex; align-items:baseline; gap:10px; padding:6px 2px; border-bottom:1px dashed var(--line,#eee); }
+.recent-notes .rn-item:last-child { border-bottom:none; }
+.recent-notes .rn-name { font-weight:500; color:var(--vp-c-brand,#5672cd); cursor:pointer; }
+.recent-notes .rn-name:hover { text-decoration:underline; }
+.recent-notes .rn-time { font-size:12px; color:var(--vp-c-text-mute,#aaa); margin-left:auto; white-space:nowrap; }
+html.dark .recent-notes .rn-title { color:#999; border-bottom-color:#333; }
+html.dark .recent-notes .rn-item { border-bottom-color:#333; }
+.recent-notes a { text-decoration:none; }
+
+/* 标签页（#tag/<name>） */
+.tag-page-heading { font-weight:600; margin-bottom:12px; color:var(--vp-c-text-2,#555); }
+.tag-page-heading code { background:var(--hover,#f0f0f0); border-radius:4px; padding:1px 6px; font-size:inherit; }
+html.dark .tag-page-heading code { background:#333; }
+/* 标签列表页独立整页（#tag/<name>）：与文章正文同款居中布局 */
+.tag-view { max-width:760px; margin:0 auto; padding-left:1px; }
+.tag-item { padding:8px 2px; border-bottom:1px dashed var(--line,#eee); }
+html.dark .tag-item { border-bottom-color:#333; }
+.tag-item-name { color:var(--vp-c-brand,#5672cd); cursor:pointer; font-weight:500; }
+.tag-item-name:hover { text-decoration:underline; }
+.tag-item-count { margin-top:14px; font-size:12.5px; color:var(--vp-c-text-mute,#999); }

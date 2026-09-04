@@ -146,3 +146,50 @@ $$
 ## 16. 块ID
 一段带标记的文字  ^block
  ![[MarkDown*^block]]
+## 17. Mermaid 图表（BrainPress 渲染扩展）
+
+> Mermaid 是 BrainPress 原生内置的图表功能：在笔记里用 ```` ```mermaid ```` 代码块写图，打开笔记时自动渲染成图形（非代码高亮）。
+
+### 流程图（graph）
+```mermaid
+graph LR
+    A[开始] --> B{判断}
+    B -- 是 --> C[处理]
+    B -- 否 --> D[结束]
+```
+
+### 时序图（sequence）
+```mermaid
+sequenceDiagram
+    participant 用户
+    participant 网站
+    用户->>网站: 请求文章
+    网站->>网站: 渲染 Markdown
+    网站-->>用户: 返回正文
+```
+
+### 思维导图（mindmap）
+```mermaid
+mindmap
+  root((知识库))
+    写作
+      笔记
+      发布
+    阅读
+      图谱
+      标签
+```
+
+### 甘特图（gantt）
+```mermaid
+gantt
+    title 项目排期
+    dateFormat YYYY-MM-DD
+    section 设计
+      原型    :a1, 2026-09-01, 3d
+    section 开发
+      前端    :a2, after a1, 5d
+      后端    :a3, after a2, 5d
+```
+
+> 该代码块不参与代码高亮、不加行号；Mermaid 库在页面出现 mermaid 块时才按需加载。

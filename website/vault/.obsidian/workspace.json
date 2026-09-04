@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "BrainPress/Introduction.zh.md",
+                "file": "BrainPress/Introduction.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Introduction.zh"
+              "title": "Introduction"
             }
           }
         ]
@@ -185,22 +185,25 @@
       "bases:Create new base": false
     }
   },
-  "active": "187902e02218f727",
+  "active": "105ccd5fa3b3240b",
   "lastOpenFiles": [
+    "OnlineTools/ImageConverter.html",
+    "BrainPress/Introduction.zh.md",
+    "BrainPress/Introduction.md",
+    "Untitled",
+    "Compositions/AdvancedRendering.md",
+    "BrainPress/API-Reference.zh.md",
     "OnlineTools",
     "Compositions/PDF.pdf",
     "Compositions/Multipage.pdf",
     "Compositions/MDHandbook.md",
     "Compositions/Excalidraw.md",
     "Compositions/MarkDown.md",
-    "BrainPress/Introduction.zh.md",
-    "BrainPress/Introduction.md",
     "BrainPress/GettingStarted.zh.md",
     "BrainPress/GettingStarted.md",
     "BrainPress/Deployment.zh.md",
     "BrainPress/Configuration.zh.md",
     "BrainPress/Configuration.md",
-    "BrainPress/API-Reference.zh.md",
     "BrainPress/API-Reference.md"
   ]
 }

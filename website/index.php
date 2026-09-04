@@ -82,7 +82,8 @@ if ($uri === '/' || $uri === '/index.php') {
 
 /* --- API --- */
 // 公开 API（/api/*）：实现在 api.php；/api/admin/* 由 nginx 直转 admin.php
-if (strpos($uri, '/api/') === 0) {
+// RSS / Sitemap 也走 api.php（支持 /rss.xml、/sitemap.xml 简短路径）
+if (strpos($uri, '/api/') === 0 || $uri === '/rss.xml' || $uri === '/sitemap.xml') {
     handle_api($uri, $method, $config);
 }
 
@@ -101,6 +102,7 @@ if (preg_match('#\.md$#i', $uri)) {
     if ($full !== null) {
         if (!is_excluded($rel, $config['exclude_paths'] ?? [])) {
             $rawContent = (string)@file_get_contents($full);
+            if (is_unpublished($rawContent)) { http_response_code(404); exit; }  // 选择性发布：未公开文章直接 404
             $isExcalidraw = preg_match('/\.excalidraw\.md$/i', $rel)
                 || (strpos($rawContent, 'excalidraw-plugin:') !== false && preg_match('/^```compressed-json\s*$/m', $rawContent));
             if ($isExcalidraw) {
@@ -154,6 +156,20 @@ if (preg_match('#\.canvas$#i', $uri)) {
     }
 }
 
+// 服务端渲染 HTML（在线工具/自定义页面）：/xxx.html → 内联原始 HTML，前端直接渲染（保留脚本/样式）
+$ssrHtmlPath = '';
+$ssrHtmlContent = '';
+if (preg_match('#\.html$#i', $uri)) {
+    $htmlRel = urldecode(ltrim($uri, '/'));
+    $htmlFull = resolve_vault_file($htmlRel, $config);
+    if ($htmlFull !== null) {
+        if (!is_excluded($htmlRel, $config['exclude_paths'] ?? [])) {
+            $ssrHtmlPath = $htmlRel;
+            $ssrHtmlContent = (string)@file_get_contents($htmlFull);
+        }
+    }
+}
+
 // 服务端渲染 Graph View：/graph 或 /graph?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）
 $ssrGraph = preg_match('#^/graph(/|\\?|$)#', $uri) ? true : false;
 
@@ -170,7 +186,7 @@ header('Cache-Control: no-cache, must-revalidate');
 // 主 vault 受「WebDAV 渲染」开关控制（与 /api/list、/api/file 同一开关）：关=目录不显示（挂载目录走各自开关不受影响）
 $frontMenuMd = '';
 $frontTree = (($config['render_webdav'] ?? false) && is_dir(PANEL_DIR . '/vault'))
-    ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [])
+    ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true)
     : [];
 $frontMenuMd = tree_to_md(merge_ima_tree(merge_custom_trees($frontTree, $config), $config));
 // Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
@@ -308,6 +324,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                 <div class="archive-view" id="archive-view">
                     <h1 class="doc-title" id="home-title" style="display:none"></h1>
                     <div class="md" id="home-md" style="display:none"></div>
+                    <div class="recent-notes" id="recent-notes" style="display:none"></div>
                 </div>
             </div>
             <div class="doc-wrap" id="doc-wrap">
@@ -319,6 +336,11 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                     <!-- 反向链接（被谁引用） -->
                     <div id="backlinks"></div>
                 </div>
+            </div>
+            <!-- 标签列表页：#tag/<name> 独立整页（与文章视图平级，避免混入正文容器） -->
+            <div class="tag-view" id="tag-view" style="display:none">
+                <h1 class="doc-title" id="tag-title"></h1>
+                <div class="md" id="tag-list"></div>
             </div>
             <!-- Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → SVG）
                  与 Graph 同级：fixed 铺满中+右（保留左树）——离开 .doc-main 避免 max-width 容器限制 -->
@@ -406,6 +428,10 @@ var EXCALIDRAW_RAW = <?php echo $ssrExcalidrawPath !== '' ? json_encode($ssrExca
 var SSR_CANVAS = <?php echo $ssrCanvasPath !== '' ? 'true' : 'false'; ?>;
 var CANVAS_PATH = <?php echo $ssrCanvasPath !== '' ? json_encode($ssrCanvasPath) : '""'; ?>;
 var CANVAS_JSON = <?php echo $ssrCanvasPath !== '' ? json_encode($ssrCanvasContent) : '""'; ?>;
+// HTML 文件直达（在线工具/自定义页面）：内联原始 HTML，前端直接渲染（保留脚本/样式）
+var SSR_HTML = <?php echo $ssrHtmlPath !== '' ? 'true' : 'false'; ?>;
+var HTML_PATH = <?php echo $ssrHtmlPath !== '' ? json_encode($ssrHtmlPath) : '""'; ?>;
+var HTML_CONTENT = <?php echo $ssrHtmlPath !== '' ? json_encode($ssrHtmlContent) : '""'; ?>;
 // 首页大标题（从文章第一个标题提取）
 var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
 // 站点标题（PDF/Canvas/Excalidraw 视图动态 document.title 用）
@@ -414,6 +440,6 @@ var SITE_TITLE = <?php echo json_encode($siteTitle); ?>;
 var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : 'false'; ?>;
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
-<script src="/assets/site.js?v=20260904b"></script>
+<script src="/assets/site.js?v=20260904c"></script>
 </body>
 </html>

@@ -74,6 +74,27 @@ WebDAV 是同步侧：为 Obsidian Remotely Save 在 `vault/` 中存储和编辑
 | `pinned_articles` | 在其所在目录中**优先排序**的文章。 |
 | `expanded_dirs` | 在侧边栏中**强制展开**的目录，覆盖默认折叠设置。 |
 
+#### 基于 frontmatter 的选择性发布
+
+除了上面的 `exclude_paths`（在服务器端手动配置的隐藏清单），每篇笔记还可以**在笔记本身**用 frontmatter 控制是否对访客公开：
+
+| frontmatter 字段 | 作用 |
+| --- | --- |
+| `published: false` | 该笔记对访客**不可见**——会从文件树、全文搜索、图谱、直接访问（SSR 与 `/api/file` 返回"not found"）、RSS 订阅源和 Sitemap 中全部移除。 |
+| `draft: true` | 等价于 `published: false`，语义上表示"草稿"。 |
+
+在笔记文件最顶部加上 `---` 围起来的 frontmatter 块即可：
+
+```markdown
+---
+published: false
+---
+
+（正文……）
+```
+
+适合用于"还没写完、先别发出去"的笔记：作者自己仍可在管理面板 / WebDAV 看到并继续编辑，但访客完全看不到。
+
 ## 站点
 
 | 字段 | 含义 |
@@ -119,8 +140,9 @@ WebDAV 是同步侧：为 Obsidian Remotely Save 在 `vault/` 中存储和编辑
 | `.pdf` | 在内置 pdf.js 阅读器中打开（嵌入和直接访问共享同一界面）。使用 `![[book.pdf]]` 嵌入；使用 `[[book.pdf#page=3]]` 深度链接。 |
 | `.excalidraw.md` | Excalidraw 绘图，使用官方引擎渲染（lz-string 压缩 JSON → SVG）。通过 `.excalidraw.md` 扩展名**或**内容（`excalidraw-plugin:` 标记 + ```` ```compressed-json ```` 块）检测。 |
 | `.canvas` | Obsidian Canvas 白板，渲染为实时 SVG 场景（文本/文件/链接/分组节点、贝塞尔箭头）。 |
+| ```` ```mermaid ```` 代码块 | 在任意 `.md` 笔记中用 Mermaid 语法写图表（流程图、时序图、思维导图、甘特图），打开笔记时自动渲染为图形；该代码块跳过代码高亮，也不会加行号。Mermaid 库（`/assets/mermaid.min.js`）在页面出现 mermaid 代码块时才按需加载。 |
 
-以上三种均通过 `index.php` 提供（`.md`/`.pdf`/`.canvas` 重写规则），不从 `/vault/` 下的静态服务中提供。
+以上（除 `mermaid` 代码块在正文内联渲染外）均通过 `index.php` 提供（`.md`/`.pdf`/`.canvas` 重写规则），不从 `/vault/` 下的静态服务中提供。
 
 ## 行为说明
 

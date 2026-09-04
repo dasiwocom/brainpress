@@ -191,6 +191,11 @@ function is_canvas(string $path): bool {
     return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'canvas';
 }
 
+/** 是否为 HTML 文件（在线工具/自定义页面用） */
+function is_html(string $path): bool {
+    return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'html';
+}
+
 /** 是否为图片文件（嵌入显示用） */
 function is_image(string $path): bool {
     return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'], true);
@@ -277,7 +282,7 @@ function scandir_tree_cached(string $dir): array {
 
 /** 递归扫描工作区，返回文件树；$excludes 命中的目录/文件不出现在树中；$pinnedDirs 置顶目录、$pinnedArticles 置顶文章（排最前）；
  *  $forMount=true 用于自定义挂载：不收录图片（挂载目录没有静态服务路由，图片是死链，只会造成脏乱显示） */
-function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false): array {
+function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false, bool $publishedOnly = false): array {
     if (!is_dir($dir)) {
         return []; // vault 目录缺失时优雅兜底（空树），不报错
     }
@@ -299,7 +304,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
             continue; // 命中隐藏列表：目录整棵跳过 / 文件不收录
         }
         if (is_dir($full)) {
-            $children = scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles, $forMount);
+            $children = scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles, $forMount, $publishedOnly);
             // 挂载模式：过滤后变空的目录（如纯图片的 Attachments）直接不显示
             if ($forMount && !$children) continue;
             $items[] = [
@@ -309,6 +314,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'children' => $children,
             ];
         } elseif (is_md($full)) {
+            if ($publishedOnly && is_unpublished((string)@file_get_contents($full))) continue; // 选择性发布过滤
             $items[] = [
                 'name' => $entry,
                 'path' => $rel,
@@ -332,6 +338,13 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
             ];
         } elseif (is_canvas($full)) {
             // Obsidian Canvas 白板收录（画布渲染显示用）
+            $items[] = [
+                'name' => $entry,
+                'path' => $rel,
+                'type' => 'file',
+            ];
+        } elseif (is_html($full)) {
+            // HTML 在线工具/自定义页面收录（直接渲染原始 HTML，保留脚本/样式）
             $items[] = [
                 'name' => $entry,
                 'path' => $rel,
@@ -381,7 +394,7 @@ function tree_to_md(array $items, string $prefix = ''): string {
         } else {
             // 媒体/图片是嵌入资源非文档：不进侧滑菜单（树保持干净），仅存在于树数据供 resolveAsset 解析
             if (is_media($item['name']) || is_image($item['name'])) continue;
-            $name = preg_replace('/\.(md|pdf|canvas)$/i', '', $item['name']);
+            $name = preg_replace('/\.(md|pdf|canvas|html)$/i', '', $item['name']);
             // 最小编码：保留斜杠，只编码空格/括号等 md 链接破坏字符
             $href = str_replace('%2F', '/', rawurlencode($item['path']));
             $lines[] = $prefix . '- [' . $name . '](/' . $href . ')';
@@ -673,4 +686,48 @@ function is_excluded(string $rel, array $excludes): bool {
         if (basename($rel) === $ex) return true;          // 文件名
     }
     return false;
+}
+
+/** 解析 markdown 开头的 YAML frontmatter（--- 包裹的键值块），返回关联数组；无 frontmatter 返回 [] */
+function parse_frontmatter(string $raw): array {
+    if (substr($raw, 0, 3) !== '---') return [];
+    $end = strpos($raw, "\n---", 3);
+    if ($end === false) return [];
+    $block = substr($raw, 3, $end - 3);
+    $out = [];
+    foreach (preg_split('/\r?\n/', $block) as $line) {
+        if (trim($line) === '' || strpos($line, ':') === false) continue;
+        $key = trim(substr($line, 0, strpos($line, ':')));
+        $val = trim(substr($line, strpos($line, ':') + 1));
+        $val = trim($val, "\"' \t");
+        if ($key !== '') $out[strtolower($key)] = $val;
+    }
+    return $out;
+}
+
+/** 选择性发布：frontmatter 含 published:false / draft:true / published:no → 视为未发布（返回 true） */
+function is_unpublished(string $raw): bool {
+    $fm = parse_frontmatter($raw);
+    if (isset($fm['published'])) {
+        $p = strtolower($fm['published']);
+        if ($p === 'false' || $p === 'no' || $p === '0') return true;
+    }
+    if (isset($fm['draft'])) {
+        $d = strtolower($fm['draft']);
+        if ($d === 'true' || $d === 'yes' || $d === '1') return true;
+    }
+    return false;
+}
+
+/** 从 markdown 提取 RSS 描述片段：优先 frontmatter description，否则正文前 200 字符去标记 */
+function extract_frontmatter_summary(string $raw): string {
+    $fm = parse_frontmatter($raw);
+    if (isset($fm['description']) && $fm['description'] !== '') return $fm['description'];
+    // strip frontmatter + code blocks，取纯文本前 200 字
+    $body = preg_replace('/^---[\s\S]*?---\r?\n/', '', $raw, 1);
+    $body = preg_replace('/```[\s\S]*?```/', ' ', $body);
+    $body = preg_replace('/!\[\[[^\]]*\]\]|\[\[[^\]]*\]\]|#[^\s#]+/u', ' $1', $body);
+    $body = preg_replace('/[#>*_`~|=\-]/u', ' ', $body);
+    $body = preg_replace('/\s+/u', ' ', $body);
+    return mb_substr(trim($body), 0, 200);
 }

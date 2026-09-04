@@ -207,6 +207,79 @@
             empty.style.display = '';
         }
     }
+    // 最近笔记：首页底部列出最新修改的 10 篇（按 mtime 倒序，排除首页文章本身）
+    function renderRecentNotes() {
+        var box = $('recent-notes');
+        if (!box) return;
+        api('/api/article-list').then(function (data) {
+            var arts = data.articles || [];
+            var homeTitle = (window.HOME_TITLE || '').replace(/\.md$/i, '').trim();
+            var list = arts
+                .filter(function (a) { return (a.name || '').replace(/^\d+-/, '').replace(/\.md$/i, '') !== homeTitle; })
+                .sort(function (a, b) { return (b.mtime || 0) - (a.mtime || 0); })
+                .slice(0, 10);
+            if (!list.length) { box.style.display = 'none'; return; }
+            box.innerHTML = '<div class="rn-title">Recent Notes</div>' + list.map(function (a) {
+                var disp = (a.name || a.path || '').replace(/^\d+-/, '').replace(/\.md$/i, '');
+                var t = a.mtime ? fmtDate(a.mtime) : '';
+                return '<div class="rn-item"><span class="rn-name" data-path="' + esc(a.path) + '">' + esc(disp) +
+                    '</span><span class="rn-time">' + esc(t) + '</span></div>';
+            }).join('');
+            box.style.display = '';
+            box.querySelectorAll('.rn-name').forEach(function (el) {
+                el.addEventListener('click', function () { selectFile({ path: el.dataset.path }); });
+            });
+        }).catch(function () { box.style.display = 'none'; });
+    }
+    function fmtDate(ts) {
+        var d = new Date(ts * 1000);
+        var p = function (n) { return (n < 10 ? '0' : '') + n; };
+        return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    }
+    // 标签页：#tag/<name> — 独立整页，收集所有含该标签的笔记列表
+    function showTag(tagName) {
+        if (!tagName) return false;
+        var tag = tagName.toLowerCase();
+        var files = collectFiles();
+        if (!files.length) return false;
+        hideSpecialViews();
+        $('archive-view').style.display = 'none';
+        $('empty-state').style.display = 'none';
+        $('doc-wrap').style.display = 'none';
+        $('toc-panel').style.display = 'none';
+        $('tag-title').textContent = '#' + tagName;
+        $('tag-title').style.display = '';
+        $('tag-view').style.display = '';
+        var md = $('tag-list');
+        md.innerHTML = '<div class="tag-page-heading">Notes tagged <code>#' + esc(tagName) + '</code></div>';
+        var hitCount = 0;
+        var pending = files.length;
+        files.forEach(function (f) {
+            api('/api/file?path=' + encodeURIComponent(f.path)).then(function (data) {
+                var c = data.content || '';
+                if (c.toLowerCase().indexOf('#' + tag) > -1) {
+                    hitCount++;
+                    var disp = (f.name || '').replace(/^\d+-/, '').replace(/\.md$/i, '');
+                    var row = document.createElement('div');
+                    row.className = 'tag-item';
+                    row.innerHTML = '<span class="tag-item-name" data-path="' + esc(f.path) + '">' + esc(disp) + '</span>';
+                    row.querySelector('.tag-item-name').addEventListener('click', function () { selectFile({ path: f.path }); });
+                    md.appendChild(row);
+                }
+                if (--pending <= 0) finishTag();
+            }).catch(function () {
+                if (--pending <= 0) finishTag();
+            });
+        });
+        function finishTag() {
+            var info = document.createElement('div');
+            info.className = 'tag-item-count';
+            info.textContent = hitCount + ' note' + (hitCount === 1 ? '' : 's');
+            md.appendChild(info);
+            $('content').scrollTop = 0;
+        }
+        return true;
+    }
     function enterApp() {
         $('app').classList.add('show');
         // 服务端渲染直达（URL 直接访问 /xxx.md）：内联内容同步渲染显示（无 fetch 等待，打开即文章）
@@ -272,6 +345,7 @@
             hideSpecialViews();
             $('archive-view').style.display = 'none';
             renderHome();
+            renderRecentNotes();
             $('archive-view').style.display = '';
         }
         loadTree();
@@ -692,20 +766,24 @@
     // 文章渲染统一出口：内联 HTML → 高亮/降级/标题/视图切换/增强（selectFile 与 SSR 共用）
     function showArticle(html, nodePath) {
         $('md-view').innerHTML = html;
-        // 代码高亮（VS Code 风格：日间 Light+ / 夜间 Dark+）
+        // 代码高亮（VS Code 风格：日间 Light+ / 夜间 Dark+）；mermaid 图表不参与 hljs
         try {
             $('md-view').querySelectorAll('pre code').forEach(function (el) {
+                if (/\blanguage-mermaid\b/.test(el.className)) return;
                 hljs.highlightElement(el);
             });
         } catch (e) {}
+        renderMermaid($('md-view'));
         // 正文允许 H1：不再降级（标题栏显示文件名，正文 H1 与文件名可并存）
         // 文档标题 = 文件名（去扩展名），清除旧翻译标记
         var docName = nodePath.split('/').pop().replace(/\.md$/i, '');
         $('doc-title').textContent = docName;
         $('doc-title').style.display = '';
+        renderBreadcrumb(nodePath);
         delete $('doc-title').dataset.orig;
         // 视图切换：内容就绪后一次性显示
         hideSpecialViews();  // 清掉可能残留的 PDF/画布/图谱（互斥）
+        $('tag-view').style.display = 'none';
         $('archive-view').style.display = 'none';
         $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
@@ -730,6 +808,52 @@
             window._pendingAnchor = null;
             setTimeout(function () { jumpToAnchor(pa); }, 80);
         }
+    }
+
+    // 面包屑：Home > 目录 > 子目录 > 当前笔记（目录段点击 → 展开侧栏树定位并亮起对应目录）
+    function renderBreadcrumb(nodePath) {
+        var bc = $('breadcrumb');
+        if (!bc) return;
+        var parts = nodePath.replace(/^\/+/, '').replace(/\.md$/i, '').split('/');
+        if (parts.length <= 1) { bc.style.display = 'none'; bc.innerHTML = ''; return; }
+        var html = '<a href="#/" style="cursor:pointer">Home</a><span class="bc-sep"> / </span>';
+        var acc = '';
+        for (var i = 0; i < parts.length - 1; i++) {
+            acc = acc ? acc + '/' + parts[i] : parts[i];
+            html += '<a data-bc-path="' + esc(acc) + '" style="cursor:pointer">' + esc(parts[i]) + '</a><span class="bc-sep"> / </span>';
+        }
+        html += '<span style="color:var(--vp-c-text,#333)">' + esc(parts[parts.length - 1]) + '</span>';
+        bc.innerHTML = html;
+        bc.style.display = '';
+        bc.querySelectorAll('a[data-bc-path]').forEach(function (a) {
+            a.addEventListener('click', function (e) {
+                e.preventDefault();
+                revealInTree(a.dataset.bcPath);
+            });
+        });
+    }
+
+    // 面包屑目录跳转：展开侧栏/抽屉树并定位到指定目录
+    function revealInTree(dirPath) {
+        if (!dirPath) return;
+        if (typeof setFrontDrawer === 'function') setFrontDrawer(true);  // 打开抽屉（含移动端）
+        var target = null;
+        var roots = [frontDrawerMd];
+        var left = (typeof $ !== 'undefined') ? $('left-drawer-md') : null;
+        if (left) roots.push(left);
+        roots.forEach(function (root) {
+            if (!root || target) return;
+            var q = 'li[data-path="' + String(dirPath).replace(/"/g, '\\"') + '"]';
+            target = root.querySelector(q);
+        });
+        if (!target) return;
+        // 展开 target 及其所有祖先（去 collapsed）
+        var n = target;
+        while (n && n.nodeType === 1) {
+            if (n.classList) n.classList.remove('collapsed');
+            n = n.parentNode;
+        }
+        try { target.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
     }
 
     async function selectFile(node) {
@@ -824,6 +948,7 @@
             if (pre.querySelector('.code-lines') || !pre.querySelector('code')) return;
             var code = pre.querySelector('code');
             var lang = ((code.className.match(/language-([\w+-]+)/) || [])[1] || '').toLowerCase();
+            if (lang === 'mermaid') return;  // mermaid 图表不编号（renderMermaid 处理）
             var text = code.textContent || '';
             var lines = text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
             if (lines.length < 2) return;  // 单行不编号（保持简洁）
@@ -865,8 +990,122 @@
         document.body.removeChild(ta);
     }
 
+    /* ===== Mermaid 图表（```mermaid 代码块 → 渲染流程图/时序图等）===== */
+    // 懒加载 mermaid.min.js（仅当页面出现 mermaid 代码块），默认从本机 /assets/ 自托管加载
+    var _mermaidPromise = null;
+    function loadMermaidLib() {
+        if (window.mermaid) return Promise.resolve(window.mermaid);
+        if (!_mermaidPromise) {
+            _mermaidPromise = new Promise(function (resolve, reject) {
+                var s = document.createElement('script');
+                s.src = '/assets/mermaid.min.js';
+                s.onload = function () {
+                    try {
+                        window.mermaid.initialize({ startOnLoad: false, theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default', securityLevel: 'loose' });
+                    } catch (e) {}
+                    resolve(window.mermaid);
+                };
+                s.onerror = function () { _mermaidPromise = null; reject(new Error('Mermaid failed to load')); };
+                document.head.appendChild(s);
+            });
+        }
+        return _mermaidPromise;
+    }
+    function renderMermaid(rootEl) {
+        if (!rootEl) return;
+        rootEl.querySelectorAll('pre code.language-mermaid').forEach(function (code) {
+            if (code.dataset.mmd) return;
+            var src = code.textContent || '';
+            if (!src.trim()) return;
+            var pre = code.closest('pre');
+            var holder = document.createElement('div');
+            holder.className = 'mermaid-holder';
+            holder.textContent = 'Loading diagram…';
+            if (pre) { pre.replaceWith(holder); } else { code.replaceWith(holder); }
+            loadMermaidLib().then(function (mmd) {
+                var id = 'mmd' + (window._mmdid = (window._mmdid || 0) + 1);
+                var box = document.createElement('div');
+                box.className = 'mermaid';
+                holder.textContent = '';
+                holder.appendChild(box);
+                mmd.render(id, src).then(function (r) {
+                    box.innerHTML = r.svg;
+                }).catch(function (e) {
+                    holder.textContent = 'Mermaid render error: ' + (e && e.message || e);
+                });
+            }).catch(function (e) {
+                holder.textContent = 'Mermaid library unavailable.';
+            });
+        });
+    }
+
+    /* ===== Popover 链接预览（Quartz 同款）===== */
+    // 悬停内部链接弹出目标笔记预览卡片；pointer-events:none 不挡链接点击；用事件委托覆盖动态生成的双链
+    (function () {
+        var card = document.createElement('div');
+        card.className = 'note-popover';
+        document.body.appendChild(card);
+        var showTimer = null, tipTimer = null, cur = null;
+        function loothed(ev) {
+            var t = ev.target && ev.target.closest ? ev.target.closest('a.ob-link[data-link]') : null;
+            if (!t) { cleanup(); return; }
+            var link = t.dataset.link;
+            if (link && cur === t) return;
+            cur = t;
+            // 先显示占位，再异步加载
+            card.innerHTML = '<div class="np-title">' + esc(link.replace(/\.md$/i, '')) + '</div><div class="np-loading">Loading…</div>';
+            positionCard(t);
+            card.classList.add('show');
+            var path = findNote(link);
+            if (!path) { card.querySelector('.np-loading').className = 'np-missing'; card.querySelector('.np-loading').textContent = 'Missing note'; return; }
+            api('/api/file?path=' + encodeURIComponent(path)).then(function (data) {
+                if (cur !== t) return;
+                var c = data.content || '';
+                var title = c.match(/^#\s+(.+)$/m);
+                var body = extractPlain(c);
+                card.innerHTML = '<div class="np-title">' + esc((title ? title[1].trim() : path.split('/').pop().replace(/\.md$/i, ''))) + '</div>' +
+                    '<div class="np-body">' + esc(body) + '</div>';
+                positionCard(t);
+            }).catch(function () {
+                if (cur === t) { var l = card.querySelector('.np-loading'); if (l) { l.className = 'np-missing'; l.textContent = 'Unavailable'; } }
+            });
+        }
+        function positionCard(t) {
+            card.style.visibility = 'hidden';
+            var r = t.getBoundingClientRect();
+            var cw = card.offsetWidth;
+            var left = r.right + 10;
+            if (left + cw > window.innerWidth - 8) left = r.left - cw - 10;
+            if (left < 8) left = 8;
+            var top = r.top - 8;
+            card.style.left = left + 'px';
+            card.style.top = top + 'px';
+            card.style.visibility = '';
+        }
+        function extractPlain(c) {
+            var s = c.replace(/^---[\s\S]*?---\r?\n/, '');
+            s = s.replace(/```[\s\S]*?```/g, ' ');
+            s = s.replace(/!\[\[[^\]]*\]\]|\[\[[^\]]*\]\]|#[^\s#]+|^\s*#+[^\n]*|[>_*`~|]/gm, ' ');
+            return s.replace(/\s+/g, ' ').trim().slice(0, 300);
+        }
+        function cleanup() { cur = null; card.classList.remove('show'); }
+        document.addEventListener('pointerover', function (ev) {
+            var t = ev.target && ev.target.closest ? ev.target.closest('a.ob-link[data-link]') : null;
+            if (!t) return;
+            clearTimeout(tipTimer);
+            if (cur !== t) tipTimer = setTimeout(function () { loothed(ev); }, 220);
+        });
+        document.addEventListener('pointerout', function (ev) {
+            var t = ev.target && ev.target.closest ? ev.target.closest('a.ob-link[data-link]') : null;
+            if (!t) return;
+            clearTimeout(tipTimer);
+            var to = (ev.relatedTarget || null);
+            if (to && to.closest && to.closest('.note-popover')) return;
+            tipTimer = setTimeout(cleanup, 200);
+        });
+    })();
+
     /* ===== Obsidian 兼容：双链 / 嵌入 / 标签 ===== */
-    // 按名字或 ID 查笔记路径
     function findNote(name) {
         var map = window._docMap || {};
         var target = name.replace(/\.md$/i, '');
@@ -1276,10 +1515,9 @@
                     t.href = '#tag=' + item.tag;
                     t.addEventListener('click', function (e) {
                         e.preventDefault();
-                        // 打开搜索并填入标签
-                        openSearch();
-                        searchInput.value = '#' + item.tag;
-                        renderSearch('#' + item.tag);
+                        // 跳转标签页（#tag/<name> → 渲染该标签的所有笔记）
+                        window.location.hash = 'tag/' + encodeURIComponent(item.tag);
+                        handleHash();
                     });
                     frag.appendChild(document.createTextNode(item.leading || ''));
                     frag.appendChild(t);
@@ -2121,7 +2359,7 @@
         // 交互（同 Canvas 体验）：滚轮/双指缩放、空白拖拽平移；画布铺满中+右
         enableExcalidrawPanZoom(dv);
     }
-    // Excalidraw pan/zoom：svg 按自然尺寸渲染，外层 holder 承载 translate+scale（同 Canvas 的 cv-view 语义）
+    // Excalidraw pan/zoom：svg 按自然尺寸渲染，外层 holder 承载 translate+scale（同 Canvas / Graph 的平移+缩放模式）
     function enableExcalidrawPanZoom(dv) {
         var svg = dv.querySelector('svg');
         if (!svg) return;
@@ -2132,10 +2370,9 @@
         svg.style.width = nat.width + 'px';
         svg.style.maxWidth = 'none';
         var holder = document.createElement('div');
-        holder.style.cssText = 'transform-origin:0 0;will-change:transform;';
+        holder.style.cssText = 'position:absolute;inset:0;transform-origin:0 0;will-change:transform;';
         svg.parentNode.replaceChild(holder, svg);
         holder.appendChild(svg);
-        wrap.style.overflow = 'hidden';
         var k = 1, tx = 0, ty = 0;
         function apply() { holder.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')'; }
         var cw = wrap.clientWidth || 600, ch = wrap.clientHeight || 400;
@@ -2145,6 +2382,7 @@
         }
         apply();
         wrap.style.cursor = 'grab';
+        // 滚轮缩放（同 Graph/Canvas）
         wrap.addEventListener('wheel', function (ev) {
             ev.preventDefault();
             var r = wrap.getBoundingClientRect();
@@ -2155,17 +2393,54 @@
             ty = py - (py - ty) * (k2 / k);
             k = k2; apply();
         }, { passive: false });
-        var down = false, sx = 0, sy = 0, ox = 0, oy = 0;
+        // 指针平移 + 双指 pinch 缩放（对齐 Graph/Canvas 模式：window 监听，移动端更可靠）
+        var pointers = {}, lastPinchDist = 0, panning = null;
         wrap.addEventListener('pointerdown', function (ev) {
-            if (ev.button !== 0) return;
+            ev.preventDefault();
             if (ev.target.closest('a')) return;
-            down = true; sx = ev.clientX; sy = ev.clientY; ox = tx; oy = ty;
-            if (wrap.setPointerCapture) { try { wrap.setPointerCapture(ev.pointerId); } catch (e) {} }
+            pointers[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+            var nP = Object.keys(pointers).length;
+            if (nP >= 2) {
+                panning = null;  // 双指 → 缩放模式，停止平移
+                var ids = Object.keys(pointers);
+                lastPinchDist = Math.hypot(pointers[ids[0]].x - pointers[ids[1]].x, pointers[ids[0]].y - pointers[ids[1]].y);
+            } else if (nP === 1) {
+                panning = { x: ev.clientX, y: ev.clientY };
+                wrap.style.cursor = 'grabbing';
+            }
         });
-        wrap.addEventListener('pointermove', function (ev) { if (!down) return; tx = ox + (ev.clientX - sx); ty = oy + (ev.clientY - sy); apply(); });
-        function up() { down = false; }
-        wrap.addEventListener('pointerup', up);
-        wrap.addEventListener('pointercancel', up);
+        window.addEventListener('pointermove', function (ev) {
+            if (pointers[ev.pointerId]) { pointers[ev.pointerId].x = ev.clientX; pointers[ev.pointerId].y = ev.clientY; }
+            var ids = Object.keys(pointers);
+            // 双指 pinch 缩放（围绕两指中点）
+            if (ids.length >= 2 && lastPinchDist > 0) {
+                var p1 = pointers[ids[0]], p2 = pointers[ids[1]];
+                var dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                var rect = wrap.getBoundingClientRect();
+                var mx = (p1.x + p2.x) / 2 - rect.left, my = (p1.y + p2.y) / 2 - rect.top;
+                var k2 = k * (dist / lastPinchDist);
+                k2 = Math.max(0.15, Math.min(8, k2));
+                tx = mx - (mx - tx) * (k2 / k);
+                ty = my - (my - ty) * (k2 / k);
+                k = k2; lastPinchDist = dist; apply();
+                return;
+            }
+            // 单指平移
+            if (!panning) return;
+            tx += ev.clientX - panning.x;
+            ty += ev.clientY - panning.y;
+            panning.x = ev.clientX; panning.y = ev.clientY;
+            apply();
+        });
+        function endPtr(ev) {
+            delete pointers[ev.pointerId];
+            if (Object.keys(pointers).length === 0) {
+                panning = null; lastPinchDist = 0;
+                wrap.style.cursor = 'grab';
+            }
+        }
+        window.addEventListener('pointerup', endPtr);
+        window.addEventListener('pointercancel', endPtr);
     }
     if (window.SSR_EXCALIDRAW) { try { renderExcalidraw(); } catch (e) { if (window.console) console.log('excalidraw err', e); } }
 
@@ -3062,13 +3337,20 @@
     });
     function handleHash() {
         var h = location.hash.replace(/^#/, '');
+        // 标签页：#tag/<name>
+        var tm = h.match(/^tag\/(.+)$/);
+        if (tm) {
+            if (showTag(tm[1]) !== false) return;
+        }
         if (!h) {
             // hash 为空 → 回到首页（渲染首页文章正文）
             $('md-view').style.display = 'none';
+            $('tag-view').style.display = 'none';
             $('doc-wrap').style.display = 'none';
             $('archive-view').style.display = '';
             $('toc-panel').style.display = 'none';
             renderHome();
+            renderRecentNotes();
             // 重置滚动位置（避免回归档时错位）
             $('content').scrollTop = 0;
             return;

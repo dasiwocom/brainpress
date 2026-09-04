@@ -109,6 +109,17 @@ location ~* \.pdf$ { rewrite ^(.*)$ /index.php last; }
 3. 打开网站——前端会立即使用 `vault/` 中的所有 `.md` 文件正常工作。
 4. 访问 `/admin`，首次登录时设置管理员密码。
 
+## 对外订阅与收录（RSS / Sitemap）
+
+BrainPress 对外发布时提供两个给读者 / 搜索引擎的地址，二者都由 `index.php` 处理（前端控制器兜底规则会让它们命中 PHP，无需额外配置）：
+
+- **`/rss.xml`** — RSS 订阅源。列出最新（按修改时间倒序）的公开文章，供访客填入阅读器（如 Feedly）自动跟踪更新。未公开（`published: false` / `draft: true`）的文章不会出现在其中。
+- **`/sitemap.xml`** — 站点地图。列出所有公开文章地址，供 Google 搜索控制台 / 百度站长平台收录。未公开文章同样被排除。
+
+发布后把这两个地址提交给搜索引擎即可：
+- Google：搜索控制台 → 站点地图 → 填入 `https://your.site/sitemap.xml`
+- 百度：百度站长平台 → 普通收录 → 站点地图
+
 ## 部署后验证
 
 ```bash
@@ -118,6 +129,8 @@ curl -s -o /dev/null -w "%{http_code}" https://your.site/guide/what-is-brainpres
 curl -s -o /dev/null -w "%{http_code}" https://your.site/config.json       # 404 (必须被阻止！)
 curl -s -o /dev/null -w "%{http_code}" https://your.site/admin             # 200
 curl -s -o /dev/null -w "%{http_code}" https://your.site/graph             # 200
+curl -s -o /dev/null -w "%{http_code}" https://your.site/rss.xml           # 200 (RSS 订阅源)
+curl -s -o /dev/null -w "%{http_code}" https://your.site/sitemap.xml       # 200 (站点地图)
 ```
 
 ## 更新与备份

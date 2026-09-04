@@ -46,6 +46,11 @@ html.dark .hljs-meta, html.dark .hljs-tag { color:#9b9b9b; }
     --vp-c-brand-dark:#5672cd;
     --vp-c-code:#f6f8fa;
     --vp-c-card:#ffffff;
+    /* 图谱专用颜色（Quartz/Obsidian 观感）——亮色：深色节点 + 浅灰连线 */
+    --graph-hub:#1a1a1a;
+    --graph-secondary:#666666;
+    --graph-line:#b0b0b5;
+    --graph-line-hot:#1a1a1a;
 }
 html.dark {
     --bg:#1b1b1f; --fg:#e3e3e3; --muted:#8f8f94; --line:#2e2e32;
@@ -62,6 +67,11 @@ html.dark {
     --vp-c-brand-dark:#3e63dd;
     --vp-c-code:#161618;
     --vp-c-card:#202024;
+    /* 图谱专用颜色——暗色：白色枢纽 + 灰节点 + 浅灰连线 */
+    --graph-hub:#ffffff;
+    --graph-secondary:#888888;
+    --graph-line:rgba(255,255,255,.20);
+    --graph-line-hot:#ffffff;
 }
 html,body {
     font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif;
@@ -496,8 +506,9 @@ html.dark .md pre { background:var(--vp-c-bg-soft); }
 .md pre .code-lines .code-line-body { padding-left:1em; white-space:pre; color:inherit; }
 .md pre .code-lines .code-line-num::selection { background:transparent; }
 html.dark .md pre .code-lines .code-line-num { color:rgba(180,180,180,.45); }
-/* pre 的 padding 让位给表格：行号从最左开始，正文与行号之间由 td padding 分隔 */
-.md pre { padding:16px 0; }
+/* pre 的 padding 让位给表格：行号从最左开始，正文与行号之间由 td padding 分隔；
+   仅多行代码块（含 .code-lines）：单行代码块保持外层 pre 的 padding（防左边贴边） */
+.md pre.has-lines { padding:16px 0; }
 .md pre .code-lines .code-line-body { padding-right:20px; }
 /* 代码块复制按钮（VitePress 风格：40px 图标按钮） */
 .md pre .code-copy {
@@ -618,8 +629,8 @@ html.dark .md a:hover { color:var(--vp-c-brand); }
 /* 画布嵌入（![[x.canvas]]：复用白板场景 SVG，等比缩放） */
 .md .ob-embed-canvas { border:1px solid var(--line); border-radius:6px; overflow:hidden; margin:12px 0; background:var(--vp-c-bg); }
 .md .ob-embed-canvas svg { width:100%; height:auto; display:block; }
-/* 反向链接（Obsidian 风格：区块 + 条目列表 + 引用上下文） */
-#backlinks { margin-top:56px; padding-top:28px; border-top:1px solid var(--line); }
+/* 反向链接（Obsidian 风格：区块 + 条目列表 + 引用上下文）；宽度与正文列一致（.md max-width:760 居中） */
+#backlinks { margin-top:56px; margin-left:auto; margin-right:auto; max-width:760px; padding-top:28px; border-top:1px solid var(--line); }
 .backlinks-head {
     display:flex; align-items:center; gap:10px; margin-bottom:16px;
 }
@@ -744,8 +755,8 @@ html.dark .ob-pdf-page { border-bottom-color:rgba(255,255,255,.07); }
 .ob-pdf-outline a:hover { background:var(--hover); }
 
 /* Excalidraw 绘画渲染（.excalidraw.md：SVG 画布自适应） */
-#excalidraw-view { position:fixed; top:56px; right:0; bottom:0; left:0; z-index:50; display:none; background:var(--vp-c-bg); padding:0; overflow:auto; }
-.excalidraw-canvas { width:100%; min-height:100%; touch-action:manipulation; }
+#excalidraw-view { position:fixed; top:56px; right:0; bottom:0; left:0; z-index:50; display:none; background:var(--vp-c-bg); padding:0; overflow:hidden; }
+.excalidraw-canvas { position:relative; width:100%; height:100%; touch-action:none; }
 .excalidraw-canvas svg { max-width:none; width:100%; height:auto; display:block; border-radius:8px; }
 
 /* Obsidian Canvas 白板渲染（.canvas：SVG 节点/连线，颜色跟随日夜主题）
@@ -781,24 +792,70 @@ html.dark .cv-group { stroke:#b8b857; }
 /* ===== Graph View：知识图谱（SVG 力导向） ===== */
 /* fixed 铺满视口（导航下方）：不依赖 content 布局/父级高度——任何情况下都有确定尺寸 */
 .graph-view { position:fixed; top:56px; left:0; right:0; bottom:0; z-index:50; display:none; flex-direction:column; background:var(--vp-c-bg); }
-.graph-info { position:absolute; right:12px; bottom:10px; font-size:12px; color:var(--vp-c-text-mute); z-index:2; }
+.graph-info { position:absolute; right:12px; bottom:10px; font-size:12px; color:var(--vp-c-text-2); z-index:2; }
 .graph-canvas-wrap { flex:1; overflow:hidden; position:relative; min-height:480px; touch-action:none; }
-#graph-svg g { will-change:transform; }  /* 合成层提示——动画走 GPU */
+#graph-svg g { will-change:transform; }
 #graph-svg { width:100%; height:100%; display:block; }
 .graph-empty { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--vp-c-text-3); font-size:14px; }
-.graph-link { stroke:var(--line); stroke-width:1; opacity:.55; transition:opacity .2s ease, stroke-width .2s ease; }
-html.dark .graph-link { stroke:#3a3a4a; }
-.graph-link-hot { opacity:1; stroke-width:2; }
-.graph-link-dim { opacity:.06; }
-.graph-label { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; font-size:10.5px; font-weight:600; line-height:1.2; fill:var(--vp-c-text-2); paint-order:stroke; stroke:var(--vp-c-bg); stroke-width:3px; stroke-linejoin:round; pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .18s ease; }
-.graph-node { cursor:pointer; transition:opacity .2s ease; will-change:transform; touch-action:manipulation; }
-.graph-node circle { fill:#5672cd; transition:transform .2s ease; transform-box:fill-box; transform-origin:center; }
-html.dark .graph-node circle { fill:#3e63dd; }
+/* 连线：Quartz 同款——svg stroke 用 CSS 变量，亮色深灰/暗色浅灰，始终与背景对比 */
+.graph-link { stroke:var(--graph-line); stroke-width:1; opacity:1; transition:opacity .25s ease, stroke-width .25s ease; }
+.graph-link-hot { opacity:1 !important; stroke-width:2; stroke:var(--graph-line-hot) !important; }
+.graph-link-dim { opacity:.2 !important; }
+/* 节点颜色：CSS 变量随主题自动切换——亮色深色节点、暗色白/灰节点 */
+.graph-hub { fill:var(--graph-hub); }
+.graph-secondary { fill:var(--graph-secondary); }
+.graph-green { fill:#22c55e; }
+.graph-label { font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; font-size:10px; font-weight:400; line-height:1.2; fill:var(--vp-c-text-1); paint-order:stroke; stroke:var(--vp-c-bg); stroke-width:2px; stroke-linejoin:round; pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .18s ease; }
+.graph-node { cursor:pointer; transition:opacity .25s ease; will-change:transform; touch-action:manipulation; }
+.graph-node circle { transition:transform .2s ease, fill .25s ease; transform-box:fill-box; transform-origin:center; }
 .graph-node .graph-hit { cursor:pointer; pointer-events:all; }
-.graph-node:hover circle:not(.graph-hit) { transform:scale(1.3); }
+.graph-node:hover circle:not(.graph-hit) { transform:scale(1.25); }
 /* hover 高亮：非邻居淡化（class 切换——轻量） */
-.graph-dim { opacity:.15; }
+.graph-dim { opacity:.1; }
 
 /* 抽屉固定入口已移除：Graph view 现作为虚拟条目直接进文章树（见 $frontMenuMd 拼接） */
 
 #toast.show { opacity:1; }
+
+/* Mermaid 图表渲染 */
+.mermaid-holder { text-align:center; color:var(--vp-c-text-mute, #666); padding:12px; min-height:40px; }
+.mermaid { max-width:100%; overflow-x:auto; }
+.mermaid svg { max-width:100%; height:auto; display:inline-block; }
+html.dark .mermaid svg { filter:none; }
+.mermaid-holder .error { color:var(--vp-c-text-mute, #999); font-size:13px; }
+
+/* Popover 链接预览卡片 */
+.note-popover { position:fixed; z-index:1000; width:300px; max-width:80vw; max-height:220px; overflow:auto;
+    background:var(--vp-c-bg,#fff); border:1px solid var(--line,#d0d0d0); border-radius:8px;
+    box-shadow:0 8px 30px rgba(0,0,0,.15); padding:10px 12px; font-size:13px; line-height:1.5;
+    color:var(--vp-c-text,#333); pointer-events:none; opacity:0; transform:translateY(4px);
+    transition:opacity .12s ease, transform .12s ease; }
+html.dark .note-popover { background:#1e1e1e; border-color:#3a3a4a; color:#e0e0e0; }
+.note-popover.show { opacity:1; transform:translateY(0); }
+.note-popover .np-title { font-weight:600; margin-bottom:4px; padding-bottom:4px; border-bottom:1px solid var(--line,#e0e0e0); }
+.note-popover .np-body { color:inherit; white-space:pre-wrap; word-break:break-word; }
+.note-popover .np-loading, .note-popover .np-missing { color:var(--vp-c-text-mute,#999); }
+
+/* 最近笔记（首页） */
+.recent-notes { margin-top:28px; }
+.recent-notes .rn-title { font-size:15px; font-weight:600; color:var(--vp-c-text-2,#666); margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid var(--line,#eee); }
+.recent-notes .rn-item { display:flex; align-items:baseline; gap:10px; padding:6px 2px; border-bottom:1px dashed var(--line,#eee); }
+.recent-notes .rn-item:last-child { border-bottom:none; }
+.recent-notes .rn-name { font-weight:500; color:var(--vp-c-brand,#5672cd); cursor:pointer; }
+.recent-notes .rn-name:hover { text-decoration:underline; }
+.recent-notes .rn-time { font-size:12px; color:var(--vp-c-text-mute,#aaa); margin-left:auto; white-space:nowrap; }
+html.dark .recent-notes .rn-title { color:#999; border-bottom-color:#333; }
+html.dark .recent-notes .rn-item { border-bottom-color:#333; }
+.recent-notes a { text-decoration:none; }
+
+/* 标签页（#tag/<name>） */
+.tag-page-heading { font-weight:600; margin-bottom:12px; color:var(--vp-c-text-2,#555); }
+.tag-page-heading code { background:var(--hover,#f0f0f0); border-radius:4px; padding:1px 6px; font-size:inherit; }
+html.dark .tag-page-heading code { background:#333; }
+/* 标签列表页独立整页（#tag/<name>）：与文章正文同款居中布局 */
+.tag-view { max-width:760px; margin:0 auto; padding-left:1px; }
+.tag-item { padding:8px 2px; border-bottom:1px dashed var(--line,#eee); }
+html.dark .tag-item { border-bottom-color:#333; }
+.tag-item-name { color:var(--vp-c-brand,#5672cd); cursor:pointer; font-weight:500; }
+.tag-item-name:hover { text-decoration:underline; }
+.tag-item-count { margin-top:14px; font-size:12.5px; color:var(--vp-c-text-mute,#999); }

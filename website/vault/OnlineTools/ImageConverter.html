@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>图片格式转换工具</title>
+<style>
+/* ===== 图片转换工具：完全复用 BrainPress 站点主题变量 =====
+   html.dark 由站点全局切换，本工具所有颜色走 var()，日夜自动跟随 */
+#img-tool {
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif;
+    color:var(--vp-c-text-1,#3a3a3a);
+    background:transparent;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+}
+#img-tool * { box-sizing:border-box; }
+#img-tool .it-title {
+    font-size:22px; font-weight:600; letter-spacing:-.02em;
+    color:var(--vp-c-text-1,#3a3a3a);
+    margin:0 0 6px;
+}
+#img-tool .it-sub {
+    font-size:13px; color:var(--vp-c-text-2,#67676c); margin:0 0 22px;
+}
+/* 拖放 → 上传区 */
+#img-tool .it-drop {
+    border:2px dashed var(--line,#e2e2e3);
+    border-radius:12px;
+    padding:44px 20px;
+    text-align:center;
+    color:var(--vp-c-text-2,#67676c);
+    cursor:pointer;
+    transition:border-color .25s ease, background-color .25s ease;
+    background:var(--vp-c-bg-soft,#f6f6f7);
+}
+#img-tool .it-drop:hover, #img-tool .it-drop.drag {
+    border-color:var(--vp-c-brand,#5672cd);
+    background:color-mix(in srgb, var(--vp-c-brand,#5672cd) 6%, transparent);
+}
+html.dark #img-tool .it-drop { background:var(--vp-c-bg-soft,#161618); }
+#img-tool .it-drop-ico { font-size:40px; line-height:1; margin-bottom:10px; opacity:.6; }
+#img-tool .it-drop-main { font-size:15px; font-weight:500; color:var(--vp-c-text-1,#3a3a3a); }
+#img-tool .it-drop-hint { font-size:12.5px; color:var(--vp-c-text-3,#8f8f94); margin-top:6px; }
+#img-tool .it-drop input[type="file"] { display:none; }
+
+/* 编辑面板 */
+#img-tool .it-panel { display:none; margin-top:22px; }
+#img-tool .it-panel.show { display:block; }
+#img-tool .it-cols {
+    display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;
+}
+#img-tool .it-preview-col { flex:1 1 320px; min-width:0; }
+#img-tool .it-controls-col { flex:1 1 260px; min-width:0; }
+#img-tool .it-card {
+    background:var(--vp-c-bg,#fff);
+    border:1px solid var(--line,#e2e2e3);
+    border-radius:10px;
+    padding:16px 18px;
+    margin-bottom:16px;
+}
+html.dark #img-tool .it-card { background:var(--vp-c-card,#202024); }
+#img-tool .it-card-title {
+    font-size:13px; font-weight:700; letter-spacing:.5px;
+    text-transform:uppercase; color:var(--vp-c-text-3,#8f8f94);
+    margin-bottom:12px;
+}
+/* 预览画布 */
+#img-tool .it-canvas-wrap {
+    position:relative;
+    border:1px solid var(--line,#e2e2e3);
+    border-radius:8px;
+    overflow:hidden;
+    background:
+        linear-gradient(45deg, var(--vp-c-bg-soft,#eee) 25%, transparent 25%, transparent 75%, var(--vp-c-bg-soft,#eee) 75%),
+        linear-gradient(45deg, var(--vp-c-bg-soft,#eee) 25%, transparent 25%, transparent 75%, var(--vp-c-bg-soft,#eee) 75%);
+    background-size:18px 18px;
+    background-position:0 0, 9px 9px;
+}
+#img-tool .it-canvas-wrap canvas {
+    display:block; width:100%; height:auto; min-height:100px;
+}
+#img-tool .it-note { font-size:12px; color:var(--vp-c-text-3,#8f8f94); margin-top:8px; }
+
+/* 表单控制 */
+#img-tool .it-field { margin-bottom:14px; }
+#img-tool .it-field:last-child { margin-bottom:0; }
+#img-tool .it-label {
+    display:flex; justify-content:space-between; align-items:center;
+    font-size:13px; font-weight:500; color:var(--vp-c-text-2,#67676c);
+    margin-bottom:6px;
+}
+#img-tool .it-label .it-val { font-weight:600; color:var(--vp-c-brand,#5672cd); font-size:13px; }
+#img-tool select, #img-tool input[type="range"], #img-tool input[type="number"] {
+    width:100%;
+    padding:7px 10px;
+    border:1px solid var(--line,#e2e2e3);
+    border-radius:6px;
+    background:var(--vp-c-bg-soft,#f6f6f7);
+    color:var(--vp-c-text-1,#3a3a3a);
+    font-size:14px;
+    font-family:inherit;
+    outline:none;
+}
+#img-tool select:focus, #img-tool input[type="number"]:focus { border-color:var(--vp-c-brand,#5672cd); }
+#img-tool input[type="range"] {
+    -webkit-appearance:none; appearance:none; height:5px; padding:0;
+    border:none; background:var(--line,#e2e2e3); border-radius:3px; cursor:pointer;
+}
+#img-tool input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance:none; appearance:none;
+    width:16px; height:16px; border-radius:50%;
+    background:var(--vp-c-brand,#5672cd); border:none; cursor:pointer;
+}
+#img-tool input[type="range"]::-moz-range-thumb {
+    width:16px; height:16px; border-radius:50%;
+    background:var(--vp-c-brand,#5672cd); border:none; cursor:pointer;
+}
+#img-tool .it-num-flex { display:flex; gap:10px; }
+#img-tool .it-num-flex .it-field { flex:1; }
+/* 按钮 */
+#img-tool .it-actions { display:flex; gap:10px; margin-top:4px; }
+#img-tool .it-btn {
+    flex:1;
+    padding:11px 14px;
+    border:none; border-radius:8px;
+    font-size:14px; font-weight:600; cursor:pointer;
+    font-family:inherit;
+    transition:opacity .2s ease, background-color .25s ease;
+}
+#img-tool .it-btn-primary {
+    background:var(--vp-c-brand,#5672cd); color:#fff;
+}
+html.dark #img-tool .it-btn-primary { background:var(--vp-c-brand,#3e63dd); color:#fff; }
+#img-tool .it-btn-secondary {
+    background:var(--vp-c-bg-soft,#f6f6f7); color:var(--vp-c-text-1,#3a3a3a);
+    border:1px solid var(--line,#e2e2e3);
+}
+#img-tool .it-btn:hover { opacity:.88; }
+#img-tool .it-btn:disabled { opacity:.5; cursor:not-allowed; }
+/* 文件信息 */
+#img-tool .it-fileinfo {
+    display:flex; align-items:center; gap:10px;
+    font-size:13px; color:var(--vp-c-text-2,#67676c);
+    margin-top:12px;
+}
+#img-tool .it-fileinfo .it-badge {
+    padding:2px 8px; border-radius:4px;
+    background:rgba(86,114,205,.12); color:var(--vp-c-brand,#5672cd);
+    font-weight:600; font-size:12px;
+}
+/* Toast */
+#img-tool .it-toast {
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px);
+    background:var(--fg,#1a1a1a); color:#fff;
+    padding:8px 20px; border-radius:4px; font-size:13px;
+    opacity:0; transition:opacity .25s ease, transform .25s ease; z-index:999;
+    pointer-events:none;
+}
+#img-tool .it-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+html.dark #img-tool .it-toast { background:#fff; color:#1a1a1a; }
+
+@media (max-width:640px) {
+    #img-tool .it-cols { flex-direction:column; }
+}
+</style>
+</head>
+<body>
+<div id="img-tool">
+    <h2 class="it-title">图片格式转换</h2>
+    <p class="it-sub">拖入图片，转换格式、缩放、调节质量，本地完成不上传。</p>
+
+    <!-- 拖放上传 -->
+    <div class="it-drop" id="it-drop" tabindex="0" role="button">
+        <div class="it-drop-ico">🖼️</div>
+        <div class="it-drop-main">点击选择或拖拽图片到此处</div>
+        <div class="it-drop-hint">支持 PNG · JPG / JPEG · WEBP · GIF · BMP · ICO / SVG</div>
+        <input type="file" id="it-file" accept="image/*">
+    </div>
+
+    <!-- 编辑面板 -->
+    <div class="it-panel" id="it-panel">
+        <div class="it-cols">
+            <div class="it-preview-col">
+                <div class="it-card">
+                    <div class="it-card-title">预览</div>
+                    <div class="it-canvas-wrap"><canvas id="it-canvas"></canvas></div>
+                </div>
+                <div class="it-fileinfo">
+                    <span class="it-badge" id="it-format">—</span>
+                    <span id="it-dims">—</span>
+                </div>
+                <div class="it-note">* SVG / ICO 会被栅格化为像素图后输出</div>
+            </div>
+
+            <div class="it-controls-col">
+                <div class="it-card">
+                    <div class="it-card-title">输出设置</div>
+                    <div class="it-field">
+                        <div class="it-label">格式 <span class="it-val" id="it-fmt-label">PNG</span></div>
+                        <select id="it-fmt">
+                            <option value="image/png">PNG（无损，支持透明）</option>
+                            <option value="image/jpeg">JPEG（有损，体积小）</option>
+                            <option value="image/webp">WebP（现代，均衡）</option>
+                            <option value="image/gif">GIF（动图/透明）</option>
+                            <option value="image/bmp">BMP（未压缩）</option>
+                        </select>
+                    </div>
+                    <div class="it-field" id="it-quality-field">
+                        <div class="it-label">质量 <span class="it-val"><span id="it-quality-val">92</span>%</span></div>
+                        <input type="range" id="it-quality" min="1" max="100" value="92">
+                    </div>
+                    <div class="it-field">
+                        <div class="it-label">等比缩放 <span class="it-val"><span id="it-scale-val">100</span>%</span></div>
+                        <input type="range" id="it-scale" min="10" max="200" value="100" step="1">
+                    </div>
+                    <div class="it-field">
+                        <div class="it-label">尺寸（像素，留空=等比）</div>
+                        <div class="it-num-flex">
+                            <div class="it-field"><input type="number" id="it-w" min="1" placeholder="宽"></div>
+                            <div class="it-field"><input type="number" id="it-h" min="1" placeholder="高"></div>
+                        </div>
+                    </div>
+                    <div class="it-actions">
+                        <button class="it-btn it-btn-primary" id="it-download">下载</button>
+                        <button class="it-btn it-btn-secondary" id="it-new">换一张</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="it-toast" id="it-toast"></div>
+
+<script>
+(function () {
+    var tool = document.getElementById('img-tool');
+    if (!tool) return;
+    var drop = document.getElementById('it-drop');
+    var fileInput = document.getElementById('it-file');
+    var panel = document.getElementById('it-panel');
+    var canvas = document.getElementById('it-canvas');
+    var ctx = canvas.getContext('2d');
+    var fmtSel = document.getElementById('it-fmt');
+    var quality = document.getElementById('it-quality');
+    var qualityVal = document.getElementById('it-quality-val');
+    var qualityField = document.getElementById('it-quality-field');
+    var scale = document.getElementById('it-scale');
+    var scaleVal = document.getElementById('it-scale-val');
+    var wInp = document.getElementById('it-w');
+    var hInp = document.getElementById('it-h');
+    var fmtLabel = document.getElementById('it-fmt-label');
+    var fmtBadge = document.getElementById('it-format');
+    var dimsEl = document.getElementById('it-dims');
+    var toastEl = document.getElementById('it-toast');
+
+    var origImg = null;   // ImageBitmap/Image of original
+    var origW = 0, origH = 0;
+    var origName = '';
+
+    var toastTimer = null;
+    function toast(msg) {
+        toastEl.textContent = msg;
+        toastEl.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2200);
+    }
+
+    /* ---------- 输入 ---------- */
+    drop.addEventListener('click', function () { fileInput.click(); });
+    drop.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+    });
+    drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('drag'); });
+    drop.addEventListener('dragleave', function () { drop.classList.remove('drag'); });
+    drop.addEventListener('drop', function (e) {
+        e.preventDefault(); drop.classList.remove('drag');
+        var f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f && f.type.indexOf('image/') === 0) loadFile(f);
+        else toast('请拖入图片文件');
+    });
+    fileInput.addEventListener('change', function () {
+        if (fileInput.files && fileInput.files[0]) loadFile(fileInput.files[0]);
+    });
+
+    function loadFile(file) {
+        origName = file.name;
+        var url = URL.createObjectURL(file);
+        var img = new Image();
+        img.onload = function () {
+            origImg = img;
+            origW = img.naturalWidth;
+            origH = img.naturalHeight;
+            wInp.value = ''; hInp.value = '';
+            scale.value = 100; scaleVal.textContent = '100';
+            panel.classList.add('show');
+            fmtBadge.textContent = (file.type || 'image').split('/')[1].toUpperCase() || '?';
+            dimsEl.textContent = origW + ' × ' + origH + ' px · ' + file.name;
+            draw();
+            URL.revokeObjectURL(url);
+            toast('已加载：' + file.name);
+        };
+        img.onerror = function () {
+            URL.revokeObjectURL(url);
+            toast('无法读取该图片');
+        };
+        img.src = url;
+    }
+
+    /* ---------- 渲染 ---------- */
+    function currentFmt() { return fmtSel.value; }
+
+    function draw() {
+        if (!origImg) return;
+        var pct = Math.max(0.1, parseInt(scale.value, 10) || 100) / 100;
+        var w = Math.max(1, Math.round(origW * pct));
+        var h = Math.max(1, Math.round(origH * pct));
+        var cw = parseInt(wInp.value, 10), ch = parseInt(hInp.value, 10);
+        if (cw > 0 && ch > 0) { w = cw; h = ch; }
+        else if (cw > 0) { h = Math.round(origH * (cw / origW)); w = cw; }
+        else if (ch > 0) { w = Math.round(origW * (ch / origH)); h = ch; }
+
+        canvas.width = w; canvas.height = h;
+        ctx.clearRect(0, 0, w, h);
+        if (currentFmt() === 'image/jpeg' || currentFmt() === 'image/bmp') {
+            // 不支持透明：先铺白底（JPEG/BMP 无 alpha）
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, w, h);
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(origImg, 0, 0, w, h);
+        dimsEl.textContent = w + ' × ' + h + ' px';
+    }
+
+    scale.addEventListener('input', function () { scaleVal.textContent = scale.value; draw(); });
+    wInp.addEventListener('input', draw);
+    hInp.addEventListener('input', draw);
+    fmtSel.addEventListener('change', handleFmtChange);
+    quality.addEventListener('input', function () { qualityVal.textContent = quality.value; });
+
+    function handleFmtChange() {
+        fmtLabel.textContent = currentFmt().split('/')[1].toUpperCase();
+        var isJpeg = currentFmt() === 'image/jpeg';
+        var isPng = currentFmt() === 'image/png';
+        // 质量条：JPEG/WebP 可调；PNG/BMP/GIF 显示但禁用（无损）
+        qualityField.style.opacity = (isJpeg || fmtSel.value === 'image/webp') ? '1' : '.45';
+        quality.disabled = !(isJpeg || fmtSel.value === 'image/webp');
+        draw(); // 切换 JPEG 重铺白底
+    }
+
+    /* ---------- 下载 ---------- */
+    function filename() {
+        var base = (origName || 'image').replace(/\.[^.]+$/, '');
+        var ext = currentFmt().split('/')[1];
+        if (ext === 'jpeg') ext = 'jpg';
+        return base + '.' + ext;
+    }
+    document.getElementById('it-download').addEventListener('click', function () {
+        if (!origImg) return;
+        var mime = currentFmt();
+        var isLosslessGif = mime === 'image/gif';
+        var qual = mime === 'image/jpeg' || mime === 'image/webp' ? (parseInt(quality.value, 10) || 92) / 100 : undefined;
+        var dataUrl;
+        try {
+            dataUrl = canvas.toDataURL(mime, qual);
+        } catch (e) {
+            toast('该格式当前浏览器不支持');
+            return;
+        }
+        // 检查是否真的转成功（toDataURL 可能回落 PNG）
+        if (mime !== 'image/png' && isLosslessGif && dataUrl.indexOf('data:image/gif') !== 0) {
+            toast('浏览器不支持输出 GIF');
+            return;
+        }
+        var a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = filename();
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('已下载：' + filename());
+    });
+
+    document.getElementById('it-new').addEventListener('click', function () {
+        origImg = null;
+        panel.classList.remove('show');
+        fileInput.value = '';
+        canvas.width = 0; canvas.height = 0;
+        fmtBadge.textContent = '—'; dimsEl.textContent = '—';
+    });
+
+    fmtSel.dispatchEvent(new Event('change'));
+})();
+</script>
+</body>
+</html>

@@ -351,9 +351,83 @@ $md_content = file_get_contents("article.md");
 ```
 
 ---
+## 19. Mermaid 流程图 & 选择性发布（BrainPress 渲染扩展）
+
+> 说明：Mermaid 在 Obsidian 中属第三方插件语法（如 Bat.apK 的 Mermaid），但 **BrainPress 已原生内置渲染**——在任意笔记里写 ```` ```mermaid ```` 代码块即自动变成图形。选择性发布也是 BrainPress 服务端扩展。
+
+### 19.1 Mermaid 图表（BrainPress 自动渲染）
+
+> 用 ```` ``` ```` 代码块写图，打开笔记时自动渲染成图形。该代码块不参与代码高亮、不加行号。
+
+**流程图（graph）**
+````
+```
+graph LR
+    A[开始] --> B{能渲染吗?}
+    B -- 能 --> C[显示为图形 ✅]
+    B -- 不能 --> D[显示为代码]
+```
+````
+
+**时序图（sequence）**
+````
+```
+sequenceDiagram
+    participant 用户
+    participant 网站
+    用户->>网站: 请求文章
+    网站->>网站: 渲染 Markdown
+    网站-->>用户: 返回正文
+```
+````
+
+**思维导图（mindmap）**
+````
+```
+mindmap
+  root((知识库))
+    写作
+      笔记
+      发布
+    阅读
+      图谱
+      标签
+```
+````
+
+**甘特图（gantt）**
+````
+```
+gantt
+    title 项目排期
+    dateFormat YYYY-MM-DD
+    section 设计
+      原型    :a1, 2026-09-01, 3d
+    section 开发
+      前端    :a2, after a1, 5d
+      后端    :a3, after a2, 5d
+```
+````
+
+### 19.2 选择性发布（frontmatter）
+
+笔记顶部 `---` 内写 `published: false` 或 `draft: true`，该笔记即对访客隐藏（树/搜索/图谱/直接访问/RSS/Sitemap 全移除），作者仍可在 Obsidian 编辑。
+
+````
+---
+title: 草稿
+published: false
+---
+
+# 访客看不到这段
+````
+
+实例演示见 [[MarkDown]].
+
+---
 # 补充边界说明
 1. 本文全部为 **Obsidian原生内置语法**，不需要安装任何第三方插件；
-2. 第三方插件扩展语法（Dataview 查询、Mermaid流程图、Excalidraw绘图）不在本文范围，如需我可以额外补充；
+2. 第三方插件扩展语法（Dataview 查询、Excalidraw绘图）不在本文范围；其中 **Mermaid 流程图 BrainPress 已原生支持**——如需，可参考 [[MarkDown]] 的完整实例；
 3. 标准Markdown兼容：导出PDF、复制到大部分博客平台时，基础语法通用，**Obsidian特有语法（双链、块引用、callout、==高亮==）在外部平台会失效**。
 
 如果你需要，我可以再输出一份【极简速查表】适合放在Obsidian笔记顶部随时查阅。

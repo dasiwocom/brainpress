@@ -69,7 +69,7 @@ function handle_api(string $uri, string $method, array $config): never
         $seen = []; // 同名去重（本地优先）
 
         if ($renderWebdav) {
-            $localTree = scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? []);
+            $localTree = scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true);
             $tree = array_merge($tree, $localTree);
             // 记录本地目录名 + 文件名（同名去重用）
             foreach ($localTree as $dir) {
@@ -178,10 +178,11 @@ function handle_api(string $uri, string $method, array $config): never
         if ($isLocal) {
             if (!$renderWebdav) fail('文件不存在');
             $full = $localFull;
-            if (!is_file($full) || (!is_md($full) && !is_canvas($full))) fail('文件不存在');
+            if (!is_file($full) || (!is_md($full) && !is_canvas($full) && !is_html($full))) fail('文件不存在');
             $content = @file_get_contents($full);
             if ($content === false) fail('文件不可读');
             if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
+            if (is_md($full) && is_unpublished($content)) fail('文件不存在');  // 选择性发布：未公开不提供
             ok([
                 'path' => $rel,
                 'content' => $content,
@@ -192,7 +193,7 @@ function handle_api(string $uri, string $method, array $config): never
             if (!$renderMinio) fail('文件不存在');
             // 去掉可能的 posts/ 前缀（桶根就是文章根）
             $rel = preg_replace('#^posts/#', '', $rel);
-            if (!is_md($rel)) fail('文件不存在');
+            if (!is_md($rel) && !is_html($rel)) fail('文件不存在');
             $content = minio_cat($rel);
             if ($content === null) fail('文件不存在');
             if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -226,6 +227,7 @@ function handle_api(string $uri, string $method, array $config): never
                 if ($abs === null) continue;
                 $content = (string)@file_get_contents($abs);
             }
+            if (is_unpublished($content)) continue;  // 选择性发布：未公开不参与搜索
             $pos = mb_stripos($content, $q);
             $nameHit = mb_stripos($f['name'], $q) !== false;
             if (!$nameHit && $pos === false) continue;
@@ -246,6 +248,15 @@ function handle_api(string $uri, string $method, array $config): never
         foreach ($gFiles as $f) {
             if (is_excluded($f['path'], $gExcludes)) continue;
             if ($gDir !== '' && strpos($f['path'], $gDir . '/') !== 0) continue;
+            // 选择性发布：未公开文章不进图谱
+            if (ima_index_lookup($config, $f['path']) !== null) {
+                $gRaw = ima_read_raw($config, $f['path']);
+                if (is_unpublished($gRaw ? $gRaw['bytes'] : '')) continue;
+            } else {
+                $gAbsV = resolve_vault_file($f['path'], $config);
+                if ($gAbsV === null) continue;
+                if (is_unpublished((string)@file_get_contents($gAbsV))) continue;
+            }
             $idMap[$f['path']] = $gid;
             $nodes[] = ['id' => $gid, 'name' => $f['name'], 'path' => $f['path'], 'dir' => dirname($f['path'])];
             $gid++;
@@ -417,14 +428,17 @@ function handle_api(string $uri, string $method, array $config): never
         ok(['answer' => $data['choices'][0]['message']['content'], 'sources' => $sources]);
     }
 
-    // 文章清单（轻量）：全部文章路径+名称（隐藏列表不收录）
+    // 文章清单（轻量）：全部文章路径+名称（隐藏/未发布不收录）
     if ($uri === '/api/article-list' && $method === 'GET') {
         $excludes = $config['exclude_paths'] ?? [];
         $files = collect_all_md_files($config);
         $articles = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
-            $articles[] = ['path' => $f['path'], 'name' => $f['name']];
+            $abs = resolve_vault_file($f['path'], $config);
+            if ($abs === null) continue;
+            if (is_unpublished((string)@file_get_contents($abs))) continue;
+            $articles[] = ['path' => $f['path'], 'name' => $f['name'], 'mtime' => (int)$f['mtime']];
         }
         ok(['count' => count($articles), 'articles' => $articles]);
     }
@@ -439,9 +453,94 @@ function handle_api(string $uri, string $method, array $config): never
         echo "> Markdown notes published at " . $siteBase . " — plain Markdown, server-rendered pages.\n\n";
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            $abs = resolve_vault_file($f['path'], $config);
+            if ($abs === null) continue;
+            if (is_unpublished((string)@file_get_contents($abs))) continue;
             $url = $siteBase . '/' . str_replace('%2F', '/', rawurlencode($f['path']));
             echo '- [' . $f['name'] . '](' . $url . ")\n";
         }
+        exit;
+    }
+
+    // RSS 订阅源（/api/rss.xml）：按最后修改时间倒序输出文章（隐藏/未发布不收录）
+    if (($uri === '/api/rss.xml' || $uri === '/rss.xml') && $method === 'GET') {
+        $excludes = $config['exclude_paths'] ?? [];
+        $files = collect_all_md_files($config);
+        $items = [];
+        // 取首页标题作站点描述（可选：读 frontmatter description）
+        $siteBase = 'http' . (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 's' : '') . '://' . ($_SERVER['HTTP_HOST'] || (string)($_SERVER['SERVER_NAME'] ?? 'localhost'));
+        foreach ($files as $f) {
+            if (is_excluded($f['path'], $excludes)) continue;
+            // 选择性发布：frontmatter published:false / draft:true 跳过
+            $abs = resolve_vault_file($f['path'], $config);
+            if ($abs === null) continue;
+            $raw = (string)@file_get_contents($abs);
+            if (is_unpublished($raw)) continue;
+            $desc = extract_frontmatter_summary($raw);
+            $item = [
+                'path' => $f['path'],
+                'name' => $f['name'],
+                'mtime' => $f['mtime'] ?? (int)filemtime($abs),
+                'desc' => $desc,
+            ];
+            $items[] = $item;
+        }
+        // 按时间倒序
+        usort($items, function ($a, $b) { return $b['mtime'] - $a['mtime']; });
+        $count = min(count($items), 30);
+        header('Content-Type: application/rss+xml; charset=utf-8');
+        header('Cache-Control: no-cache');
+        $title = htmlspecialchars((string)($config['site_title'] ?? 'BrainPress'));
+        $feedUrl = $siteBase . '/rss.xml';
+        $homeUrl = $siteBase . '/';
+        echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
+        echo '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">' . "\n";
+        echo "<channel>\n";
+        echo "  <title>{$title}</title>\n";
+        echo "  <link>" . htmlspecialchars($homeUrl) . "</link>\n";
+        echo "  <description>" . htmlspecialchars($title . ' knowledge base feed') . "</description>\n";
+        echo "  <language>zh-CN</language>\n";
+        echo "  <atom:link href=\"" . htmlspecialchars($feedUrl) . "\" rel=\"self\" type=\"application/rss+xml\" />\n";
+        echo "  <generator>BrainPress</generator>\n";
+        echo "  <lastBuildDate>" . gmdate(DATE_RFC2822) . "</lastBuildDate>\n";
+        for ($i = 0; $i < $count; $i++) {
+            $it = $items[$i];
+            $url = $siteBase . '/' . str_replace('%2F', '/', rawurlencode($it['path']));
+            $guid = $siteBase . '/#' . $it['path'];
+            echo "  <item>\n";
+            echo "    <title>" . htmlspecialchars($it['name']) . "</title>\n";
+            echo "    <link>" . htmlspecialchars($url) . "</link>\n";
+            echo "    <guid isPermaLink=\"false\">" . htmlspecialchars($guid) . "</guid>\n";
+            if ($it['desc'] !== '') echo "    <description>" . htmlspecialchars($it['desc']) . "</description>\n";
+            echo "    <pubDate>" . gmdate(DATE_RFC2822, $it['mtime']) . "</pubDate>\n";
+            echo "  </item>\n";
+        }
+        echo "</channel>\n</rss>\n";
+        exit;
+    }
+
+    // Sitemap.xml（/api/sitemap.xml 或 /sitemap.xml）：所有文章 URL（隐藏/未发布不收录）
+    if (($uri === '/api/sitemap.xml' || $uri === '/sitemap.xml') && $method === 'GET') {
+        $excludes = $config['exclude_paths'] ?? [];
+        $files = collect_all_md_files($config);
+        $siteBase = 'http' . (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 's' : '') . '://' . ($_SERVER['HTTP_HOST'] || (string)($_SERVER['SERVER_NAME'] ?? 'localhost'));
+        $urls = [$siteBase . '/'];
+        foreach ($files as $f) {
+            if (is_excluded($f['path'], $excludes)) continue;
+            $abs = resolve_vault_file($f['path'], $config);
+            if ($abs === null) continue;
+            $raw = (string)@file_get_contents($abs);
+            if (is_unpublished($raw)) continue;
+            $urls[] = $siteBase . '/' . str_replace('%2F', '/', rawurlencode($f['path']));
+        }
+        header('Content-Type: application/xml; charset=utf-8');
+        header('Cache-Control: no-cache');
+        echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
+        echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' . "\n";
+        foreach ($urls as $u) {
+            echo "  <url><loc>" . htmlspecialchars($u) . "</loc></url>\n";
+        }
+        echo "</urlset>\n";
         exit;
     }
 
