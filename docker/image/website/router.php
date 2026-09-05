@@ -18,14 +18,17 @@ if ($uri === '/admin' || $uri === '/admin/' || strpos($uri, '/api/admin/') === 0
     return true;
 }
 
-/* Real static files served directly by the built-in server.
-   Mirrors nginx `location ^~ /vault/ {}` (prefix match beats regex): EVERYTHING
-   under /vault/ passes through as-is, so pdf.js can fetch raw /vault/*.pdf bytes.
-   Outside /vault/, .md/.json still go to index.php (rendering / blocking).
-   The pretty extension-less or /xxx.pdf URLs are not real files -> index.php. */
+/* /vault/ 缺失文件兜底（GET）：主 vault 没有的静态资源，从启用的自定义挂载目录流式输出。
+   Mirrors apache-site.conf; renders md/pdf/canvas/html through index.php (hidden + render-type gates). */
 $abs = $ROOT . rawurldecode($uri);
 if ($uri !== '/' && strpos($abs, $ROOT . '/') === 0 && is_file($abs)) {
-    if (strpos($uri, '/vault/') === 0 || !preg_match('~\.(md|json)$~i', $uri)) {
+    if (strpos($uri, '/vault/') === 0) {
+        /* 渲染文档类型（md/pdf/canvas/html）→ index.php：隐藏列表 + 渲染类型门禁；
+           图片/音视频等保持静态直出（性能）。 */
+        if (!preg_match('~\.(md|pdf|canvas|html)$~i', $uri)) {
+            return false;
+        }
+    } elseif (!preg_match('~\.(md|json|pdf|canvas|html)$~i', $uri)) {
         return false;
     }
 }

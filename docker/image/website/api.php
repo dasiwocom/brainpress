@@ -41,9 +41,13 @@ function handle_api(string $uri, string $method, array $config): never
             ok(['authed' => true]);
         }
         if (password_verify($password, $config['password_hash'] ?? '')) {
+            login_throttle_clear();
             session_regenerate_id(true);
             $_SESSION['authed'] = true;
             ok(['authed' => true]);
+        }
+        if (login_throttle_hit()) {
+            fail('Too many attempts, try again later', 429);
         }
         fail('Wrong password', 401);
     }
@@ -69,7 +73,7 @@ function handle_api(string $uri, string $method, array $config): never
         $seen = []; // 同名去重（本地优先）
 
         if ($renderWebdav) {
-            $localTree = scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true);
+            $localTree = scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true, $config['render_types'] ?? null);
             $tree = array_merge($tree, $localTree);
             // 记录本地目录名 + 文件名（同名去重用）
             foreach ($localTree as $dir) {
@@ -172,13 +176,47 @@ function handle_api(string $uri, string $method, array $config): never
             ]);
         }
 
+        // RSS Feed 文章：rss://<feedurl>/<guid> → 从订阅源抓取该文章，返回 description 作为 markdown（与 IMA 同走 /api/file 通用渲染流程）
+        if (strpos($rel, 'rss://') === 0) {
+            // 匹配启用的 feed（feed url 含 /，故用前缀匹配定位 feed）
+            $feedUrl = null;
+            $itemKey = null;
+            foreach ($config['rss_feeds'] ?? [] as $f) {
+                if (empty($f['on'])) continue;
+                $fu = trim((string)($f['url'] ?? ''));
+                if ($fu === '') continue;
+                $prefix = 'rss://' . $fu . '/';
+                if (strpos($rel, $prefix) === 0) {
+                    $feedUrl = $fu;
+                    $itemKey = substr($rel, strlen($prefix));
+                    break;
+                }
+            }
+            if ($feedUrl === null) fail('文件不存在');
+            $items = rss_fetch_feed($feedUrl);
+            $item = null;
+            foreach ($items as $a) {
+                if (($a['guid'] ?? '') === $itemKey || ($a['link'] ?? '') === $itemKey) { $item = $a; break; }
+            }
+            if ($item === null) fail('文件不存在');
+            $md = ($item['description'] ?? '') . "\n\n---\n\n[Read original](" . ($item['link'] ?? '') . ")";
+            ok([
+                'path' => $rel,
+                'content' => $md,
+                'mtime' => date('Y-m-d H:i:s'),
+                'size' => strlen($md),
+                'rss' => true,
+            ]);
+        }
+
         // 本地路径（vault/ 下）→ 读本地；否则 → 读桶
         $localFull = realpath(PANEL_DIR . '/vault/' . $rel);
         $isLocal = ($localFull !== false && strpos($localFull, realpath(PANEL_DIR . '/vault') . '/') === 0);
         if ($isLocal) {
             if (!$renderWebdav) fail('文件不存在');
             $full = $localFull;
-            if (!is_file($full) || (!is_md($full) && !is_canvas($full))) fail('文件不存在');
+            if (!is_file($full) || (!is_md($full) && !is_canvas($full) && !is_html($full))) fail('文件不存在');
+            if (!render_type_file_enabled($config, $full)) fail('文件不存在');  // 渲染类型关闭 → 视为不存在
             $content = @file_get_contents($full);
             if ($content === false) fail('文件不可读');
             if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -193,7 +231,7 @@ function handle_api(string $uri, string $method, array $config): never
             if (!$renderMinio) fail('文件不存在');
             // 去掉可能的 posts/ 前缀（桶根就是文章根）
             $rel = preg_replace('#^posts/#', '', $rel);
-            if (!is_md($rel)) fail('文件不存在');
+            if (!is_md($rel) && !is_html($rel)) fail('文件不存在');
             $content = minio_cat($rel);
             if ($content === null) fail('文件不存在');
             if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -217,6 +255,7 @@ function handle_api(string $uri, string $method, array $config): never
         $results = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不参与搜索
             // ima file: fetch body live via API; local file: read from disk
             if (ima_index_lookup($config, $f['path']) !== null) {
                 $raw = ima_read_raw($config, $f['path']);
@@ -248,6 +287,7 @@ function handle_api(string $uri, string $method, array $config): never
         foreach ($gFiles as $f) {
             if (is_excluded($f['path'], $gExcludes)) continue;
             if ($gDir !== '' && strpos($f['path'], $gDir . '/') !== 0) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不进图谱
             // 选择性发布：未公开文章不进图谱
             if (ima_index_lookup($config, $f['path']) !== null) {
                 $gRaw = ima_read_raw($config, $f['path']);
@@ -435,6 +475,7 @@ function handle_api(string $uri, string $method, array $config): never
         $articles = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
             if (is_unpublished((string)@file_get_contents($abs))) continue;
@@ -453,6 +494,7 @@ function handle_api(string $uri, string $method, array $config): never
         echo "> Markdown notes published at " . $siteBase . " — plain Markdown, server-rendered pages.\n\n";
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
             if (is_unpublished((string)@file_get_contents($abs))) continue;
@@ -471,6 +513,7 @@ function handle_api(string $uri, string $method, array $config): never
         $siteBase = 'http' . (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 's' : '') . '://' . ($_SERVER['HTTP_HOST'] || (string)($_SERVER['SERVER_NAME'] ?? 'localhost'));
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             // 选择性发布：frontmatter published:false / draft:true 跳过
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
@@ -527,6 +570,7 @@ function handle_api(string $uri, string $method, array $config): never
         $urls = [$siteBase . '/'];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
             $raw = (string)@file_get_contents($abs);
@@ -542,6 +586,37 @@ function handle_api(string $uri, string $method, array $config): never
         }
         echo "</urlset>\n";
         exit;
+    }
+
+    // RSS Feeds 列表：返回启用的外部订阅源配置（前端目录树用）
+    if ($uri === '/api/rss-feeds' && $method === 'GET') {
+        $feeds = rss_enabled_feeds($config);
+        ok(['feeds' => $feeds]);
+    }
+
+    // 单个 RSS Feed 文章列表：按需抓取并返回条目（前端点击展开时调用）
+    if ($uri === '/api/rss-feed' && $method === 'GET') {
+        $url = (string)($_GET['url'] ?? '');
+        if ($url === '') fail('Missing url', 400);
+        // 验证该 URL 在配置的启用列表中
+        $enabled = rss_enabled_feeds($config);
+        $found = false;
+        foreach ($enabled as $f) { if ($f['url'] === $url) { $found = true; break; } }
+        if (!$found) fail('Feed not configured or disabled', 403);
+        $timeout = (int)($config['rss_timeout'] ?? 10);
+        $items = rss_fetch_feed($url, $timeout);
+        // 返回前端渲染所需字段
+        $articles = [];
+        foreach ($items as $it) {
+            $articles[] = [
+                'title' => $it['title'],
+                'link' => $it['link'],
+                'pubDate' => $it['pubDate'],
+                'description' => $it['description'],
+                'guid' => $it['guid'],
+            ];
+        }
+        ok(['articles' => $articles, 'feed_url' => $url]);
     }
 
     // 知识库写 API（Agent 远程控制）：Bearer Token 认证（config.api_token，空=禁用）

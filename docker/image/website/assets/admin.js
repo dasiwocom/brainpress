@@ -2,6 +2,8 @@
  * 依赖：页面内联的 window.ADMIN_MENU_MD（侧滑菜单 md 内容）
  */
 function $(id) { return document.getElementById(id); }
+// CSRF token：后台配置 GET 派发，写接口提交时回传（admin.php 校验）
+var CSRF_TOKEN = '';
 // 三栏布局初始化
 var appEl = $('app');
 if (appEl) appEl.classList.add('show');
@@ -18,7 +20,7 @@ function fallbackCopy(text) {
     try { document.execCommand('copy'); } catch (e) {}
     document.body.removeChild(ta);
 }
-// Default Mount two-tab toggle: Vault Render / Custom Path
+// Local Mounts two-tab toggle: Vault Render / Custom Path
 var mountTab = 'vault';
 function setMountTab(tab) {
     mountTab = tab;
@@ -62,6 +64,14 @@ var CUSTOM_COUNT = 5;
 for (var ci = 1; ci <= CUSTOM_COUNT; ci++) {
     bindSwitch('switch-custom-' + ci);
 }
+var RSS_COUNT = 5;
+for (var ri = 1; ri <= RSS_COUNT; ri++) {
+    bindSwitch('switch-rss-' + ri);
+}
+bindSwitch('switch-rt-markdown');
+bindSwitch('switch-rt-pdf');
+bindSwitch('switch-rt-html');
+bindSwitch('switch-rt-canvas');
 bindSwitch('switch-light');
 bindSwitch('switch-drawer');
 bindSwitch('switch-ai-enabled');
@@ -86,6 +96,7 @@ function applyFontPreset(preset) {
 }
 fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function (d) {
     if (!d.ok) return;
+    CSRF_TOKEN = d.csrf || '';
     try { $('dav-url').textContent = d.webdav_url; } catch (e) { console.log('restore dav:', e); }
     try { davAccounts = (d.webdav_mounts || []).map(function (m) { return { user: m.user || '', pass: m.pass || '', path: m.path || '' }; }); renderDavRows(); } catch (e) { console.log('restore webdav_mounts:', e); }
     try { $('minio-endpoint').value = d.minio.endpoint; } catch (e) { console.log('restore minio:', e); }
@@ -105,12 +116,27 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (d.render_webdav === true) $('switch-webdav').classList.add('on'); } catch (e) {}
     try { if (d.render_minio !== false) $('switch-minio').classList.add('on'); } catch (e) {}
     try { if (d.render_ima === true) $('switch-ima').classList.add('on'); } catch (e) {}
+    try {
+        var rfs = d.rss_feeds || [];
+        for (var i = 1; i <= RSS_COUNT; i++) {
+            var s = rfs[i - 1] || { url: '', title: '', on: false };
+            $('rss-feed-' + i + '-url').value = s.url || '';
+            $('rss-feed-' + i + '-title').value = s.title || '';
+            if (s.on) $('switch-rss-' + i).classList.add('on');
+        }
+    } catch (e) { console.log('restore rss:', e); }
     try { if (d.default_light) $('switch-light').classList.add('on'); } catch (e) {}
     try { if (d.front_drawer_expanded !== false) $('switch-drawer').classList.add('on'); } catch (e) {}
     try { if (d.ai_mode !== 'strict') $('switch-ai-mode').classList.add('on'); } catch (e) {}
     try { if (d.ai_enabled !== false) $('switch-ai-enabled').classList.add('on'); } catch (e) {}
     try { if (d.graph_show_labels) $('switch-graph-labels').classList.add('on'); } catch (e) {}
     try { if (d.pin_navbar) $('switch-pin-nav').classList.add('on'); } catch (e) {}
+    // 渲染文件类型开关（默认全开）
+    var rt = d.render_types || { markdown: true, pdf: true, html: true, canvas: true };
+    try { if (rt.markdown !== false) $('switch-rt-markdown').classList.add('on'); } catch (e) {}
+    try { if (rt.pdf !== false) $('switch-rt-pdf').classList.add('on'); } catch (e) {}
+    try { if (rt.html !== false) $('switch-rt-html').classList.add('on'); } catch (e) {}
+    try { if (rt.canvas !== false) $('switch-rt-canvas').classList.add('on'); } catch (e) {}
     try { $('graph-path').value = d.graph_path || ''; } catch (e) {}
     try { $('site-title').value = d.site_title || 'BrainPress'; } catch (e) {}
     try { $('home-article').value = d.home_article || ''; } catch (e) {}
@@ -315,12 +341,14 @@ function curMsg() {
     if (document.getElementById('view-mounts').style.display !== 'none') {
         return mountTab === 'minio' ? $('msg-minio') : mountTab === 'custom' ? $('msg-custom') : $('msg-vault');
     }
+    if (document.getElementById('view-rss').style.display !== 'none') return $('msg-rss');
     if (document.getElementById('view-prefs').style.display !== 'none') return $('msg-prefs');
     if (document.getElementById('view-site').style.display !== 'none') return $('msg-site');
     if (document.getElementById('view-ai').style.display !== 'none') {
         return aiTab === 'agent' ? $('msg-agent') : $('msg-ai');
     }
     if (document.getElementById('view-graph').style.display !== 'none') return $('msg-graph');
+    if (document.getElementById('view-types').style.display !== 'none') return $('msg-types');
     if (document.getElementById('view-pinned').style.display !== 'none') return $('msg-pinned');
     if (document.getElementById('view-expanded').style.display !== 'none') return $('msg-expanded');
     if (document.getElementById('view-hidden').style.display !== 'none') return $('msg-hidden');
@@ -335,6 +363,18 @@ function customState() {
         arr.push({
             path: $('custom-path-' + i).value.trim(),
             on: $('switch-custom-' + i).classList.contains('on')
+        });
+    }
+    return arr;
+}
+// 收集 5 条 RSS feed 状态
+function rssState() {
+    var arr = [];
+    for (var i = 1; i <= RSS_COUNT; i++) {
+        arr.push({
+            url: $('rss-feed-' + i + '-url').value.trim(),
+            title: $('rss-feed-' + i + '-title').value.trim(),
+            on: $('switch-rss-' + i).classList.contains('on')
         });
     }
     return arr;
@@ -404,6 +444,7 @@ function saveConfig() {
         ima_client_id: $('ima-client-id').value.trim(),
         ima_api_key: $('ima-api-key').value.trim(),
         custom_paths: customState(),
+        rss_feeds: rssState(),
         exclude_paths: excludeItems.slice(),
         pinned_dirs: pinnedDirs.slice(),
         pinned_articles: pinnedArticles.slice(),
@@ -413,6 +454,12 @@ function saveConfig() {
         ai_mode: $('switch-ai-mode').classList.contains('on'),
         ai_enabled: $('switch-ai-enabled').classList.contains('on'),
         graph_show_labels: $('switch-graph-labels').classList.contains('on'),
+        render_types: {
+            markdown: $('switch-rt-markdown').classList.contains('on'),
+            pdf: $('switch-rt-pdf').classList.contains('on'),
+            html: $('switch-rt-html').classList.contains('on'),
+            canvas: $('switch-rt-canvas').classList.contains('on')
+        },
         pin_navbar: $('switch-pin-nav').classList.contains('on'),
         graph_path: $('graph-path').value.trim(),
         site_title: $('site-title').value.trim(),
@@ -429,7 +476,7 @@ function saveConfig() {
     };
     fetch('/api/admin/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
         body: JSON.stringify(payload)
     }).then(function (r) { return r.json(); }).then(function (d) {
         var msg = curMsg();
@@ -456,7 +503,7 @@ $('site-password').addEventListener('blur', function () {
     if (newP.length < 4) { msg.className = 'msg err'; msg.textContent = 'Password must be at least 4 characters'; return; }
     fetch('/api/admin/password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
         body: JSON.stringify({ old_password: oldP, new_password: newP })
     }).then(function (r) { return r.json(); }).then(function (d) {
         if (d.ok) {
@@ -476,6 +523,10 @@ $('site-password').addEventListener('blur', function () {
 // pinned-dir 已改为列表式（输入框 + Add），无失焦保存逻辑
 var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'ima-client-id', 'ima-api-key', 'site-title', 'home-article', 'content-width', 'footer-html', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
 for (var bi = 1; bi <= CUSTOM_COUNT; bi++) blurIds.push('custom-path-' + bi);
+for (var bi = 1; bi <= RSS_COUNT; bi++) {
+    blurIds.push('rss-feed-' + bi + '-url');
+    blurIds.push('rss-feed-' + bi + '-title');
+}
 blurIds.forEach(function (id) {
     $(id).addEventListener('blur', saveConfig);
 });
@@ -540,7 +591,7 @@ function fillAgentView() {
 $('btn-agent-copy-url').addEventListener('click', function () { fallbackCopy($('agent-base-url').textContent); });
 // 视图切换：挂载设置 / 偏好设置 / 站点设置 / AI（Chat+Agent 双档） / 图谱设置 / 目录管理
 function showView(name) {
-    var views = ['dav', 'mounts', 'minio', 'prefs', 'site', 'ai', 'graph', 'pinned', 'expanded', 'hidden', 'ima'];
+    var views = ['dav', 'mounts', 'rss', 'minio', 'prefs', 'site', 'ai', 'graph', 'pinned', 'expanded', 'hidden', 'ima', 'types'];
     for (var i = 0; i < views.length; i++) {
         $('view-' + views[i]).style.display = views[i] === name ? '' : 'none';
     }

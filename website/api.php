@@ -41,9 +41,13 @@ function handle_api(string $uri, string $method, array $config): never
             ok(['authed' => true]);
         }
         if (password_verify($password, $config['password_hash'] ?? '')) {
+            login_throttle_clear();
             session_regenerate_id(true);
             $_SESSION['authed'] = true;
             ok(['authed' => true]);
+        }
+        if (login_throttle_hit()) {
+            fail('Too many attempts, try again later', 429);
         }
         fail('Wrong password', 401);
     }

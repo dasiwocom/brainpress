@@ -8,6 +8,8 @@
 declare(strict_types=1);
 
 session_name('brainpress');
+// 会话 Cookie 加固：HttpOnly + SameSite=Lax（跨站 POST 不带 Cookie，阻断 CSRF 主向量）
+session_set_cookie_params(['path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
 session_start();
 
 // ima mount driver (Tencent ima knowledge base OpenAPI)
@@ -175,6 +177,42 @@ function require_auth(): void {
     }
 }
 
+/* ---------- CSRF 防护（后台配置态变更接口使用） ---------- */
+
+function csrf_token(): string {
+    if (empty($_SESSION['csrf'])) {
+        $_SESSION['csrf'] = bin2hex(random_bytes(16));
+    }
+    return $_SESSION['csrf'];
+}
+
+function verify_csrf(string $token): bool {
+    return $token !== '' && hash_equals(csrf_token(), $token);
+}
+
+/* ---------- 登录限流（临时文件按 IP 计数，跨 FPM worker 生效） ---------- */
+
+function login_throttle_hit(): bool {
+    $max    = 5;    // 每窗口最大失败次数
+    $window = 900;  // 15 分钟
+    $key = 'bp_throttle_' . sha1($_SERVER['REMOTE_ADDR'] ?? 'cli');
+    $f   = sys_get_temp_dir() . '/' . $key;
+    $now = time();
+    $data = ['count' => 0, 'first' => $now];
+    if (is_file($f)) {
+        $cached = json_decode((string)@file_get_contents($f), true);
+        if (is_array($cached)) $data = $cached + $data;
+    }
+    if ($now - $data['first'] > $window) $data = ['count' => 0, 'first' => $now];
+    $data['count']++;
+    @file_put_contents($f, json_encode($data), LOCK_EX);
+    return $data['count'] > $max;
+}
+
+function login_throttle_clear(): void {
+    @unlink(sys_get_temp_dir() . '/bp_throttle_' . sha1($_SERVER['REMOTE_ADDR'] ?? 'cli'));
+}
+
 /* ---------- 文件工具 ---------- */
 
 function is_md(string $path): bool {
@@ -189,6 +227,25 @@ function is_pdf(string $path): bool {
 /** 是否为 Obsidian Canvas 白板文件（画布渲染显示用） */
 function is_canvas(string $path): bool {
     return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'canvas';
+}
+
+/** 是否为 HTML 文件（在线工具/自定义页面用） */
+function is_html(string $path): bool {
+    return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'html';
+}
+
+/** 渲染文件类型开关：某类型关闭则该类型文件视为不存在（文档树隐藏 + 直接访问 404 一致）。
+ *  white-list：'markdown' | 'pdf' | 'html' | 'canvas'。缺省全开。 */
+function render_type_enabled(array $config, string $type): bool {
+    $rt = (array)($config['render_types'] ?? []);
+    return !array_key_exists($type, $rt) ? true : !empty($rt[$type]);
+}
+function render_type_file_enabled(array $config, string $full): bool {
+    if (is_md($full)) return render_type_enabled($config, 'markdown');
+    if (is_pdf($full)) return render_type_enabled($config, 'pdf');
+    if (is_html($full)) return render_type_enabled($config, 'html');
+    if (is_canvas($full)) return render_type_enabled($config, 'canvas');
+    return true;
 }
 
 /** 是否为图片文件（嵌入显示用） */
@@ -277,10 +334,18 @@ function scandir_tree_cached(string $dir): array {
 
 /** 递归扫描工作区，返回文件树；$excludes 命中的目录/文件不出现在树中；$pinnedDirs 置顶目录、$pinnedArticles 置顶文章（排最前）；
  *  $forMount=true 用于自定义挂载：不收录图片（挂载目录没有静态服务路由，图片是死链，只会造成脏乱显示） */
-function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false, bool $publishedOnly = false): array {
+function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false, bool $publishedOnly = false, array $renderTypes = null): array {
     if (!is_dir($dir)) {
         return []; // vault 目录缺失时优雅兜底（空树），不报错
     }
+    // 渲染文件类型白名单：关闭某类型则该类型文件不进入文档树/菜单/搜索（默认全开）
+    if ($renderTypes === null) {
+        $renderTypes = ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true];
+    }
+    $rtMarkdown = !empty($renderTypes['markdown']);
+    $rtPdf      = !empty($renderTypes['pdf']);
+    $rtHtml     = !empty($renderTypes['html']);
+    $rtCanvas   = !empty($renderTypes['canvas']);
     $items = [];
     $entries = scandir_tree_cached($dir);
     foreach ($entries as $entry) {
@@ -299,7 +364,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
             continue; // 命中隐藏列表：目录整棵跳过 / 文件不收录
         }
         if (is_dir($full)) {
-            $children = scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles, $forMount, $publishedOnly);
+            $children = scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles, $forMount, $publishedOnly, $renderTypes);
             // 挂载模式：过滤后变空的目录（如纯图片的 Attachments）直接不显示
             if ($forMount && !$children) continue;
             $items[] = [
@@ -309,6 +374,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'children' => $children,
             ];
         } elseif (is_md($full)) {
+            if (!$rtMarkdown) continue; // markdown 渲染关闭
             if ($publishedOnly && is_unpublished((string)@file_get_contents($full))) continue; // 选择性发布过滤
             $items[] = [
                 'name' => $entry,
@@ -324,7 +390,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'type' => 'file',
             ];
         } elseif (is_pdf($full)) {
-            if ($forMount) continue;  // 同上：挂载 PDF 无静态路由，阅读器加载不到
+            if (!$rtPdf || $forMount) continue;  // PDF 渲染关闭 / 挂载 PDF 无静态路由，阅读器加载不到
             // PDF 文件收录（阅读器显示用）
             $items[] = [
                 'name' => $entry,
@@ -332,7 +398,16 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'type' => 'file',
             ];
         } elseif (is_canvas($full)) {
+            if (!$rtCanvas) continue;  // Canvas 白板渲染关闭
             // Obsidian Canvas 白板收录（画布渲染显示用）
+            $items[] = [
+                'name' => $entry,
+                'path' => $rel,
+                'type' => 'file',
+            ];
+        } elseif (is_html($full)) {
+            if (!$rtHtml) continue;  // HTML 渲染关闭
+            // HTML 在线工具/自定义页面收录（直接渲染原始 HTML，保留脚本/样式）
             $items[] = [
                 'name' => $entry,
                 'path' => $rel,
@@ -382,7 +457,7 @@ function tree_to_md(array $items, string $prefix = ''): string {
         } else {
             // 媒体/图片是嵌入资源非文档：不进侧滑菜单（树保持干净），仅存在于树数据供 resolveAsset 解析
             if (is_media($item['name']) || is_image($item['name'])) continue;
-            $name = preg_replace('/\.(md|pdf|canvas)$/i', '', $item['name']);
+            $name = preg_replace('/\.(md|pdf|canvas|html)$/i', '', $item['name']);
             // 最小编码：保留斜杠，只编码空格/括号等 md 链接破坏字符
             $href = str_replace('%2F', '/', rawurlencode($item['path']));
             $lines[] = $prefix . '- [' . $name . '](/' . $href . ')';
@@ -718,4 +793,161 @@ function extract_frontmatter_summary(string $raw): string {
     $body = preg_replace('/[#>*_`~|=\-]/u', ' ', $body);
     $body = preg_replace('/\s+/u', ' ', $body);
     return mb_substr(trim($body), 0, 200);
+}
+
+/* ---------- RSS Feeds（外部源订阅） ---------- */
+
+/** RSS 缓存目录 */
+function rss_cache_dir(): string {
+    static $d = null;
+    if ($d === null) {
+        $d = BP_CACHE_DIR . '/rss';
+        if (!is_dir($d)) @mkdir($d, 0775, true);
+    }
+    return $d;
+}
+
+/** 生成 feed 的缓存文件名（url 的 md5） */
+function rss_cache_file(string $url): string {
+    return rss_cache_dir() . '/' . md5($url) . '.json';
+}
+
+/** 抓取并解析单个 RSS/Atom feed，返回标准化条目数组
+ *  结构：[ ['title','link','pubDate','description','guid'], ... ]
+ *  失败返回 []，不抛异常
+ */
+function rss_fetch_feed(string $url, int $timeout = 10): array {
+    $cacheFile = rss_cache_file($url);
+    $ttl = 3600; // 默认 1 小时，后续可从 config 读取
+    // 缓存命中且未过期
+    if (is_file($cacheFile) && (time() - filemtime($cacheFile) < $ttl)) {
+        $cached = @json_decode(@file_get_contents($cacheFile), true);
+        if (is_array($cached)) return $cached;
+    }
+    // 抓取
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 5,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_USERAGENT => 'BrainPress RSS Reader/1.0',
+        CURLOPT_SSL_VERIFYPEER => false, // 兼容自签名/内网源
+        CURLOPT_SSL_VERIFYHOST => false,
+    ]);
+    $xml = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($xml === false || $httpCode !== 200) return [];
+    // 解析 XML（支持 RSS 2.0 和 Atom 1.0）
+    $items = [];
+    libxml_use_internal_errors(true);
+    $doc = simplexml_load_string($xml);
+    libxml_clear_errors();
+    if ($doc === false) return [];
+    // RSS 2.0: /rss/channel/item
+    if (isset($doc->channel->item)) {
+        foreach ($doc->channel->item as $item) {
+            $title = (string)($item->title ?? '');
+            $link = (string)($item->link ?? '');
+            $pubDate = isset($item->pubDate) ? strtotime((string)$item->pubDate) : time();
+            $desc = (string)($item->description ?? '');
+            $guid = (string)($item->guid ?? $link);
+            if ($title !== '' && $link !== '') {
+                $items[] = ['title' => $title, 'link' => $link, 'pubDate' => $pubDate, 'description' => $desc, 'guid' => $guid];
+            }
+        }
+    }
+    // Atom 1.0: /feed/entry
+    elseif (isset($doc->entry)) {
+        $ns = $doc->getNamespaces(true);
+        foreach ($doc->entry as $entry) {
+            $title = (string)($entry->title ?? '');
+            $link = '';
+            if (isset($entry->link)) {
+                foreach ($entry->link as $l) {
+                    $attrs = $l->attributes();
+                    if ((string)($attrs['rel'] ?? '') === 'alternate' || (string)($attrs['rel'] ?? '') === '') {
+                        $link = (string)($attrs['href'] ?? '');
+                        break;
+                    }
+                }
+            }
+            $pubDate = isset($entry->updated) ? strtotime((string)$entry->updated) : (isset($entry->published) ? strtotime((string)$entry->published) : time());
+            $desc = (string)($entry->summary ?? $entry->content ?? '');
+            $guid = (string)($entry->id ?? $link);
+            if ($title !== '' && $link !== '') {
+                $items[] = ['title' => $title, 'link' => $link, 'pubDate' => $pubDate, 'description' => $desc, 'guid' => $guid];
+            }
+        }
+    }
+    // 按时间倒序
+    usort($items, fn($a, $b) => $b['pubDate'] - $a['pubDate']);
+    // 写缓存（原子写）
+    $tmp = $cacheFile . '.tmp-' . getmypid();
+    @file_put_contents($tmp, json_encode($items, JSON_UNESCAPED_UNICODE));
+    @rename($tmp, $cacheFile);
+    return $items;
+}
+
+/** 获取所有启用的 RSS feeds 的配置列表（供前端目录树用） */
+function rss_enabled_feeds(array $config): array {
+    $out = [];
+    foreach (($config['rss_feeds'] ?? []) as $f) {
+        if (empty($f['on'])) continue;
+        $url = trim((string)($f['url'] ?? ''));
+        if ($url === '') continue;
+        $title = trim((string)($f['title'] ?? ''));
+        if ($title === '') {
+            // 从 URL 推断标题
+            $title = parse_url($url, PHP_URL_HOST) ?: 'RSS Feed';
+        }
+        $out[] = ['url' => $url, 'title' => $title];
+    }
+    return $out;
+}
+
+/** 合并 RSS feeds 到文件树（作为顶层目录节点，children 为该源的各篇文章；与 IMA 相同的静态树结构） */
+function merge_rss_tree(array $tree, array $config): array {
+    if (empty($config['rss_feeds'])) return $tree;
+    $feeds = rss_enabled_feeds($config);
+    if (!$feeds) return $tree;
+    // 记录已有顶层名字（主 vault + custom mounts 优先）
+    $seen = [];
+    foreach ($tree as $t) $seen[$t['name']] = true;
+    foreach ($feeds as $f) {
+        $name = $f['title'];
+        // 避免重名：若已存在则加后缀
+        $baseName = $name;
+        $suffix = 1;
+        while (isset($seen[$name])) {
+            $name = $baseName . ' ' . $suffix++;
+        }
+        $seen[$name] = true;
+        // 抓取该源文章（有 1h 缓存；失败则跳过该源目录）
+        $timeout = (int)($config['rss_timeout'] ?? 10);
+        $items = rss_fetch_feed($f['url'], $timeout);
+        $children = [];
+        foreach ($items as $it) {
+            $dateStr = isset($it['pubDate']) && $it['pubDate'] ? date('Y-m-d', (int)$it['pubDate']) : '';
+            $disp = $dateStr !== '' ? '[' . $dateStr . '] ' . $it['title'] : $it['title'];
+            $children[] = [
+                'name' => $disp,
+                'path' => 'rss://' . $f['url'] . '/' . ($it['guid'] ?? $it['link']),
+                'type' => 'file',
+                'rss_item' => true,
+            ];
+        }
+        if ($children === []) continue; // 抓取失败或空源：不显示
+        $tree[] = [
+            'name' => $name,
+            'path' => 'rss://' . $f['url'],
+            'type' => 'dir',
+            'children' => $children,
+            'rss_feed' => true,
+            'rss_url' => $f['url'],
+        ];
+    }
+    return $tree;
 }

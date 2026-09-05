@@ -16,12 +16,14 @@ if (strpos($uri, '/api/admin/') === 0) {
     // 管理配置：GET 返回当前配置，POST 保存
     if ($uri === '/api/admin/config' && $method === 'GET') {
         ok([
+            'csrf' => csrf_token(),
             'webdav_mounts' => webdav_mounts_list($config),
             'webdav_url' => 'https://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . '/dav/',
             'render_webdav' => $config['render_webdav'] ?? false,
             'render_minio' => $config['render_minio'] ?? true,
             'render_ima' => $config['render_ima'] ?? false,
             'custom_paths' => $config['custom_paths'] ?? [],
+            'rss_feeds' => $config['rss_feeds'] ?? [],
             'exclude_paths' => $config['exclude_paths'] ?? [],
             'pinned_dirs' => $config['pinned_dirs'] ?? [],
             'pinned_articles' => $config['pinned_articles'] ?? [],
@@ -39,6 +41,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'ai_enabled' => $config['ai_enabled'] ?? true,
             'graph_show_labels' => $config['graph_show_labels'] ?? false,
             'graph_path' => $config['graph_path'] ?? '',
+            'render_types' => $config['render_types'] ?? ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true],
             'article_footer' => $config['article_footer'] ?? true,
             'article_footer_html' => $config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026',
             'default_light' => $config['default_light'] ?? false,
@@ -56,6 +59,9 @@ if (strpos($uri, '/api/admin/') === 0) {
         ]);
     }
     if ($uri === '/api/admin/config' && $method === 'POST') {
+        if (!verify_csrf((string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''))) {
+            fail('CSRF check failed', 403);
+        }
         $body = json_decode((string)file_get_contents('php://input'), true) ?: [];
         $endpoint = trim((string)($body['endpoint'] ?? ''));
         $access = trim((string)($body['access'] ?? ''));
@@ -115,6 +121,17 @@ if (strpos($uri, '/api/admin/') === 0) {
             ];
         }
         $config['custom_paths'] = $customPaths;
+        // RSS feeds（最多 5 条：每条 = url + title + 开关）
+        $rawFeeds = $body['rss_feeds'] ?? [];
+        $rssFeeds = [];
+        for ($i = 0; $i < 5; $i++) {
+            $rssFeeds[] = [
+                'url' => trim((string)($rawFeeds[$i]['url'] ?? '')),
+                'title' => trim((string)($rawFeeds[$i]['title'] ?? '')),
+                'on' => !empty($rawFeeds[$i]['on']),
+            ];
+        }
+        $config['rss_feeds'] = $rssFeeds;
         // Exclude list: strip empty entries before saving
         $config['exclude_paths'] = array_values(array_filter(array_map('trim', (array)($body['exclude_paths'] ?? []))));
         // Tree: pinned dirs + pinned articles + expanded dirs (all lists)
@@ -156,6 +173,13 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['ai_enabled'] = !empty($body['ai_enabled']);
         $config['graph_show_labels'] = !empty($body['graph_show_labels']);
         $config['graph_path'] = trim((string)($body['graph_path'] ?? ''), "/ \t");
+        $renderTypes = (array)($body['render_types'] ?? []);
+        $config['render_types'] = [
+            'markdown' => !isset($renderTypes['markdown']) ? true : !empty($renderTypes['markdown']),
+            'pdf'      => !isset($renderTypes['pdf'])      ? true : !empty($renderTypes['pdf']),
+            'html'     => !isset($renderTypes['html'])     ? true : !empty($renderTypes['html']),
+            'canvas'   => !isset($renderTypes['canvas'])   ? true : !empty($renderTypes['canvas']),
+        ];
         $config['default_light'] = !empty($body['default_light']);
         $config['front_drawer_expanded'] = !empty($body['front_drawer_expanded']);
         $config['article_footer'] = !empty($body['article_footer']);
@@ -175,6 +199,9 @@ if (strpos($uri, '/api/admin/') === 0) {
 
     // 修改密码：新密码失焦提交，需先验证旧密码（独立接口）
     if ($uri === '/api/admin/password' && $method === 'POST') {
+        if (!verify_csrf((string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''))) {
+            fail('CSRF check failed', 403);
+        }
         $body = json_decode((string)file_get_contents('php://input'), true) ?: [];
         $old = (string)($body['old_password'] ?? '');
         $new = (string)($body['new_password'] ?? '');
@@ -284,10 +311,13 @@ if ($uri === '/admin') {
     $siteTitle = (string)($config['site_title'] ?? 'BrainPress');
     // Side drawer menu: PHP-generated (top-level categories + child views), click switches view
     $adminMenuMd = "- [Sources](#)\n"
-        . "  - [Default Mount](#view=mounts)\n"
+        . "  - [Local Mounts](#view=mounts)\n"
+        . "  - [RSS Feeds](#view=rss)\n"
         . "  - [MinIO](#view=minio)\n"
-        . "  - [ima](#view=ima)\n"
-        . "- [Tree](#)\n"
+        . "  - [Tencent IMA](#view=ima)\n"
+        . "- [Explorer](#)\n"
+        . "  - [Render Types](#view=types)\n"
+        . "  - [Graph View](#view=graph)\n"
         . "  - [Pinned Items](#view=pinned)\n"
         . "  - [Expanded Dirs](#view=expanded)\n"
         . "  - [Hidden Paths](#view=hidden)\n"
@@ -295,8 +325,7 @@ if ($uri === '/admin') {
         . "  - [Site](#view=site)\n"
         . "  - [Preferences](#view=prefs)\n"
         . "  - [WebDAV](#view=dav)\n"
-        . "  - [AI](#view=ai)\n"
-        . "  - [Graph](#view=graph)\n";
+        . "  - [AI](#view=ai)\n";
     ?>
     <!DOCTYPE html>
     <html lang="zh-CN" class="<?php echo (($_COOKIE['vp-theme'] ?? '') === 'dark') ? 'dark' : ''; ?>">
@@ -326,7 +355,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
 <?php endif; ?>
     <script src="/assets/marked.min.js"></script>
     <script src="/assets/purify.min.js?v=20260812o"></script>
-    <link rel="stylesheet" href="/assets/admin.css?v=20260829c">
+    <link rel="stylesheet" href="/assets/admin.css?v=20260905g">
     <style>/* 阅读列宽（同前台）：覆盖 admin.css 的默认值 */
     :root { --vp-content-w:<?php echo max(480, min(1600, (int)($config['content_width'] ?? 840))); ?>px; }
     </style>
@@ -385,7 +414,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="msg" id="msg-dav"></div>
         </div>
 
-        <!-- View: Default Mount (render sources: Vault Render / Custom Path two-tab toggle) -->
+        <!-- View: Local Mounts (render sources: Vault Render / Custom Path two-tab toggle) -->
         <div id="view-mounts">
             <div class="toggle two" id="toggle-mounts">
                 <div class="toggle-thumb" id="toggle-mounts-thumb"></div>
@@ -406,7 +435,20 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                 <div class="field-row"><input type="text" id="custom-path-3" placeholder="Path 3"><button class="switch" id="switch-custom-3" aria-label="toggle custom 3 render"></button></div>
                 <div class="field-row"><input type="text" id="custom-path-4" placeholder="Path 4"><button class="switch" id="switch-custom-4" aria-label="toggle custom 4 render"></button></div>
                 <div class="field-row"><input type="text" id="custom-path-5" placeholder="Path 5"><button class="switch" id="switch-custom-5" aria-label="toggle custom 5 render"></button></div>
-                <div class="msg" id="msg-custom"></div>
+<div class="msg" id="msg-custom"></div>
+            </div>
+        </div>
+
+        <!-- View: RSS Feeds (standalone config page) -->
+        <div id="view-rss" style="display:none">
+            <div class="section">
+                <p class="desc">Configure up to 5 RSS feed sources. Each enabled feed appears as a top-level directory in the sidebar tree. Articles are fetched on demand and rendered as Markdown (description used as content).</p>
+                <div class="field-row"><input type="text" id="rss-feed-1-url" placeholder="Feed URL · https://example.com/feed.xml"><input type="text" id="rss-feed-1-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-1" aria-label="toggle rss feed 1"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-2-url" placeholder="Feed URL"><input type="text" id="rss-feed-2-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-2" aria-label="toggle rss feed 2"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-3-url" placeholder="Feed URL"><input type="text" id="rss-feed-3-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-3" aria-label="toggle rss feed 3"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-4-url" placeholder="Feed URL"><input type="text" id="rss-feed-4-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-4" aria-label="toggle rss feed 4"></button></div>
+                <div class="field-row"><input type="text" id="rss-feed-5-url" placeholder="Feed URL"><input type="text" id="rss-feed-5-title" placeholder="Display title (optional)"><button class="switch" id="switch-rss-5" aria-label="toggle rss feed 5"></button></div>
+                <div class="msg" id="msg-rss"></div>
             </div>
         </div>
 
@@ -468,6 +510,16 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="render-row"><span class="render-label">Show file names</span><button class="switch" id="switch-graph-labels" aria-label="toggle graph file name labels"></button></div>
             <div class="field-row"><span class="field-label">Graph path alias</span><input type="text" id="graph-path" placeholder="e.g. Visual-Knowledge/graph — tree entry + 302 to /graph; empty = bottom entry"></div>
             <div class="msg" id="msg-graph"></div>
+        </div>
+
+        <!-- 视图：Render Types（渲染文件类型开关） -->
+        <div id="view-types" style="display:none">
+            <p class="desc">Choose which file types are rendered on the frontend. A type turned off hides those files from the tree, menu, search and direct access. Markdown is the core note format; Excalidraw & drawings live inside <code>.md</code> and follow the Markdown switch.</p>
+            <div class="render-row"><span class="render-label">Markdown renders <small>(.md & .excalidraw.md)</small></span><button class="switch" id="switch-rt-markdown" aria-label="toggle markdown render"></button></div>
+            <div class="render-row"><span class="render-label">PDF renders <small>(.pdf)</small></span><button class="switch" id="switch-rt-pdf" aria-label="toggle pdf render"></button></div>
+            <div class="render-row"><span class="render-label">HTML renders <small>(.html)</small></span><button class="switch" id="switch-rt-html" aria-label="toggle html render"></button></div>
+            <div class="render-row"><span class="render-label">Canvas renders <small>(.canvas)</small></span><button class="switch" id="switch-rt-canvas" aria-label="toggle canvas render"></button></div>
+            <div class="msg" id="msg-types"></div>
         </div>
 
         <!-- 视图：Pinned Items（置顶目录 + 置顶文章） -->
@@ -547,7 +599,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     <script>
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260829d"></script>
+    <script src="/assets/admin.js?v=20260905h"></script>
     </body>
     </html>
     <?php

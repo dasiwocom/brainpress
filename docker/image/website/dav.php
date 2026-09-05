@@ -66,16 +66,16 @@ function handle_webdav(string $uri, string $method, array $config): never
     }
     // 防目录穿越：路径规范化（支持不存在的目标——PUT/MKCOL 要创建）
     $full = $davRoot . ($rel !== '' ? '/' . $rel : '');
-    // 规范化（解析 ..）
+    // 规范化（解析 ..）；边界比较带尾部 '/'，杜绝 /vault 命中 /vault-other 这类前缀伪命中
     $norm = realpath(dirname($full));
-    if ($rel !== '' && ($norm === false || strpos($norm, $realRoot) !== 0)) {
+    if ($rel !== '' && ($norm === false || ($norm !== $realRoot && strpos($norm, $realRoot . '/') !== 0))) {
         http_response_code(403);
         exit;
     }
     // 已存在的目标用 realpath（确保是真实路径）
     if (file_exists($full)) {
         $full = realpath($full);
-        if (strpos($full, $realRoot) !== 0) {
+        if ($full !== $realRoot && strpos($full, $realRoot . '/') !== 0) {
             http_response_code(403);
             exit;
         }
@@ -131,14 +131,23 @@ function handle_webdav(string $uri, string $method, array $config): never
                 http_response_code(400);
                 exit;
             }
+            // 写入大小上限（256MB）：防磁盘耗尽；Content-Length 预检 + 流拷贝后置校验
+            $maxBytes = 256 * 1024 * 1024;
+            $cl = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+            if ($cl > $maxBytes) {
+                http_response_code(413);
+                exit;
+            }
             $dir = dirname($full);
             if (!is_dir($dir)) @mkdir($dir, 0755, true);
             $in = fopen('php://input', 'rb');
             $out = fopen($full, 'wb');
             if ($in && $out) {
-                stream_copy_to_stream($in, $out);
+                $written = stream_copy_to_stream($in, $out, $maxBytes + 1);
+                $over = $written === false || $written > $maxBytes;
                 fclose($in);
                 fclose($out);
+                if ($over) { @unlink($full); http_response_code(413); exit; }
                 @chmod($full, 0644);
                 http_response_code(201);
             } else {

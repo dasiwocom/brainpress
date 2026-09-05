@@ -8,6 +8,8 @@
 declare(strict_types=1);
 
 session_name('brainpress');
+// 会话 Cookie 加固：HttpOnly + SameSite=Lax（跨站 POST 不带 Cookie，阻断 CSRF 主向量）
+session_set_cookie_params(['path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
 session_start();
 
 // ima mount driver (Tencent ima knowledge base OpenAPI)
@@ -173,6 +175,42 @@ function require_auth(): void {
     if (!is_authed()) {
         fail('未登录', 401);
     }
+}
+
+/* ---------- CSRF 防护（后台配置态变更接口使用） ---------- */
+
+function csrf_token(): string {
+    if (empty($_SESSION['csrf'])) {
+        $_SESSION['csrf'] = bin2hex(random_bytes(16));
+    }
+    return $_SESSION['csrf'];
+}
+
+function verify_csrf(string $token): bool {
+    return $token !== '' && hash_equals(csrf_token(), $token);
+}
+
+/* ---------- 登录限流（临时文件按 IP 计数，跨 FPM worker 生效） ---------- */
+
+function login_throttle_hit(): bool {
+    $max    = 5;    // 每窗口最大失败次数
+    $window = 900;  // 15 分钟
+    $key = 'bp_throttle_' . sha1($_SERVER['REMOTE_ADDR'] ?? 'cli');
+    $f   = sys_get_temp_dir() . '/' . $key;
+    $now = time();
+    $data = ['count' => 0, 'first' => $now];
+    if (is_file($f)) {
+        $cached = json_decode((string)@file_get_contents($f), true);
+        if (is_array($cached)) $data = $cached + $data;
+    }
+    if ($now - $data['first'] > $window) $data = ['count' => 0, 'first' => $now];
+    $data['count']++;
+    @file_put_contents($f, json_encode($data), LOCK_EX);
+    return $data['count'] > $max;
+}
+
+function login_throttle_clear(): void {
+    @unlink(sys_get_temp_dir() . '/bp_throttle_' . sha1($_SERVER['REMOTE_ADDR'] ?? 'cli'));
 }
 
 /* ---------- 文件工具 ---------- */

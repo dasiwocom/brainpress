@@ -290,11 +290,7 @@ var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
 })();
 </script>
 
-<link rel="stylesheet" href="/assets/vs.min.css">
-<link rel="stylesheet" href="/assets/vs2015.min.css">
-<script src="/assets/highlight.min.js"></script>
-<script src="/assets/nginx.min.js"></script>
-<script src="/assets/lz-string.min.js"></script>
+<script src="/assets/lz-string.min.js" defer></script>
     <link rel="stylesheet" href="/assets/site.css?v=20260905k">
 <style>/* 阅读列宽（后台可调）：覆盖 site.css 的默认值 */
 :root { --vp-content-w:<?php echo $contentW; ?>px; }
@@ -421,11 +417,9 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
 
 <div id="toast"></div>
 
-<script src="/assets/marked.min.js"></script>
-<script src="/assets/purify.min.js"></script>
-<script src="/assets/lunr.min.js"></script>
-<link rel="stylesheet" href="/assets/katex.min.css">
-<script src="/assets/katex.min.js"></script>
+<script src="/assets/marked.min.js" defer></script>
+<script src="/assets/purify.min.js" defer></script>
+<script src="/assets/lunr.min.js" defer></script>
 <script>
 // 前台侧滑菜单：PHP 扫描生成的文章目录树（md 嵌套列表，内联零请求）
 var FRONT_MENU_MD = <?php echo json_encode($frontMenuMd); ?>;
@@ -471,6 +465,7 @@ var SITE_TITLE = <?php echo json_encode($siteTitle); ?>;
 var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : 'false'; ?>;
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
-<script src="/assets/site.js?v=20260905m"></script>
+<script src="/assets/render.js?v=20260905p" defer></script>
+<script src="/assets/site.js?v=20260905q" defer></script>
 </body>
 </html>

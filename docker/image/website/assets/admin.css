@@ -24,7 +24,7 @@ body { overflow:hidden; }
 #main { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; position:relative; }
 #content {
     flex:1; overflow-y:auto; overflow-x:hidden; min-height:0; min-width:0;
-    padding:88px var(--gutter) 40px; position:relative;
+    padding:84px var(--gutter) 40px; position:relative;
 }
 /* 左轨道：桌面端常驻目录栏 */
 #left-sidebar {
@@ -67,7 +67,7 @@ body { overflow:hidden; }
         box-sizing:border-box;
         padding:56px 0 0;
     }
-    #content { padding:88px 0 40px; }
+    #content { padding:84px 0 40px; }
 }
 @media (min-width:769px) and (max-width:1399px) {
     #left-sidebar { flex:0 0 280px; max-width:280px; }
@@ -83,7 +83,9 @@ body { overflow:hidden; }
 }
 .doc-main { flex:1 1 0; min-width:0; max-width:none; }
 @media (max-width:768px) {
-    .doc-wrap { display:block; padding:88px 14px 48px; width:100%; max-width:none; }
+    /* 与前台移动端一致：间距由 #content 承担，.doc-wrap 不再自带 padding（避免叠成 168px） */
+    #content { padding:84px 18px 40px; }
+    .doc-wrap { display:block; width:100%; max-width:none; }
     .field-label { width:110px; }
     #left-sidebar, #right-sidebar { display:none !important; }
     :root { --gutter:14px; }
@@ -157,7 +159,7 @@ body.drawer-open.ai-open #vp-drawer .drawer-md { display:none; }
 .msg.err { color:#ef4444; }
 /* 滑动切换开关（VitePress 风格：长条 + 滑块，三档） */
 .toggle {
-    position:relative; display:flex; width:100%; max-width:960px;
+    position:relative; display:flex; width:100%;
     background:var(--vp-c-bg-soft); border:1px solid var(--line); border-radius:8px;
     padding:4px; margin-bottom:40px; user-select:none;
 }

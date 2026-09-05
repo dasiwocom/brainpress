@@ -16,6 +16,7 @@ if (strpos($uri, '/api/admin/') === 0) {
     // 管理配置：GET 返回当前配置，POST 保存
     if ($uri === '/api/admin/config' && $method === 'GET') {
         ok([
+            'csrf' => csrf_token(),
             'webdav_mounts' => webdav_mounts_list($config),
             'webdav_url' => 'https://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . '/dav/',
             'render_webdav' => $config['render_webdav'] ?? false,
@@ -58,6 +59,9 @@ if (strpos($uri, '/api/admin/') === 0) {
         ]);
     }
     if ($uri === '/api/admin/config' && $method === 'POST') {
+        if (!verify_csrf((string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''))) {
+            fail('CSRF check failed', 403);
+        }
         $body = json_decode((string)file_get_contents('php://input'), true) ?: [];
         $endpoint = trim((string)($body['endpoint'] ?? ''));
         $access = trim((string)($body['access'] ?? ''));
@@ -195,6 +199,9 @@ if (strpos($uri, '/api/admin/') === 0) {
 
     // 修改密码：新密码失焦提交，需先验证旧密码（独立接口）
     if ($uri === '/api/admin/password' && $method === 'POST') {
+        if (!verify_csrf((string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''))) {
+            fail('CSRF check failed', 403);
+        }
         $body = json_decode((string)file_get_contents('php://input'), true) ?: [];
         $old = (string)($body['old_password'] ?? '');
         $new = (string)($body['new_password'] ?? '');
