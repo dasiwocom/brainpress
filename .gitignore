@@ -1,19 +1,15 @@
 # Config with secrets
-website/config.json
+/config.json
 
-# ima 索引缓存（含内部 media id，非秘密但属运行时产物）
-website/ima_cache.json
-website/ima_cache.php
-docker/image/website/ima_cache.json
-docker/image/website/ima_cache.php
+# ima 索引缓存（非秘密但属运行时产物）
+/ima_cache.json
+/ima_cache.php
 
 # Logs
 *.log
-website/.server.log
 
 # Tree scan cache (runtime artifact)
-website/cache/
-docker/image/website/cache/
+/cache/
 
 # OS files
 .DS_Store
@@ -24,3 +20,6 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Obsidian 第三方插件二进制（不属于项目源码；核心配置 vault/.obsidian/*.json 照常提交）
+vault/.obsidian/plugins/

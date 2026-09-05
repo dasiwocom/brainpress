@@ -17,7 +17,7 @@
 ![No DB](https://img.shields.io/badge/no--database-✔-22c55e?style=flat-square)
 ![Docker ready](https://img.shields.io/badge/docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white)
 
-[**文档 · Docs**](https://github.com/yourorg/brainpress) · [**Docker 版 · Docker**](./docker/README.md) · [**API 参考 · API Reference**](#-public-api)
+[**文档 · Docs**](https://github.com/dasiwocom/brainpress) · [**快速开始 · Quick Start**](#quick-start) · [**Docker 版**](#docker-edition) · [**API 参考**](#public-api)
 
 </div>
 
@@ -56,17 +56,19 @@
 
 ## 🚀 快速开始 | Quick Start
 
+<a id="quick-start"></a>
+
 **环境要求**：PHP 8.0+（含 `curl`、`mbstring`）、Nginx 或 Apache。
 
-1. 上传 `website/` 到服务器，把笔记放进 `website/vault/`
+1. 把仓库代码上传到服务器，把笔记放进 `vault/`
 2. 配置 Nginx（要点见下）或 Apache，阻止 `config.json` 的 Web 访问
 3. 访问网站 → `/admin` 设置管理员密码
 4. （可选）在后台配置 WebDAV 账号（Obsidian 同步）与 LLM API Key（AI）
 
-本地没有 Nginx？在 `website/` 里直接 `./start.sh`（PHP 内置服务器 + 路由模拟）。
+本地没有 Nginx？在项目根目录直接跑内置服务器 + 路由模拟：
 
 ```bash
-cd website && ./start.sh   # http://127.0.0.1:8080
+./start.sh   # http://127.0.0.1:8080
 ```
 
 ### Nginx 配置要点
@@ -82,30 +84,110 @@ location ^~ /api/admin/ { ... }                               # 后台 API
 location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log) { return 404; }
 ```
 
-> 详细部署、Apache、安全加固见 **[部署文档 · Deployment](./website/vault/BrainPress/Deployment.md)**。
+> 详细部署、Apache、安全加固见 **[部署文档 · Deployment](./vault/BrainPress/Deployment.md)**。
 
 ---
 
 ## 🐳 Docker 版 | Docker Edition
 
-Docker 版是自包含的独立项目（自带代码副本、示例库与完整文档），部署/备份/发布到 Docker Hub 的步骤见 **[Docker README](./docker/README.md)**。
+<a id="docker-edition"></a>
+
+不想手动配 PHP/Nginx？直接用 Docker 跑，分钟级上线。镜像发布到阿里云 ACR，用户拉镜像即用，无需源码交互。
+
+### 🚀 一键部署 | One-liner
+
+```bash
+docker run -d --name brainpress \
+  --restart unless-stopped \
+  -p 8080:80 \
+  -v "$PWD/brainpress-data":/data \
+  crpi-k60hf4g69i7wfk22.cn-hongkong.personal.cr.aliyuncs.com/dasiwocom/brainpress:latest
+```
+
+1. 浏览器访问 `http://服务器IP:8080`
+2. 后台 `http://服务器IP:8080/admin` **首次设置密码**
+3. 配置自动生成在 `./brainpress-data/config.json`，改端口/删容器不丢
+
+**想笔记库也持久化到本机**（否则 vault 在容器内，删容器会丢）：
+
+```bash
+docker run -d --name brainpress \
+  --restart unless-stopped \
+  -p 8080:80 \
+  -v "$PWD/brainpress-data":/data \
+  -v "$PWD/brainpress-vault":/var/www/html/vault \
+  crpi-k60hf4g69i7wfk22.cn-hongkong.personal.cr.aliyuncs.com/dasiwocom/brainpress:latest
+```
+
+> **单一源码**：仓库根即唯一源码，网页版与 Docker 版共用同一份代码，无副本——`docker build` 直接以仓库根为上下文（`.dockerignore` 挡掉 config.json/cache/日志）。`vault/` 随镜像打包为**种子库**；用户编辑写入可写层/挂载卷，不污染镜像层。
+
+**参数说明**
+| 参数 | 含义 |
+|------|------|
+| `-p 8080:80` | 容器内跑 80，映射到宿主机 8080，可自换端口 |
+| `-v <目录>:/data` | 配置的持久化目录（`config.json` 在此，**要备份的就是它**） |
+| `-v <目录>:/var/www/html/vault` | 可选的笔记库持久化目录 |
+| `--restart unless-stopped` | 崩溃/重启自动拉起 |
+
+### 宝塔面板安装 | BaoTa Panel
+
+宝塔只是把「拉镜像 + 运行参数」图形化，最终效果与 `docker run` 命令**完全等价**。按面板表单填：
+
+```
+镜像：  crpi-k60hf4g69i7wfk22.cn-hongkong.personal.cr.aliyuncs.com/dasiwocom/brainpress:latest
+端口：  8080 → 80
+挂载：  /path/to/your-data  →  /data          （配置持久化）
+        /path/to/your-vault →  /var/www/html/vault   （可选，笔记库持久化）
+```
+
+数据落在宝塔规范路径 `/www/dk_project/dk_app/<app>/<id>/data/`（含 `config.json`）——**这就是要备份的目录**；容器删除/换机后拷走它即迁移。
+
+### 🏗️ Docker 文件 | Docker Files
+
+全部在仓库根，与网站源码同一份：
+
+```
+Dockerfile              #   php:8.3-apache 基础镜像；上下文 = 仓库根（唯一源码）
+apache-site.conf        #   生产 nginx 伪静态的同款 Apache 规则（含 /graph 等路由）
+php.ini                 #   上传 512M（WebDAV 大 PDF）
+config.template.json    #   默认配置（font_preset/pin_navbar 等）
+entrypoint.sh           #   首次启动：建数据目录 + 生成默认配置 + 放权
+build.sh                #   构建 + 打 tag + 推送阿里云 ACR 一键脚本
+```
+
+### 📦 发布新版本（维护者）| Publishing
+
+```bash
+./build.sh                # 构建 latest
+./build.sh 1.0.0          # 额外打版本 tag 1.0.0
+# 推送（需先 `docker login crpi-...`）：
+./build.sh 1.0.0 push
+```
+
+`docker push` 只把**新增的代码层**增量上传到 ACR，用户 `docker run` 时增量拉取。镜像层可复用，构建/拉取都很快。
 
 ---
 
-## 📋 项目结构 | Project Structure
+## 📁 项目结构 | Project Structure
 
 ```
 brainpress/
-├── website/        # 🌐 网站版（nginx/PHP 部署，开发/部署只跟这个目录打交道）
-├── docker/         # 🐳 Docker 版（独立项目，详见 docker/README.md）
-├── landing/        # 🏠 官网展示页（纯静态）
-├── electron/       # 🖥️ 桌面端
-└── README.md       # 本文件（总索引）
+├── index.php / admin.php / api.php / dav.php / ...   # 🌐 网站源码（PHP 在仓库根）
+├── assets/                                           # JS / CSS / 字体 / 第三方库
+├── vault/                                            # 📚 笔记库（Markdown 内容即站点内容）
+├── Dockerfile / build.sh                             # 🐳 Docker 构建（与网页版共用仓库根源码，无副本）
+├── apache-site.conf / php.ini / entrypoint.sh        #    容器运行配置
+├── config.template.json                              #    默认配置模板
+├── config.json                                       # 密钥配置（已 gitignore，绝不提交）
+├── cache/  ima_cache.json                            # 运行时产物（已 gitignore）
+└── README.md / LICENSE                               # 文档与许可
 ```
 
 ---
 
 ## 📡 公开 API | Public API
+
+<a id="public-api"></a>
 
 | Endpoint | 说明 |
 |----------|------|
@@ -118,7 +200,7 @@ brainpress/
 | `POST /api/ask` | AI 问答（需启用 AI） |
 | `POST/DELETE /api/note` | 创建/覆盖/删除笔记（需 Bearer Token） |
 
-详细参数见 **[API 参考 · API Reference](./website/vault/BrainPress/API-Reference.md)**。
+详细参数见 **[API 参考 · API Reference](./vault/BrainPress/API-Reference.md)**。
 
 ---
 
@@ -128,11 +210,11 @@ brainpress/
 
 | 文档 | 说明 |
 |------|------|
-| [**Introduction**](./website/vault/BrainPress/Introduction.zh.md) | 总览、架构、快速配置、API |
-| [**Getting Started**](./website/vault/BrainPress/GettingStarted.zh.md) | 上手教程 |
-| [**Configuration**](./website/vault/BrainPress/Configuration.zh.md) | 全部配置字段 |
-| [**Deployment**](./website/vault/BrainPress/Deployment.zh.md) | 部署与安全 |
-| [**API Reference**](./website/vault/BrainPress/API-Reference.zh.md) | 公开 API 详解 |
+| [**Introduction**](./vault/BrainPress/Introduction.zh.md) | 总览、架构、快速配置、API |
+| [**Getting Started**](./vault/BrainPress/GettingStarted.zh.md) | 上手教程 |
+| [**Configuration**](./vault/BrainPress/Configuration.zh.md) | 全部配置字段 |
+| [**Deployment**](./vault/BrainPress/Deployment.zh.md) | 部署与安全 |
+| [**API Reference**](./vault/BrainPress/API-Reference.zh.md) | 公开 API 详解 |
 
 ---
 
