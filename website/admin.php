@@ -40,6 +40,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'ai_enabled' => $config['ai_enabled'] ?? true,
             'graph_show_labels' => $config['graph_show_labels'] ?? false,
             'graph_path' => $config['graph_path'] ?? '',
+            'render_types' => $config['render_types'] ?? ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true],
             'article_footer' => $config['article_footer'] ?? true,
             'article_footer_html' => $config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026',
             'default_light' => $config['default_light'] ?? false,
@@ -168,6 +169,13 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['ai_enabled'] = !empty($body['ai_enabled']);
         $config['graph_show_labels'] = !empty($body['graph_show_labels']);
         $config['graph_path'] = trim((string)($body['graph_path'] ?? ''), "/ \t");
+        $renderTypes = (array)($body['render_types'] ?? []);
+        $config['render_types'] = [
+            'markdown' => !isset($renderTypes['markdown']) ? true : !empty($renderTypes['markdown']),
+            'pdf'      => !isset($renderTypes['pdf'])      ? true : !empty($renderTypes['pdf']),
+            'html'     => !isset($renderTypes['html'])     ? true : !empty($renderTypes['html']),
+            'canvas'   => !isset($renderTypes['canvas'])   ? true : !empty($renderTypes['canvas']),
+        ];
         $config['default_light'] = !empty($body['default_light']);
         $config['front_drawer_expanded'] = !empty($body['front_drawer_expanded']);
         $config['article_footer'] = !empty($body['article_footer']);
@@ -296,11 +304,13 @@ if ($uri === '/admin') {
     $siteTitle = (string)($config['site_title'] ?? 'BrainPress');
     // Side drawer menu: PHP-generated (top-level categories + child views), click switches view
     $adminMenuMd = "- [Sources](#)\n"
-        . "  - [Default Mount](#view=mounts)\n"
+        . "  - [Local Mounts](#view=mounts)\n"
         . "  - [RSS Feeds](#view=rss)\n"
         . "  - [MinIO](#view=minio)\n"
-        . "  - [ima](#view=ima)\n"
-        . "- [Tree](#)\n"
+        . "  - [Tencent IMA](#view=ima)\n"
+        . "- [Explorer](#)\n"
+        . "  - [Render Types](#view=types)\n"
+        . "  - [Graph View](#view=graph)\n"
         . "  - [Pinned Items](#view=pinned)\n"
         . "  - [Expanded Dirs](#view=expanded)\n"
         . "  - [Hidden Paths](#view=hidden)\n"
@@ -308,8 +318,7 @@ if ($uri === '/admin') {
         . "  - [Site](#view=site)\n"
         . "  - [Preferences](#view=prefs)\n"
         . "  - [WebDAV](#view=dav)\n"
-        . "  - [AI](#view=ai)\n"
-        . "  - [Graph](#view=graph)\n";
+        . "  - [AI](#view=ai)\n";
     ?>
     <!DOCTYPE html>
     <html lang="zh-CN" class="<?php echo (($_COOKIE['vp-theme'] ?? '') === 'dark') ? 'dark' : ''; ?>">
@@ -339,7 +348,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
 <?php endif; ?>
     <script src="/assets/marked.min.js"></script>
     <script src="/assets/purify.min.js?v=20260812o"></script>
-    <link rel="stylesheet" href="/assets/admin.css?v=20260829c">
+    <link rel="stylesheet" href="/assets/admin.css?v=20260905g">
     <style>/* 阅读列宽（同前台）：覆盖 admin.css 的默认值 */
     :root { --vp-content-w:<?php echo max(480, min(1600, (int)($config['content_width'] ?? 840))); ?>px; }
     </style>
@@ -398,7 +407,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="msg" id="msg-dav"></div>
         </div>
 
-        <!-- View: Default Mount (render sources: Vault Render / Custom Path two-tab toggle) -->
+        <!-- View: Local Mounts (render sources: Vault Render / Custom Path two-tab toggle) -->
         <div id="view-mounts">
             <div class="toggle two" id="toggle-mounts">
                 <div class="toggle-thumb" id="toggle-mounts-thumb"></div>
@@ -496,6 +505,16 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="msg" id="msg-graph"></div>
         </div>
 
+        <!-- 视图：Render Types（渲染文件类型开关） -->
+        <div id="view-types" style="display:none">
+            <p class="desc">Choose which file types are rendered on the frontend. A type turned off hides those files from the tree, menu, search and direct access. Markdown is the core note format; Excalidraw & drawings live inside <code>.md</code> and follow the Markdown switch.</p>
+            <div class="render-row"><span class="render-label">Markdown renders <small>(.md & .excalidraw.md)</small></span><button class="switch" id="switch-rt-markdown" aria-label="toggle markdown render"></button></div>
+            <div class="render-row"><span class="render-label">PDF renders <small>(.pdf)</small></span><button class="switch" id="switch-rt-pdf" aria-label="toggle pdf render"></button></div>
+            <div class="render-row"><span class="render-label">HTML renders <small>(.html)</small></span><button class="switch" id="switch-rt-html" aria-label="toggle html render"></button></div>
+            <div class="render-row"><span class="render-label">Canvas renders <small>(.canvas)</small></span><button class="switch" id="switch-rt-canvas" aria-label="toggle canvas render"></button></div>
+            <div class="msg" id="msg-types"></div>
+        </div>
+
         <!-- 视图：Pinned Items（置顶目录 + 置顶文章） -->
         <div id="view-pinned" style="display:none">
             <p class="desc">Pinned directories always appear at the top of their parent level in the tree. Pinned articles float to the top of their directory. A relative path (or bare name) targets the main vault; an absolute path (/...) targets an entry inside a custom mount directory.</p>
@@ -573,7 +592,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     <script>
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260829d"></script>
+    <script src="/assets/admin.js?v=20260905h"></script>
     </body>
     </html>
     <?php

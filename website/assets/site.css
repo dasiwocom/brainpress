@@ -137,11 +137,16 @@ a { color:inherit; text-decoration:none; }
     #content { padding-top:84px; }        /* 只留第一层 56px + 28px 间距 */
     #main.hide-top #content { padding-top:28px; }  /* 第一层收起后只剩间距 */
 }
-/* 主题过渡：所有元素统一颜色过渡（VitePress 同款），避免闪烁/不同步 */
+/* 主题过渡：所有元素统一颜色过渡（VitePress 同款），避免闪烁/不同步。
+   SVG 必须显式包含 fill/stroke（transition 不继承）：Canvas 卡片 rect 的 fill:var(--vp-c-bg)、
+   边的 stroke:var(--line)、箭头/label，与 foreignObject 文字 color 用同一时长渐变，整体同步，
+   不会出现"卡片区瞬时跳变、页面其余渐变"的闪屏。
+   注意：不在此处使用 transition:none !important —— 那是反模式（见 VibeCoding 经验），
+   会让局部与页面过渡脱节奏、越修越闪；有特殊过渡需求的组件应在其自身 transition 里显式带上颜色属性。 */
 *,
 *::before,
 *::after {
-    transition: background-color .25s ease, color .25s ease, border-color .25s ease;
+    transition: background-color .25s ease, color .25s ease, border-color .25s ease, fill .25s ease, stroke .25s ease;
 }
 /* 需要 opacity 动画的元素单独覆盖，不受主题过渡影响 */
 #toast {
@@ -248,9 +253,6 @@ html.dark .vp-icon-btn .theme-moon { display:none; }
 
 .empty-state { color:var(--vp-c-text-3); text-align:center; margin-top:22vh; font-size:14px; letter-spacing:2px; }
 
-/* ===== 首页容器 ===== */
-.archive-view { max-width:820px; margin:0 auto; margin-top:-20px; }
-
 /* ===== AI 内容块：不是一个独立面板！它被 JS 放进"当前的面板容器"（桌面=左栏 #left-sidebar，窄屏=抽屉 #vp-drawer），
     顶栏 目录/AI 两个按钮只切换容器渲染哪块内容。窄屏时随抽屉一起滑入，桌面端原地显隐 ===== */
 .ai-view {
@@ -346,10 +348,10 @@ html.dark .search-view { background:transparent; -webkit-backdrop-filter:saturat
     font-size:28px; font-weight:600; letter-spacing:-.02em; line-height:1.43;
     color:var(--vp-c-text-1); margin:0 0 24px; padding-bottom:16px;
     border-bottom:1px solid var(--line);
-    max-width:760px; margin-left:auto; margin-right:auto;
+    max-width:var(--vp-content-w); margin-left:auto; margin-right:auto;
 }
 html.dark .doc-title { color:#dfdfd6; }
-.md { max-width:760px; flex:1; min-width:0; font-size:16px; line-height:25px; color:#3c3c43; font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; }
+.md { max-width:var(--vp-content-w); flex:1; min-width:0; font-size:16px; line-height:25px; color:#3c3c43; font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; }
 /* 文章页脚（Site → Footer HTML；支持 HTML，如 "Created with BrainPress v3.0.0 © 2026"） */
 .md-footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--line); font-size:12px; color:var(--vp-c-text-mute); line-height:1.6; }
 .md-footer a { color:var(--vp-c-brand); text-decoration:none; }
@@ -438,17 +440,8 @@ html.dark .toc-link:hover { color:var(--vp-c-brand); }
         translate: calc(var(--sbw, 0px) / 2) 0;
     }
     .doc-main { flex:1 1 0; min-width:0; max-width:none; }
-    /* 正文列（.md 基础 max-width:760px）在画布内水平居中，保证阅读列相对视口也居中 */
-    .doc-wrap .md, .archive-flex .md { margin-left:auto; margin-right:auto; }
-    /* 首页同款：归档列同样按固定度量居中（首页 TOC 已移入右轨道） */
-    .archive-flex {
-        display:block; box-sizing:border-box;
-        width:min(calc(var(--vp-content-w) + 2 * var(--gutter)), 100%);
-        padding:0 var(--gutter);
-        margin:0 auto; max-width:none;
-        translate: calc(var(--sbw, 0px) / 2) 0;
-    }
-    .archive-view { max-width:none; }
+    /* 正文列（max-width 跟随 --vp-content-w = 后台 Content width）在画布内水平居中，保证阅读列相对视口也居中 */
+    .doc-wrap .md { margin-left:auto; margin-right:auto; }
     /* Graph/Canvas/Excalidraw 铺满中+右：从左轨道右缘铺到视口右边（特异性高于基础 fixed 规则）
        三者都位于 #content 内；graph/excalidraw 用 .类 覆盖，canvas 直接用更高特异性的 id 覆盖 */
     #content .graph-view, #content #excalidraw-view { left:var(--rail-w); }
@@ -629,8 +622,8 @@ html.dark .md a:hover { color:var(--vp-c-brand); }
 /* 画布嵌入（![[x.canvas]]：复用白板场景 SVG，等比缩放） */
 .md .ob-embed-canvas { border:1px solid var(--line); border-radius:6px; overflow:hidden; margin:12px 0; background:var(--vp-c-bg); }
 .md .ob-embed-canvas svg { width:100%; height:auto; display:block; }
-/* 反向链接（Obsidian 风格：区块 + 条目列表 + 引用上下文）；宽度与正文列一致（.md max-width:760 居中） */
-#backlinks { margin-top:56px; margin-left:auto; margin-right:auto; max-width:760px; padding-top:28px; border-top:1px solid var(--line); }
+/* 反向链接（Obsidian 风格：区块 + 条目列表 + 引用上下文）；宽度与正文列一致（max-width 跟随 --vp-content-w） */
+#backlinks { margin-top:56px; margin-left:auto; margin-right:auto; max-width:var(--vp-content-w); padding-top:28px; border-top:1px solid var(--line); }
 .backlinks-head {
     display:flex; align-items:center; gap:10px; margin-bottom:16px;
 }
@@ -681,8 +674,8 @@ html.dark .md a:hover { color:var(--vp-c-brand); }
    工具栏钉顶 + 页面铺满框体零间距纵向滚动；深色模式保持白纸不反色 */
 #pdf-view { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
 #pdf-view > * { min-height:0; }
-/* 阅读列宽同文章正文（.md max-width:760px 居中）：PDF 不再占满整栏，与文章内容区对齐 */
-#pdf-view { max-width:760px; margin-left:auto; margin-right:auto; }
+/* 阅读列宽同文章正文（max-width 跟随 --vp-content-w）：PDF 不再占满整栏，与文章内容区对齐 */
+#pdf-view { max-width:var(--vp-content-w); margin-left:auto; margin-right:auto; }
 /* 嵌入语境：与 .md .ob-embed.loaded 同权重且靠后，保证框体样式生效 */
 .ob-pdf,
 .md .ob-embed.ob-pdf {
@@ -798,16 +791,16 @@ html.dark .cv-group { stroke:#b8b857; }
 #graph-svg { width:100%; height:100%; display:block; }
 .graph-empty { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--vp-c-text-3); font-size:14px; }
 /* 连线：Quartz 同款——svg stroke 用 CSS 变量，亮色深灰/暗色浅灰，始终与背景对比 */
-.graph-link { stroke:var(--graph-line); stroke-width:1; opacity:1; transition:opacity .25s ease, stroke-width .25s ease; }
+.graph-link { stroke:var(--graph-line); stroke-width:1; opacity:1; transition:opacity .25s ease, stroke-width .25s ease, stroke .25s ease; }
 .graph-link-hot { opacity:1 !important; stroke-width:2; stroke:var(--graph-line-hot) !important; }
 .graph-link-dim { opacity:.2 !important; }
 /* 节点颜色：CSS 变量随主题自动切换——亮色深色节点、暗色白/灰节点 */
 .graph-hub { fill:var(--graph-hub); }
 .graph-secondary { fill:var(--graph-secondary); }
 .graph-green { fill:#22c55e; }
-.graph-label { font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; font-size:10px; font-weight:400; line-height:1.2; fill:var(--vp-c-text-1); paint-order:stroke; stroke:var(--vp-c-bg); stroke-width:2px; stroke-linejoin:round; pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .18s ease; }
+.graph-label { font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; font-size:10px; font-weight:400; line-height:1.2; fill:var(--vp-c-text-1); paint-order:stroke; stroke:var(--vp-c-bg); stroke-width:2px; stroke-linejoin:round; pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .18s ease, fill .25s ease, stroke .25s ease, color .25s ease; }
 .graph-node { cursor:pointer; transition:opacity .25s ease; will-change:transform; touch-action:manipulation; }
-.graph-node circle { transition:transform .2s ease, fill .25s ease; transform-box:fill-box; transform-origin:center; }
+.graph-node circle { transition:transform .2s ease, fill .25s ease, stroke .25s ease; transform-box:fill-box; transform-origin:center; }
 .graph-node .graph-hit { cursor:pointer; pointer-events:all; }
 .graph-node:hover circle:not(.graph-hit) { transform:scale(1.25); }
 /* hover 高亮：非邻居淡化（class 切换——轻量） */
@@ -836,24 +829,12 @@ html.dark .note-popover { background:#1e1e1e; border-color:#3a3a4a; color:#e0e0e
 .note-popover .np-body { color:inherit; white-space:pre-wrap; word-break:break-word; }
 .note-popover .np-loading, .note-popover .np-missing { color:var(--vp-c-text-mute,#999); }
 
-/* 最近笔记（首页） */
-.recent-notes { margin-top:28px; }
-.recent-notes .rn-title { font-size:15px; font-weight:600; color:var(--vp-c-text-2,#666); margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid var(--line,#eee); }
-.recent-notes .rn-item { display:flex; align-items:baseline; gap:10px; padding:6px 2px; border-bottom:1px dashed var(--line,#eee); }
-.recent-notes .rn-item:last-child { border-bottom:none; }
-.recent-notes .rn-name { font-weight:500; color:var(--vp-c-brand,#5672cd); cursor:pointer; }
-.recent-notes .rn-name:hover { text-decoration:underline; }
-.recent-notes .rn-time { font-size:12px; color:var(--vp-c-text-mute,#aaa); margin-left:auto; white-space:nowrap; }
-html.dark .recent-notes .rn-title { color:#999; border-bottom-color:#333; }
-html.dark .recent-notes .rn-item { border-bottom-color:#333; }
-.recent-notes a { text-decoration:none; }
-
 /* 标签页（#tag/<name>） */
 .tag-page-heading { font-weight:600; margin-bottom:12px; color:var(--vp-c-text-2,#555); }
 .tag-page-heading code { background:var(--hover,#f0f0f0); border-radius:4px; padding:1px 6px; font-size:inherit; }
 html.dark .tag-page-heading code { background:#333; }
 /* 标签列表页独立整页（#tag/<name>）：与文章正文同款居中布局 */
-.tag-view { max-width:760px; margin:0 auto; padding-left:1px; }
+.tag-view { max-width:var(--vp-content-w); margin:0 auto; padding-left:1px; }
 .tag-item { padding:8px 2px; border-bottom:1px dashed var(--line,#eee); }
 html.dark .tag-item { border-bottom-color:#333; }
 .tag-item-name { color:var(--vp-c-brand,#5672cd); cursor:pointer; font-weight:500; }

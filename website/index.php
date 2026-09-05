@@ -33,31 +33,53 @@ if (strpos($uri, '/assets/') === 0) {
     fail('Not Found', 404);
 }
 
-// /vault/ 缺失文件兜底（GET）：主 vault 没有的静态资源，从启用的自定义挂载目录流式输出。
-// 前端引用固定走 /vault/<rel>（pdf.js 字节流、md 内嵌图片），挂载外部目录后同样要可读；
-// 网关侧只需一条「/vault/ 缺失 → index.php」重写即可（Docker 镜像已内置）。md/canvas 不在此
-// 流式输出：交给下方渲染管线成页面（直达/刷新必须仍进应用而非下载原始文件）。
+// /vault/ 兜底处理（GET）：网关把 vault 内的渲染文档类型（md/pdf/canvas/html，含真实文件）转发到 PHP，
+// 走「隐藏列表 + 渲染类型 + 选择性发布」门禁；通过则原样直出原始字节（与旧静态行为一致），命中则 404。
+// 主 vault 缺失时才走下面的自定义挂载/ima 流式兜底。图片/音视频等其它类型由网关静态直出，不经过 PHP。
 if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
     $rel = substr(ltrim(rawurldecode($uri), '/'), strlen('vault/'));
-    if ($rel !== '' && strpos($rel, '..') === false && !preg_match('~\.(md|canvas)$~i', $rel)) {
+    if ($rel !== '' && strpos($rel, '..') === false) {
         $mimeMap = [
             'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif',
             'webp' => 'image/webp', 'svg' => 'image/svg+xml', 'bmp' => 'image/bmp', 'avif' => 'image/avif',
             'pdf' => 'application/pdf', 'mp3' => 'audio/mpeg', 'mp4' => 'video/mp4', 'txt' => 'text/plain; charset=utf-8',
+            'md' => 'text/plain; charset=utf-8', 'html' => 'text/html; charset=utf-8', 'canvas' => 'application/json; charset=utf-8',
         ];
-        foreach (custom_mount_roots($config) as $m) {
-            if ($m['isFile']) continue;
-            $full = realpath($m['root'] . '/' . $rel);
-            if ($full === false || strpos($full, $m['root'] . '/') !== 0 || !is_file($full)) continue;
-            $ext = strtolower(pathinfo($full, PATHINFO_EXTENSION));
+        // 主 vault 真实文件：渲染文档类型门禁通过才直出
+        $mainRoot = realpath(PANEL_DIR . '/vault');
+        $localFull = $mainRoot === false ? false : realpath($mainRoot . '/' . $rel);
+        if ($localFull !== false && strpos($localFull, $mainRoot . '/') === 0 && is_file($localFull)) {
+            if (is_md($localFull) || is_pdf($localFull) || is_canvas($localFull) || is_html($localFull)) {
+                if (is_excluded($rel, $config['exclude_paths'] ?? [])) fail('Not Found', 404); // 隐藏列表 → 视为不存在
+                if (is_md($localFull) && is_unpublished((string)@file_get_contents($localFull))) fail('Not Found', 404); // 选择性发布
+                if (!render_type_file_enabled($config, $localFull)) fail('Not Found', 404); // 渲染类型关闭 → 视为不存在
+            }
+            $ext = strtolower(pathinfo($localFull, PATHINFO_EXTENSION));
             header('Content-Type: ' . ($mimeMap[$ext] ?? 'application/octet-stream'));
-            header('Content-Length: ' . (string)filesize($full));
-            readfile($full);
+            header('Content-Length: ' . (string)filesize($localFull));
+            readfile($localFull);
             exit;
         }
-        // ima mount static files (PDF, etc.): proxy-fetch then forward (download requires X-IMA-* headers)
-        if (ima_index_lookup($config, $rel) !== null) {
-            if (ima_stream_file($config, $rel)) exit;
+        // md/canvas 不从此流式兜底（由 SSR 渲染/404 处理）；其余类型兜底流式输出并加门禁
+        if (!preg_match('~\.(md|canvas)$~i', $rel)) {
+            foreach (custom_mount_roots($config) as $m) {
+                if ($m['isFile']) continue;
+                $full = realpath($m['root'] . '/' . $rel);
+                if ($full === false || strpos($full, $m['root'] . '/') !== 0 || !is_file($full)) continue;
+                if (is_excluded($rel, $config['exclude_paths'] ?? [])) fail('Not Found', 404); // 隐藏列表 → 视为不存在
+                if (!render_type_file_enabled($config, $full)) fail('Not Found', 404); // 渲染类型关闭 → 视为不存在
+                $ext = strtolower(pathinfo($full, PATHINFO_EXTENSION));
+                header('Content-Type: ' . ($mimeMap[$ext] ?? 'application/octet-stream'));
+                header('Content-Length: ' . (string)filesize($full));
+                readfile($full);
+                exit;
+            }
+            // ima mount static files (PDF, etc.): proxy-fetch then forward (download requires X-IMA-* headers)
+            if (ima_index_lookup($config, $rel) !== null) {
+                if (is_excluded($rel, $config['exclude_paths'] ?? [])) fail('Not Found', 404);
+                if (!render_type_file_enabled($config, $rel)) fail('Not Found', 404);
+                if (ima_stream_file($config, $rel)) exit;
+            }
         }
         fail('Not Found', 404);
     }
@@ -100,7 +122,7 @@ if (preg_match('#\.md$#i', $uri)) {
     $rel = urldecode(ltrim($uri, '/'));
     $full = resolve_vault_file($rel, $config);   // 主 vault 或自定义挂载目录
     if ($full !== null) {
-        if (!is_excluded($rel, $config['exclude_paths'] ?? [])) {
+        if (!is_excluded($rel, $config['exclude_paths'] ?? []) && render_type_enabled($config, 'markdown')) {
             $rawContent = (string)@file_get_contents($full);
             if (is_unpublished($rawContent)) { http_response_code(404); exit; }  // 选择性发布：未公开文章直接 404
             $isExcalidraw = preg_match('/\.excalidraw\.md$/i', $rel)
@@ -131,12 +153,12 @@ if (preg_match('#\.pdf$#i', $uri)) {
     $pdfRel = urldecode(ltrim($uri, '/'));
     $pdfFull = resolve_vault_file($pdfRel, $config);
     if ($pdfFull !== null) {
-        if (!is_excluded($pdfRel, $config['exclude_paths'] ?? [])) {
+        if (!is_excluded($pdfRel, $config['exclude_paths'] ?? []) && render_type_file_enabled($config, $pdfFull)) {
             $ssrPdfPath = $pdfRel;
         }
     } elseif (ima_index_lookup($config, $pdfRel) !== null) {
         // ima mount PDF: frontend streams it via /vault/<rel> (server proxy)
-        if (!is_excluded($pdfRel, $config['exclude_paths'] ?? [])) {
+        if (!is_excluded($pdfRel, $config['exclude_paths'] ?? []) && render_type_enabled($config, 'pdf')) {
             $ssrPdfPath = $pdfRel;
         }
     }
@@ -149,7 +171,7 @@ if (preg_match('#\.canvas$#i', $uri)) {
     $canvasRel = urldecode(ltrim($uri, '/'));
     $canvasFull = resolve_vault_file($canvasRel, $config);
     if ($canvasFull !== null) {
-        if (!is_excluded($canvasRel, $config['exclude_paths'] ?? [])) {
+        if (!is_excluded($canvasRel, $config['exclude_paths'] ?? []) && render_type_enabled($config, 'canvas')) {
             $ssrCanvasPath = $canvasRel;
             $ssrCanvasContent = (string)@file_get_contents($canvasFull);
         }
@@ -163,7 +185,7 @@ if (preg_match('#\.html$#i', $uri)) {
     $htmlRel = urldecode(ltrim($uri, '/'));
     $htmlFull = resolve_vault_file($htmlRel, $config);
     if ($htmlFull !== null) {
-        if (!is_excluded($htmlRel, $config['exclude_paths'] ?? [])) {
+        if (!is_excluded($htmlRel, $config['exclude_paths'] ?? []) && render_type_enabled($config, 'html')) {
             $ssrHtmlPath = $htmlRel;
             $ssrHtmlContent = (string)@file_get_contents($htmlFull);
         }
@@ -192,7 +214,7 @@ header('Cache-Control: no-cache, must-revalidate');
 // 主 vault 受「WebDAV 渲染」开关控制（与 /api/list、/api/file 同一开关）：关=目录不显示（挂载目录走各自开关不受影响）
 $frontMenuMd = '';
 $frontTree = (($config['render_webdav'] ?? false) && is_dir(PANEL_DIR . '/vault'))
-    ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true)
+    ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true, $config['render_types'] ?? null)
     : [];
 $frontMenuMd = tree_to_md(merge_rss_tree(merge_ima_tree(merge_custom_trees($frontTree, $config), $config), $config));
 // Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
@@ -234,6 +256,17 @@ if ($homeArticle !== '') {
     } else {
         $homeTitle = '';
     }
+    // 首页文件的 vault 相对路径（主 vault 或自定义挂载根内）：首页文章也走 state.path（反链/相对双链解析与普通文章一致）
+    $homeRelPath = '';
+    if ($homeFile !== '') {
+        $homeRoots = [realpath(PANEL_DIR . '/vault')];
+        foreach (custom_mount_roots($config) as $m) {
+            if (empty($m['isFile'])) $homeRoots[] = rtrim(str_replace('\\', '/', $m['root']), '/');
+        }
+        foreach ((array)$homeRoots as $rt) {
+            if ($rt !== false && strpos($homeFile, $rt . '/') === 0) { $homeRelPath = substr($homeFile, strlen($rt) + 1); break; }
+        }
+    }
 } else {
     $homeTitle = '';
 }
@@ -262,7 +295,7 @@ var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
 <script src="/assets/highlight.min.js"></script>
 <script src="/assets/nginx.min.js"></script>
 <script src="/assets/lz-string.min.js"></script>
-    <link rel="stylesheet" href="/assets/site.css?v=20260904c">
+    <link rel="stylesheet" href="/assets/site.css?v=20260905k">
 <style>/* 阅读列宽（后台可调）：覆盖 site.css 的默认值 */
 :root { --vp-content-w:<?php echo $contentW; ?>px; }
 </style>
@@ -325,14 +358,9 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="drawer-md" id="front-drawer-md"></div>
         </div>
         <div id="content">
-            <!-- 主页：渲染站点设置中配置的首页文章正文（无配置时显示空状态提示）；首页 TOC 在右轨道 -->
-            <div class="archive-flex" id="archive-flex">
-                <div class="archive-view" id="archive-view">
-                    <h1 class="doc-title" id="home-title" style="display:none"></h1>
-                    <div class="md" id="home-md" style="display:none"></div>
-                    <div class="recent-notes" id="recent-notes" style="display:none"></div>
-                </div>
-            </div>
+            <!-- 主页：与普通文章共用 #doc-wrap/#md-view 同一渲染管线（renderHome → showArticle，
+                 页脚/TOC/mermaid/Obsidian 链接全部一致）；archive-view 仅作视图互斥的空壳 -->
+            <div class="archive-view" id="archive-view" style="display:none"></div>
             <div class="doc-wrap" id="doc-wrap">
                 <div class="doc-main">
                     <h1 class="doc-title" id="doc-title"></h1>
@@ -384,10 +412,6 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     </div><!-- /#main -->
     <!-- 桌面端右侧常驻 TOC 轨道（与左轨道等宽镜像；无目录时轨道即对称留白） -->
     <aside id="right-sidebar">
-        <div class="toc-panel" id="home-toc-panel">
-            <div class="toc-title">Contents</div>
-            <div id="home-toc-list"></div>
-        </div>
         <div class="toc-panel" id="toc-panel">
             <div class="toc-title">Contents</div>
             <div id="toc-list"></div>
@@ -440,12 +464,13 @@ var HTML_PATH = <?php echo $ssrHtmlPath !== '' ? json_encode($ssrHtmlPath) : '""
 var HTML_CONTENT = <?php echo $ssrHtmlPath !== '' ? json_encode($ssrHtmlContent) : '""'; ?>;
 // 首页大标题（从文章第一个标题提取）
 var HOME_TITLE = <?php echo json_encode($homeTitle); ?>;
+        var HOME_PATH = <?php echo json_encode($homeRelPath); ?>;
 // 站点标题（PDF/Canvas/Excalidraw 视图动态 document.title 用）
 var SITE_TITLE = <?php echo json_encode($siteTitle); ?>;
 // 文章页脚：开关 + 自定义 HTML（Site 设置；默认 "Created with BrainPress v3.0.0 © 2026"，BrainPress 链接到项目主页）
 var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : 'false'; ?>;
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
-<script src="/assets/site.js?v=20260904c"></script>
+<script src="/assets/site.js?v=20260905m"></script>
 </body>
 </html>

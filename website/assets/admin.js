@@ -18,7 +18,7 @@ function fallbackCopy(text) {
     try { document.execCommand('copy'); } catch (e) {}
     document.body.removeChild(ta);
 }
-// Default Mount two-tab toggle: Vault Render / Custom Path
+// Local Mounts two-tab toggle: Vault Render / Custom Path
 var mountTab = 'vault';
 function setMountTab(tab) {
     mountTab = tab;
@@ -66,6 +66,10 @@ var RSS_COUNT = 5;
 for (var ri = 1; ri <= RSS_COUNT; ri++) {
     bindSwitch('switch-rss-' + ri);
 }
+bindSwitch('switch-rt-markdown');
+bindSwitch('switch-rt-pdf');
+bindSwitch('switch-rt-html');
+bindSwitch('switch-rt-canvas');
 bindSwitch('switch-light');
 bindSwitch('switch-drawer');
 bindSwitch('switch-ai-enabled');
@@ -124,6 +128,12 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (d.ai_enabled !== false) $('switch-ai-enabled').classList.add('on'); } catch (e) {}
     try { if (d.graph_show_labels) $('switch-graph-labels').classList.add('on'); } catch (e) {}
     try { if (d.pin_navbar) $('switch-pin-nav').classList.add('on'); } catch (e) {}
+    // 渲染文件类型开关（默认全开）
+    var rt = d.render_types || { markdown: true, pdf: true, html: true, canvas: true };
+    try { if (rt.markdown !== false) $('switch-rt-markdown').classList.add('on'); } catch (e) {}
+    try { if (rt.pdf !== false) $('switch-rt-pdf').classList.add('on'); } catch (e) {}
+    try { if (rt.html !== false) $('switch-rt-html').classList.add('on'); } catch (e) {}
+    try { if (rt.canvas !== false) $('switch-rt-canvas').classList.add('on'); } catch (e) {}
     try { $('graph-path').value = d.graph_path || ''; } catch (e) {}
     try { $('site-title').value = d.site_title || 'BrainPress'; } catch (e) {}
     try { $('home-article').value = d.home_article || ''; } catch (e) {}
@@ -335,6 +345,7 @@ function curMsg() {
         return aiTab === 'agent' ? $('msg-agent') : $('msg-ai');
     }
     if (document.getElementById('view-graph').style.display !== 'none') return $('msg-graph');
+    if (document.getElementById('view-types').style.display !== 'none') return $('msg-types');
     if (document.getElementById('view-pinned').style.display !== 'none') return $('msg-pinned');
     if (document.getElementById('view-expanded').style.display !== 'none') return $('msg-expanded');
     if (document.getElementById('view-hidden').style.display !== 'none') return $('msg-hidden');
@@ -440,6 +451,12 @@ function saveConfig() {
         ai_mode: $('switch-ai-mode').classList.contains('on'),
         ai_enabled: $('switch-ai-enabled').classList.contains('on'),
         graph_show_labels: $('switch-graph-labels').classList.contains('on'),
+        render_types: {
+            markdown: $('switch-rt-markdown').classList.contains('on'),
+            pdf: $('switch-rt-pdf').classList.contains('on'),
+            html: $('switch-rt-html').classList.contains('on'),
+            canvas: $('switch-rt-canvas').classList.contains('on')
+        },
         pin_navbar: $('switch-pin-nav').classList.contains('on'),
         graph_path: $('graph-path').value.trim(),
         site_title: $('site-title').value.trim(),
@@ -571,7 +588,7 @@ function fillAgentView() {
 $('btn-agent-copy-url').addEventListener('click', function () { fallbackCopy($('agent-base-url').textContent); });
 // 视图切换：挂载设置 / 偏好设置 / 站点设置 / AI（Chat+Agent 双档） / 图谱设置 / 目录管理
 function showView(name) {
-    var views = ['dav', 'mounts', 'rss', 'minio', 'prefs', 'site', 'ai', 'graph', 'pinned', 'expanded', 'hidden', 'ima'];
+    var views = ['dav', 'mounts', 'rss', 'minio', 'prefs', 'site', 'ai', 'graph', 'pinned', 'expanded', 'hidden', 'ima', 'types'];
     for (var i = 0; i < views.length; i++) {
         $('view-' + views[i]).style.display = views[i] === name ? '' : 'none';
     }

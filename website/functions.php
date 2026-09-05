@@ -196,6 +196,20 @@ function is_html(string $path): bool {
     return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'html';
 }
 
+/** 渲染文件类型开关：某类型关闭则该类型文件视为不存在（文档树隐藏 + 直接访问 404 一致）。
+ *  white-list：'markdown' | 'pdf' | 'html' | 'canvas'。缺省全开。 */
+function render_type_enabled(array $config, string $type): bool {
+    $rt = (array)($config['render_types'] ?? []);
+    return !array_key_exists($type, $rt) ? true : !empty($rt[$type]);
+}
+function render_type_file_enabled(array $config, string $full): bool {
+    if (is_md($full)) return render_type_enabled($config, 'markdown');
+    if (is_pdf($full)) return render_type_enabled($config, 'pdf');
+    if (is_html($full)) return render_type_enabled($config, 'html');
+    if (is_canvas($full)) return render_type_enabled($config, 'canvas');
+    return true;
+}
+
 /** 是否为图片文件（嵌入显示用） */
 function is_image(string $path): bool {
     return in_array(strtolower(pathinfo($path, PATHINFO_EXTENSION)), ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'], true);
@@ -282,10 +296,18 @@ function scandir_tree_cached(string $dir): array {
 
 /** 递归扫描工作区，返回文件树；$excludes 命中的目录/文件不出现在树中；$pinnedDirs 置顶目录、$pinnedArticles 置顶文章（排最前）；
  *  $forMount=true 用于自定义挂载：不收录图片（挂载目录没有静态服务路由，图片是死链，只会造成脏乱显示） */
-function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false, bool $publishedOnly = false): array {
+function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], array $pinnedDirs = [], array $pinnedArticles = [], bool $forMount = false, bool $publishedOnly = false, array $renderTypes = null): array {
     if (!is_dir($dir)) {
         return []; // vault 目录缺失时优雅兜底（空树），不报错
     }
+    // 渲染文件类型白名单：关闭某类型则该类型文件不进入文档树/菜单/搜索（默认全开）
+    if ($renderTypes === null) {
+        $renderTypes = ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true];
+    }
+    $rtMarkdown = !empty($renderTypes['markdown']);
+    $rtPdf      = !empty($renderTypes['pdf']);
+    $rtHtml     = !empty($renderTypes['html']);
+    $rtCanvas   = !empty($renderTypes['canvas']);
     $items = [];
     $entries = scandir_tree_cached($dir);
     foreach ($entries as $entry) {
@@ -304,7 +326,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
             continue; // 命中隐藏列表：目录整棵跳过 / 文件不收录
         }
         if (is_dir($full)) {
-            $children = scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles, $forMount, $publishedOnly);
+            $children = scan_tree($full, $rel, $excludes, $pinnedDirs, $pinnedArticles, $forMount, $publishedOnly, $renderTypes);
             // 挂载模式：过滤后变空的目录（如纯图片的 Attachments）直接不显示
             if ($forMount && !$children) continue;
             $items[] = [
@@ -314,6 +336,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'children' => $children,
             ];
         } elseif (is_md($full)) {
+            if (!$rtMarkdown) continue; // markdown 渲染关闭
             if ($publishedOnly && is_unpublished((string)@file_get_contents($full))) continue; // 选择性发布过滤
             $items[] = [
                 'name' => $entry,
@@ -329,7 +352,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'type' => 'file',
             ];
         } elseif (is_pdf($full)) {
-            if ($forMount) continue;  // 同上：挂载 PDF 无静态路由，阅读器加载不到
+            if (!$rtPdf || $forMount) continue;  // PDF 渲染关闭 / 挂载 PDF 无静态路由，阅读器加载不到
             // PDF 文件收录（阅读器显示用）
             $items[] = [
                 'name' => $entry,
@@ -337,6 +360,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'type' => 'file',
             ];
         } elseif (is_canvas($full)) {
+            if (!$rtCanvas) continue;  // Canvas 白板渲染关闭
             // Obsidian Canvas 白板收录（画布渲染显示用）
             $items[] = [
                 'name' => $entry,
@@ -344,6 +368,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
                 'type' => 'file',
             ];
         } elseif (is_html($full)) {
+            if (!$rtHtml) continue;  // HTML 渲染关闭
             // HTML 在线工具/自定义页面收录（直接渲染原始 HTML，保留脚本/样式）
             $items[] = [
                 'name' => $entry,

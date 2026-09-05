@@ -69,7 +69,7 @@ function handle_api(string $uri, string $method, array $config): never
         $seen = []; // 同名去重（本地优先）
 
         if ($renderWebdav) {
-            $localTree = scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true);
+            $localTree = scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true, $config['render_types'] ?? null);
             $tree = array_merge($tree, $localTree);
             // 记录本地目录名 + 文件名（同名去重用）
             foreach ($localTree as $dir) {
@@ -212,6 +212,7 @@ function handle_api(string $uri, string $method, array $config): never
             if (!$renderWebdav) fail('文件不存在');
             $full = $localFull;
             if (!is_file($full) || (!is_md($full) && !is_canvas($full) && !is_html($full))) fail('文件不存在');
+            if (!render_type_file_enabled($config, $full)) fail('文件不存在');  // 渲染类型关闭 → 视为不存在
             $content = @file_get_contents($full);
             if ($content === false) fail('文件不可读');
             if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -250,6 +251,7 @@ function handle_api(string $uri, string $method, array $config): never
         $results = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不参与搜索
             // ima file: fetch body live via API; local file: read from disk
             if (ima_index_lookup($config, $f['path']) !== null) {
                 $raw = ima_read_raw($config, $f['path']);
@@ -281,6 +283,7 @@ function handle_api(string $uri, string $method, array $config): never
         foreach ($gFiles as $f) {
             if (is_excluded($f['path'], $gExcludes)) continue;
             if ($gDir !== '' && strpos($f['path'], $gDir . '/') !== 0) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不进图谱
             // 选择性发布：未公开文章不进图谱
             if (ima_index_lookup($config, $f['path']) !== null) {
                 $gRaw = ima_read_raw($config, $f['path']);
@@ -468,6 +471,7 @@ function handle_api(string $uri, string $method, array $config): never
         $articles = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
             if (is_unpublished((string)@file_get_contents($abs))) continue;
@@ -486,6 +490,7 @@ function handle_api(string $uri, string $method, array $config): never
         echo "> Markdown notes published at " . $siteBase . " — plain Markdown, server-rendered pages.\n\n";
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
             if (is_unpublished((string)@file_get_contents($abs))) continue;
@@ -504,6 +509,7 @@ function handle_api(string $uri, string $method, array $config): never
         $siteBase = 'http' . (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 's' : '') . '://' . ($_SERVER['HTTP_HOST'] || (string)($_SERVER['SERVER_NAME'] ?? 'localhost'));
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             // 选择性发布：frontmatter published:false / draft:true 跳过
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
@@ -560,6 +566,7 @@ function handle_api(string $uri, string $method, array $config): never
         $urls = [$siteBase . '/'];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不收录
             $abs = resolve_vault_file($f['path'], $config);
             if ($abs === null) continue;
             $raw = (string)@file_get_contents($abs);

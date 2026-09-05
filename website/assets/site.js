@@ -171,75 +171,29 @@
 
     /* ---------- 界面切换 ---------- */
     // 首页：渲染站点设置配置的首页文章正文（复用文章渲染管线；幂等——只渲染一次，避免二次渲染重排抽搐）
-    var homeRendered = false;
+    // 首页文章与普通文章完全同管线：showArticle 同一渲染通道（页脚 / TOC / mermaid / 代码复制 /
+    // Obsidian 链接 / 反链全部一致）。首页内容每次重新渲染——md-view 与文章共用，需防被覆盖后残留旧文
     function renderHome() {
-        if (homeRendered) return;
-        homeRendered = true;
-        var md = $('home-md');
-        var title = $('home-title');
-        var empty = $('empty-state');
         if (!window.HOME_MD) {
-            md.style.display = 'none';
-            title.style.display = 'none';
-            empty.textContent = 'No home article configured. Set it in Admin → Site Settings.';
-            empty.style.display = '';
+            hideSpecialViews();
+            $('doc-wrap').style.display = 'none';
+            $('md-view').style.display = 'none';
+            $('tag-view').style.display = 'none';
+            $('toc-panel').style.display = 'none';
+            $('empty-state').textContent = 'No home article configured. Set it in Admin → Site Settings.';
+            $('empty-state').style.display = '';
             return;
         }
-        try {
-            var html = mdToHtml(window.HOME_MD);
-            md.innerHTML = html;
-            try {
-                md.querySelectorAll('pre code').forEach(function (el) { hljs.highlightElement(el); });
-            } catch (e) {}
-            // 正文允许 H1（标题栏用文件名显示，正文 H1 不再降级）
-            // 大标题：文章第一个标题（PHP 提取），无则隐藏
-            if (window.HOME_TITLE) {
-                title.textContent = window.HOME_TITLE;
-                title.style.display = '';
-            } else {
-                title.style.display = 'none';
-            }
-            md.style.display = '';
-            empty.style.display = 'none';
-        } catch (e) {
-            md.style.display = 'none';
-            title.style.display = 'none';
-            empty.textContent = 'Home article failed to render.';
-            empty.style.display = '';
-        }
-    }
-    // 最近笔记：首页底部列出最新修改的 10 篇（按 mtime 倒序，排除首页文章本身）
-    function renderRecentNotes() {
-        var box = $('recent-notes');
-        if (!box) return;
-        api('/api/article-list').then(function (data) {
-            var arts = data.articles || [];
-            var homeTitle = (window.HOME_TITLE || '').replace(/\.md$/i, '').trim();
-            var list = arts
-                .filter(function (a) { return (a.name || '').replace(/^\d+-/, '').replace(/\.md$/i, '') !== homeTitle; })
-                .sort(function (a, b) { return (b.mtime || 0) - (a.mtime || 0); })
-                .slice(0, 10);
-            if (!list.length) { box.style.display = 'none'; return; }
-            box.innerHTML = '<div class="rn-title">Recent Notes</div>' + list.map(function (a) {
-                var disp = (a.name || a.path || '').replace(/^\d+-/, '').replace(/\.md$/i, '');
-                var t = a.mtime ? fmtDate(a.mtime) : '';
-                return '<div class="rn-item"><span class="rn-name" data-path="' + esc(a.path) + '">' + esc(disp) +
-                    '</span><span class="rn-time">' + esc(t) + '</span></div>';
-            }).join('');
-            box.style.display = '';
-            box.querySelectorAll('.rn-name').forEach(function (el) {
-                el.addEventListener('click', function () { selectFile({ path: el.dataset.path }); });
-            });
-        }).catch(function () { box.style.display = 'none'; });
-    }
-    function fmtDate(ts) {
-        var d = new Date(ts * 1000);
-        var p = function (n) { return (n < 10 ? '0' : '') + n; };
-        return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+        showArticle(mdToHtml(window.HOME_MD), window.HOME_PATH || '/', window.HOME_TITLE || undefined);
+        if (window.HOME_PATH) state.path = window.HOME_PATH;
     }
     // 标签页：#tag/<name> — 独立整页，收集所有含该标签的笔记列表
+    // 标签渲染序号：同一路线的 popstate + hashchange 可能各自触发一次 showTag（或快速连续点多个标签）。
+    // 每批渲染只认最新一次调用——旧的异步结果一律丢弃，避免 #tag-list 里出现重复条目/重复计数。
+    var tagRenderSeq = 0;
     function showTag(tagName) {
         if (!tagName) return false;
+        var mySeq = ++tagRenderSeq;
         var tag = tagName.toLowerCase();
         // 树未就绪时（SSR 直达 #/tag/... 时序早于 loadTree 完成）自行拉一次文件列表，
         // 保证标签页不依赖 state.tree 的加载时机
@@ -251,6 +205,7 @@
             }).catch(function () {});
         };
         ensureTree().then(function () {
+            if (mySeq !== tagRenderSeq) return;  // 已有更新的 showTag，本批作废
             var files = collectFiles();
             hideSpecialViews();
             $('archive-view').style.display = 'none';
@@ -266,6 +221,7 @@
             var pending = files.length;
             files.forEach(function (f) {
                 api('/api/file?path=' + encodeURIComponent(f.path)).then(function (data) {
+                    if (mySeq !== tagRenderSeq) return;  // 过期批次：终止
                     var c = data.content || '';
                     var matched = c.toLowerCase().indexOf('#' + tag) > -1;
                     // 兼容 frontmatter tags: ["tag"]（无 # 前缀）
@@ -294,11 +250,13 @@
                     }
                     if (--pending <= 0) finishTag();
                 }).catch(function () {
+                    if (mySeq !== tagRenderSeq) return;  // 过期批次：终止
                     if (--pending <= 0) finishTag();
                 });
             });
             if (!files.length) finishTag();
             function finishTag() {
+                if (mySeq !== tagRenderSeq) return;  // 过期批次：终止
                 var info = document.createElement('div');
                 info.className = 'tag-item-count';
                 info.textContent = hitCount + ' note' + (hitCount === 1 ? '' : 's');
@@ -313,16 +271,19 @@
         // 服务端渲染直达（URL 直接访问 /xxx.md）：内联内容同步渲染显示（无 fetch 等待，打开即文章）
         if (window.SSR_MD) {
             renderHome(); // 预渲染主页（隐藏状态）：SSR 直达时主页默认未渲染，logo 回首页需立即可用
+            var h0 = '';
+            try { h0 = decodeURI(location.hash.replace(/^#/, '')); } catch (e) {}
+            // 直达标签页（/Article.md#/tag/<name>）：不渲染正文，直接进标签页，避免先闪一遍文章
+            if (h0 && /^\/?tag\//.test(h0)) {
+                state.path = '';
+                loadTree();
+                handleHash();  // handleHash 会把地址规范化到 /#/tag/<name>
+                return;
+            }
             state.path = window.SSR_PATH;
             var shtml = mdToHtml(window.SSR_MD);
             showArticle(shtml, window.SSR_PATH);
             loadTree();
-            // 处理 hash（如 #tag/xxx 直达标签页）
-            var h = '';
-            try { h = decodeURI(location.hash.replace(/^#/, '')); } catch (e) {}
-            if (h && /^\/?tag\//.test(h)) {
-                handleHash();  // 切到标签页
-            }
             return;
         }
         // 服务端渲染直达（URL 直接访问 /xxx.pdf）：内联路径，前端 pdf.js 渲染阅读器
@@ -334,7 +295,7 @@
             return;
         }
         // 服务端渲染直达（URL 直接访问 /graph）：图谱视图已由下方 SSR 块打开，这里只建索引树；
-        // 不能走默认主页路径——archive-view 复显会联动点亮右轨首页 TOC（图谱页右轨必须留白）
+        // 不能走默认主页路径——renderHome 会复显 doc-wrap 并点亮右轨 TOC（图谱页右轨必须留白）
         if (window.SSR_GRAPH) {
             state.path = '';
             loadTree();
@@ -366,16 +327,25 @@
             loadTree();
             return;
         }
-        // 默认显示首页（渲染首页文章正文）
+        // 默认显示首页（渲染首页文章正文——与普通文章同管线）
         $('doc-wrap').style.display = 'none';
-        $('archive-view').style.display = '';
+        $('archive-view').style.display = 'none';
         $('empty-state').style.display = 'none';
         // 带 hash（直达文章）：完整路径立即加载（selectFile 不依赖树，避免黑屏等待 loadTree）；
         // 数字 ID / 纯文件名依赖 _docMap（loadTree 构建），保持隐藏等 loadTree 后 handleHash 处理
         var h = '';
         try { h = decodeURI(location.hash.replace(/^#/, '')); } catch (e) {}
         if (h) {
-            if (h.indexOf('/') > -1 || /\.md$/i.test(h)) {
+            var tm = h.replace(/^\//, '').match(/^tag\/(.+)$/);
+            if (tm) {
+                // 直达标签页（/#/tag/<name>）：提前隐藏其余视图，showTag 异步出列表
+                hideSpecialViews();
+                $('archive-view').style.display = 'none';
+                $('doc-wrap').style.display = 'none';
+                var tn0;
+                try { tn0 = decodeURI(tm[1]); } catch (e2) { tn0 = tm[1]; }
+                showTag(tn0);
+            } else if (h.indexOf('/') > -1 || /\.md$/i.test(h)) {
                 selectFile({ path: h });
             } else {
                 hideSpecialViews();
@@ -383,12 +353,8 @@
                 $('doc-wrap').style.display = 'none';
             }
         } else {
-            // 主页：先隐藏内容区，渲染完成后再显示（避免渲染/加载过程的跳动）
-            hideSpecialViews();
-            $('archive-view').style.display = 'none';
+            // 主页：与普通文章完全一致的渲染管线（renderHome → showArticle）
             renderHome();
-            renderRecentNotes();
-            $('archive-view').style.display = '';
         }
         loadTree();
     }
@@ -444,7 +410,7 @@
             // 主页已由 PHP 服务端渲染最新文章列表，树只用于搜索索引 + hash 直达
             // 文件树就绪后，处理 URL hash（数字 ID、完整路径或纯文件名直达）
             var h = location.hash.replace(/^#/, '');
-            if (h && !state.path) {
+            if (h && !state.path && !/^\/?tag\//.test(h)) {
                 try {
                     var path = null;
                     if (/^\d+$/.test(h) && window._docMap && window._docMap[h]) {
@@ -492,48 +458,7 @@
         });
     }
 
-    // 首页目录：扫描 home-md 的 h2-h4，结构与文章 TOC 一致；随归档视图显隐自动同步
-    function renderHomeToc() {
-        var list = $('home-toc-list');
-        if (!list) return;
-        var headings = $('home-md').querySelectorAll('h2, h3, h4');
-        if (!headings.length) {
-            $('home-toc-panel').style.display = 'none';
-            return;
-        }
-        list.innerHTML = '';
-        headings.forEach(function (h) {
-            var lv = parseInt(h.tagName.charAt(1), 10);
-            var text = h.textContent.trim();
-            if (!text) return;
-            var link = document.createElement('button');
-            link.className = 'toc-link lv-' + lv;
-            link.textContent = text;
-            link.addEventListener('click', function () {
-                var top = h.offsetTop - $('content').offsetTop;
-                $('content').scrollTo({ top: top - 90, behavior: 'smooth' });
-            });
-            list.appendChild(link);
-        });
-        $('home-toc-panel').style.display = 'block';
-    }
-    // 归档视图在多处被切换显隐——用 MutationObserver 监听其内联样式，统一联动首页目录
-    (function () {
-        var av = $('archive-view'), htp = $('home-toc-panel');
-        if (!av || !htp) return;
-        function syncHomeToc() {
-            if (av.style.display === 'none') {
-                htp.style.display = 'none';
-                return;
-            }
-            renderHomeToc();
-        }
-        if (window.MutationObserver) {
-            new MutationObserver(syncHomeToc).observe(av, { attributes: true, attributeFilter: ['style'] });
-        }
-        syncHomeToc();
-    })();
-
+    // 首页文章已走 showArticle 管线：TOC 复用文章同一 #toc-panel，不再有独立首页目录
     // PDF 渲染前置：按需加载 pdf.min.js（不拖慢首页）；文件从前端 /vault/ 路径加载
     function loadPdfJs(cb) {
         if (window.pdfjsLib) { cb(); return; }
@@ -806,7 +731,7 @@
     }
 
     // 文章渲染统一出口：内联 HTML → 高亮/降级/标题/视图切换/增强（selectFile 与 SSR 共用）
-    function showArticle(html, nodePath) {
+    function showArticle(html, nodePath, titleOverride) {
         $('md-view').innerHTML = html;
         // 代码高亮（VS Code 风格：日间 Light+ / 夜间 Dark+）；mermaid 图表不参与 hljs
         try {
@@ -817,8 +742,10 @@
         } catch (e) {}
         renderMermaid($('md-view'));
         // 正文允许 H1：不再降级（标题栏显示文件名，正文 H1 与文件名可并存）
-        // 文档标题 = 文件名（去扩展名），清除旧翻译标记
-        var docName = nodePath.split('/').pop().replace(/\.md$/i, '');
+        // 文档标题 = 文件名（去扩展名），清除旧翻译标记；首页传 titleOverride（= HOME_TITLE）
+        var docName = (titleOverride !== undefined && titleOverride !== null && titleOverride !== '')
+            ? titleOverride
+            : nodePath.split('/').pop().replace(/\.md$/i, '');
         $('doc-title').textContent = docName;
         $('doc-title').style.display = '';
         delete $('doc-title').dataset.orig;
@@ -1803,11 +1730,8 @@
             location.href = '/';
             return;
         }
-        $('md-view').style.display = 'none';
-        hideSpecialViews();  // 清掉可能残留的 PDF/画布/图谱（互斥）
         $('doc-wrap').style.display = 'none';
         renderHome();
-        $('empty-state').style.display = 'none';
         $('content').scrollTop = 0;
     });
     // 主题切换（日间/夜间，localStorage 记忆）
@@ -1837,7 +1761,6 @@
         $('archive-view').style.display = 'none';
         $('doc-wrap').style.display = 'none';
         var gtp = $('toc-panel'); if (gtp) gtp.style.display = 'none';
-        var ghtp = $('home-toc-panel'); if (ghtp) ghtp.style.display = 'none';  // 右轨留白（否则首页目录漏到图谱页）
         graphView.style.display = 'flex';
         if (window.console) console.log('GRAPH OPENED');
         loadGraph();
@@ -2268,6 +2191,8 @@
     /* ===== Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → 官方 exportToSvg 引擎，手写 SVG 兜底） ===== */
     function escapeXml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     var exAscent = 0.9;  // Virgil 字形 ascent 比例（canvas 实测缓存——不依赖 dominant-baseline，所有浏览器一致）
+    // 渲染序号：主题切换快速连点时只让最新一次渲染落地（官方导出/字体加载都是异步的，防止旧批覆盖新批）
+    var exRenderSeq = 0;
     // 官方渲染器懒加载：只有绘画页才注入脚本（其余页面零开销）。
     // 完整官方包 @excalidraw/excalidraw UMD（与 Obsidian 插件同源渲染管线）：React UMD → ReactDOM UMD → ExcalidrawLib，
     // 全局名 window.ExcalidrawLib。EXCALIDRAW_ASSET_PATH 指向本地 vendor 字体，导出的 @font-face 落在同源路径
@@ -2303,34 +2228,49 @@
         });
     }
     // 官方引擎渲染：rough.js 手绘笔画、贝塞尔弯曲箭头、freedraw 笔迹、hachure 填充、绑定标签+蒙版断线全量还原
-    async function renderExcalidrawOfficial(scene, dv) {
+    // 阅读模式对齐 Obsidian：图随主题（背景/配色跟随 .dark），作者显式设置的画布底色除外
+    function exIsDark() { return !!(document.documentElement.classList && document.documentElement.classList.contains('dark')); }
+    async function renderExcalidrawOfficial(scene, dv, my) {
         await loadExcalidrawLib();
+        if (my !== exRenderSeq) return;  // 已有更新的渲染（主题快速切换），丢弃本批
         var els = JSON.parse(JSON.stringify((scene.elements || []).filter(function (e) { return e && !e.isDeleted && e.type !== 'frame'; })));
         normalizeExcalidrawScene(els);
+        // 原生展示在页面背景上（同 Obsidian 阅读）：不导出画布底色，页面 --vp-c-bg 直接透出；
+        // 仅当作者显式存了非默认底色（白底是默认值）才保留，让绘图底色跟日夜主题一起切换
+        var sbg2 = ((scene.viewBackgroundColor || '') + '').toLowerCase();
+        var customBg = sbg2 && sbg2 !== '#fff' && sbg2 !== '#ffffff';
         var svg = await window.ExcalidrawLib.exportToSvg({
             elements: els,
-            appState: { exportBackground: true, viewBackgroundColor: scene.viewBackgroundColor || '#ffffff', exportWithDarkMode: document.documentElement.classList.contains('dark') },
+            appState: {
+                exportBackground: !!customBg,
+                viewBackgroundColor: customBg ? scene.viewBackgroundColor : '#ffffff',
+                exportWithDarkMode: exIsDark()
+            },
             files: scene.files || {},
             exportPadding: 16
         });
+        if (my !== exRenderSeq) return;  // 丢弃过期批次
         // 字体就绪再插入：导出坐标按 Virgil metrics 计算，避免先以回退字体绘制再跳变
         try { await Promise.race([document.fonts.load('20px Virgil', 'Ag'), new Promise(function (r) { setTimeout(r, 1500); })]); } catch (e) {}
+        if (my !== exRenderSeq) return;
         // 剥除导出包注入的全部 @font-face 块：内联 SVG 内嵌字体声明在部分浏览器与页面级同名 face 冲突导致
         // 加载报 network error（实测），且会引用未 vendor 的辅助字体。统一走页面级自托管 Virgil（index.css）
         var sts = svg.querySelectorAll('style');
         for (var i = sts.length - 1; i >= 0; i--) {
             if ((sts[i].textContent || '').indexOf('@font-face') !== -1 && sts[i].parentNode) sts[i].parentNode.removeChild(sts[i]);
         }
-        svg.removeAttribute('width'); svg.removeAttribute('height');  // 只留 viewBox → .excalidraw-canvas svg 的 max-width:100% 等比缩放
+        svg.removeAttribute('width'); svg.removeAttribute('height');  // 只留 viewBox → 等比缩放
         svg.style.width = '100%'; svg.style.height = 'auto';
-        dv.innerHTML = '';
-        dv.appendChild(svg);
+        var wrap = dv.querySelector('.excalidraw-canvas') || dv;
+        wrap.innerHTML = '';
+        wrap.appendChild(svg);
     }
     // 手写兜底渲染（官方包加载失败/导出异常时仍能出图——离线部署场景）：仅支持六种基础元素
-    async function renderExcalidrawFallback(scene, dv) {
+    async function renderExcalidrawFallback(scene, dv, my) {
         var els = scene.elements || [];
         // 等 Virgil 字体加载（文字位置依赖其 metrics），超时 1.5s 兜底
         try { await Promise.race([document.fonts.load('20px Virgil'), new Promise(function (r) { setTimeout(r, 1500); })]); } catch (e) {}
+        if (my !== exRenderSeq) return;  // 过期批次：终止仍写入
         // canvas 实测 Virgil ascent 比例（基线渲染的精确偏移；字体没就绪时 fallback 0.9）
         try {
             var cc = document.createElement('canvas'), ctx = cc.getContext('2d');
@@ -2363,9 +2303,11 @@
             }
         });
         if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 800; maxY = 600; }
+        // 原生展示：画布底色透明（页面背景透出），仅保留作者显式设置的非默认底色
+        var fbg2 = ((scene.viewBackgroundColor || '') + '').toLowerCase();
+        var fbgAttr = (fbg2 && fbg2 !== '#fff' && fbg2 !== '#ffffff') ? scene.viewBackgroundColor : 'transparent';
         var pad = 40, vw = maxX - minX + pad * 2, vh = maxY - minY + pad * 2;
-        var bg = scene.viewBackgroundColor || '#ffffff';
-        var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + (minX - pad) + ' ' + (minY - pad) + ' ' + vw + ' ' + vh + '" style="width:100%;height:auto;background:' + bg + '">';
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + (minX - pad) + ' ' + (minY - pad) + ' ' + vw + ' ' + vh + '" style="width:100%;height:auto;background:' + fbgAttr + '">';
         svg += '<defs><marker id="ex-arrow" markerWidth="12" markerHeight="12" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#000000"/></marker></defs>';
         els.forEach(function (e) {
             if (e.isDeleted || e.type === 'frame') return;
@@ -2417,10 +2359,12 @@
             }
         });
         svg += '</svg>';
-        dv.innerHTML = svg;
+        var wrap2 = dv.querySelector('.excalidraw-canvas') || dv;
+        wrap2.innerHTML = svg;
     }
     // 总入口：解码 compressed-json → 官方引擎优先，任何异常回落手写兜底（自身永不抛出——两个调用点都未接 promise）
-    async function renderExcalidraw() {
+    async function renderExcalidraw(restorePz) {
+        var my = ++exRenderSeq;  // 主题快速切换时只让最新一次渲染落地
         var raw = window.EXCALIDRAW_RAW || '';
         var m = raw.match(/```compressed-json\s*([\s\S]*?)```/);
         var dv = $('excalidraw-view');
@@ -2429,12 +2373,13 @@
         var scene;
         try { scene = JSON.parse(LZString.decompressFromBase64(m[1].replace(/\s+/g, ''))); }
         catch (e) { dv.innerHTML = '<p>Failed to decode drawing: ' + escapeXml(e.message) + '</p>'; return; }
-        try { await renderExcalidrawOfficial(scene, dv); }
+        try { await renderExcalidrawOfficial(scene, dv, my); }
         catch (oe) {
-            try { await renderExcalidrawFallback(scene, dv); }
-            catch (fe) { dv.innerHTML = '<p>Render failed: ' + escapeXml((fe && fe.message) || fe) + '</p>'; return; }
+            try { await renderExcalidrawFallback(scene, dv, my); }
+            catch (fe) { if (my === exRenderSeq) dv.innerHTML = '<p>Render failed: ' + escapeXml((fe && fe.message) || fe) + '</p>'; return; }
         }
-        // 视图切换：文章容器显示（excalidraw 在 doc-main 内，正常左中右结构、只占中栏），md 隐藏；
+        if (my !== exRenderSeq) return;  // 已有更新的渲染，视图切换交给最新一批
+        // 视图切换：文章容器显示（excalidraw 在 doc-main 内，正常左中右结构）md 隐藏；
         // 绘画无目录 → 右轨两个 TOC 面板都隐藏（右栏留空）
         hideSpecialViews();  // 清掉可能残留的 PDF/Canvas/图谱（互斥）——必须在显示本视图之前
         dv.style.display = 'block';  // 显示画布容器（初始 display:none——忘了设置会导致空白）
@@ -2442,16 +2387,18 @@
         $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
-        var htp2 = $('home-toc-panel'); if (htp2) htp2.style.display = 'none';
         var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
         var ttl = $('doc-title');
         // 全屏沉浸：隐藏文章标题（.excalidraw 打开无标题栏，画布吃满中+右）
         if (ttl) { ttl.textContent = ''; ttl.style.display = 'none'; }
-        // 交互（同 Canvas 体验）：滚轮/双指缩放、空白拖拽平移；画布铺满中+右
-        enableExcalidrawPanZoom(dv);
+        // 主题切换重渲染后：新 SVG 节点的 pan/zoom 需重新绑定；
+        // restorePz 携带切换前的平移/缩放，恢复原位置而非重置到首帧
+        var w0 = dv.querySelector('.excalidraw-canvas'); if (w0) delete w0.dataset.pz;
+        // 交互（阅读模式对齐 Obsidian，只平移/缩放不编辑）：初始适配显示全貌，滚轮/双指缩放、空白拖拽平移
+        enableExcalidrawPanZoom(dv, restorePz || null);
     }
     // Excalidraw pan/zoom：svg 按自然尺寸渲染，外层 holder 承载 translate+scale（同 Canvas / Graph 的平移+缩放模式）
-    function enableExcalidrawPanZoom(dv) {
+    function enableExcalidrawPanZoom(dv, restorePz) {
         var svg = dv.querySelector('svg');
         if (!svg) return;
         var wrap = dv.querySelector('.excalidraw-canvas') || dv;
@@ -2465,13 +2412,21 @@
         svg.parentNode.replaceChild(holder, svg);
         holder.appendChild(svg);
         var k = 1, tx = 0, ty = 0;
-        function apply() { holder.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')'; }
+        function apply() { holder.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')'; wrap.dataset.pzState = JSON.stringify({ k: k, tx: tx, ty: ty }); }
         var cw = wrap.clientWidth || 600, ch = wrap.clientHeight || 400;
-        if (nat.width > cw || nat.height > ch) {
-            var f = Math.min(cw / nat.width, ch / nat.height, 1.2);
-            k = f; tx = (cw - nat.width * f) / 2; ty = (ch - nat.height * f) / 2;
+        if (restorePz && typeof restorePz.k === 'number' && isFinite(restorePz.k)) {
+            // 主题切换重渲染：恢复切换前的平移/缩放位置，不重置到首帧
+            k = restorePz.k; tx = restorePz.tx; ty = restorePz.ty;
+            apply();
+        } else {
+            // 首帧适配（同 Obsidian 打开即见全貌）：等比缩放进视口并居中；内容本身小于视口也放大到 1.5 上限
+            var f = Math.min(cw / (nat.width || 1), ch / (nat.height || 1), 1.5);
+            f = Math.max(f, 0.05);
+            k = f;
+            tx = (cw - nat.width * f) / 2;
+            ty = (ch - nat.height * f) / 2;
+            apply();
         }
-        apply();
         wrap.style.cursor = 'grab';
         // 滚轮缩放（同 Graph/Canvas）
         wrap.addEventListener('wheel', function (ev) {
@@ -2534,6 +2489,23 @@
         window.addEventListener('pointercancel', endPtr);
     }
     if (window.SSR_EXCALIDRAW) { try { renderExcalidraw(); } catch (e) { if (window.console) console.log('excalidraw err', e); } }
+    // 阅读模式跟随主题：`.dark` 切换时重渲染当前绘画（导出引擎会按新主题重新配色）。
+    // 重渲染前先记住用户当前的平移/缩放（holder transform），渲染后原样恢复位置，避免被重置到首帧
+    try {
+        new MutationObserver(function () {
+            var dv = $('excalidraw-view');
+            if (dv && dv.style.display !== 'none' && window.EXCALIDRAW_RAW) {
+                // 从 wrap 的 dataset 直接读上次的平移/缩放（CSS transform 会被浏览器缩写，
+                // 解析字符串不可靠；dataset 随 wrap 跨渲染保留）
+                var restore = null;
+                var w = dv.querySelector('.excalidraw-canvas') || dv;
+                if (w.dataset.pz) {
+                    try { restore = JSON.parse(w.dataset.pzState || 'null'); } catch (e) { restore = null; }
+                }
+                try { renderExcalidraw(restore); } catch (e) { if (window.console) console.log('excalidraw re-render err', e); }
+            }
+        }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    } catch (e) {}
 
     /* ===== Obsidian Canvas 白板渲染（.canvas：JSON nodes/edges → SVG 画布，配色跟随日夜主题） ===== */
     // 节点颜色：Obsidian 官方色板 1-6 的近似色值；其余接受 #hex 原样
@@ -2563,7 +2535,6 @@
         $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
-        var htp = $('home-toc-panel'); if (htp) htp.style.display = 'none';
         var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
         // Canvas 全屏沉浸：隐藏文章标题，中+右全部让给画布（Obsidian 打开 .canvas 无标题栏）
         var ttl = $('doc-title');
@@ -2723,13 +2694,12 @@
         });
         board.innerHTML = '';
         board.appendChild(svg);
-        if (interactive) initCanvasInteractions(board, svg, cvv, minX - pad, minY - pad, cw, ch, cards, byId, edges);
+        if (interactive) initCanvasInteractions(board, svg, cvv, minX - pad, minY - pad, cw, ch);
     }
     /* Canvas 交互（Obsidian 体验）：空白拖拽平移、滚轮/双指缩放、点卡片进笔记、拖卡片移动（连线跟随）。
        平移缩放作用于 cv-view 的 translate/scale；卡片拖拽改卡片自身 translate（世界单位）并同步节点坐标。 */
-    function initCanvasInteractions(board, svg, cvv, ox, oy, cw, ch, cards, byId, edges) {
+    function initCanvasInteractions(board, svg, cvv, ox, oy, cw, ch) {
         var tx = 0, ty = 0, k = 1;
-        var DIR = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
         // 内容世界坐标范围：[ox..ox+cw]。首帧自动缩放适配并居中（同 Obsidian 打开即见全貌）
         (function firstFit() {
             var bw = board.clientWidth || 600, bh = board.clientHeight || 400;
@@ -2755,28 +2725,19 @@
             k = k2;
             applyView();
         }, { passive: false });
-        // 指针：单指空白=平移，双指=缩放；卡片=拖拽
-        var pointers = {}, lastPinch = 0, pan = null, dragCard = null;
+        // 阅读模式（对齐 Obsidian Canvas 阅读视图）：单指空白=平移，双指=缩放，点卡片=打开目标；
+        // 卡片不可拖拽、无编辑功能——只读展示
+        var pointers = {}, lastPinch = 0, pan = null;
         board.addEventListener('pointerdown', function (ev) {
             pointers[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
             var ids = Object.keys(pointers);
             if (ids.length >= 2) {
-                pan = null; dragCard = null;
+                pan = null;
                 var a = pointers[ids[0]], b = pointers[ids[1]];
                 lastPinch = Math.hypot(a.x - b.x, a.y - b.y);
                 return;
             }
-            if (ev.target && ev.target.closest('.cv-card')) {
-                var cid = ev.target.closest('.cv-card').getAttribute('data-id');
-                var c = cards[cid];
-                if (!c || !byId[cid]) return;
-                dragCard = { c: c, id: cid, sx: ev.clientX, sy: ev.clientY, moved: false };
-                ev.stopPropagation(); ev.preventDefault();
-                c.g.classList.add('dragging');
-                board.classList.add('dragging');
-                return;
-            }
-            pan = { x: ev.clientX, y: ev.clientY, ax: 0, ay: 0 };
+            pan = { x: ev.clientX, y: ev.clientY, ax: 0, ay: 0, moved: false };
         });
         board.addEventListener('pointermove', function (ev) {
             if (pointers[ev.pointerId]) { pointers[ev.pointerId].x = ev.clientX; pointers[ev.pointerId].y = ev.clientY; }
@@ -2796,21 +2757,8 @@
                 applyView();
                 return;
             }
-            if (dragCard) {
-                var dx = ev.clientX - dragCard.sx, dy = ev.clientY - dragCard.sy;
-                if (Math.abs(dx) + Math.abs(dy) > 4) dragCard.moved = true;
-                if (dragCard.moved) {
-                    var c = dragCard.c;
-                    c.tx += dx / k; c.ty += dy / k;
-                    byId[dragCard.id].x = c.baseX + c.tx;
-                    byId[dragCard.id].y = c.baseY + c.ty;
-                    c.g.setAttribute('transform', 'translate(' + c.tx + ',' + c.ty + ')');
-                    dragCard.sx = ev.clientX; dragCard.sy = ev.clientY;
-                    updateEdges();
-                }
-                return;
-            }
             if (!pan) return;
+            if (Math.abs(ev.clientX - pan.x) + Math.abs(ev.clientY - pan.y) > 6) pan.moved = true;
             pan.ax += ev.clientX - pan.x; pan.ay += ev.clientY - pan.y;
             pan.x = ev.clientX; pan.y = ev.clientY;
             if (!pan.r) {
@@ -2824,14 +2772,11 @@
         function endPtr(ev) {
             delete pointers[ev.pointerId];
             if (Object.keys(pointers).length < 2) lastPinch = 0;
-            if (Object.keys(pointers).length === 0) pan = null;
-            if (dragCard) {
-                dragCard.c.g.classList.remove('dragging'); board.classList.remove('dragging');
-                var wasDrag = dragCard.moved;
-                var cid = dragCard.id;
-                dragCard = null;
-                // 未拖拽 = 单击 → 打开卡片目标（文件/链接卡带 <a>；Obsidian 语义）
-                if (!wasDrag && ev.target) {
+            if (Object.keys(pointers).length === 0) {
+                var wasPan = pan && pan.moved;
+                pan = null;
+                // 未平移的单击 → 打开卡片目标（文件/链接卡带 <a>；Obsidian 阅读语义）
+                if (!wasPan && ev.target) {
                     var a = ev.target.closest('a[href]');
                     var note = ev.target.closest('.cv-content a[data-note]');
                     if (a) {
@@ -2848,29 +2793,6 @@
         }
         board.addEventListener('pointerup', endPtr);
         board.addEventListener('pointercancel', endPtr);
-        function updateEdges() {
-            edges.forEach(function (e) {
-                var p1 = sidePt2(e.a, e.fs), p2 = sidePt2(e.b, e.ts);
-                var d1 = DIR[e.fs] || [1, 0], d2 = DIR[e.ts] || [-1, 0];
-                var dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
-                var kk = Math.max(30, Math.min(dist / 2, 120));
-                var c1 = [p1[0] + d1[0] * kk, p1[1] + d1[1] * kk], c2 = [p2[0] + d2[0] * kk, p2[1] + d2[1] * kk];
-                e.path.setAttribute('d', 'M ' + p1[0] + ' ' + p1[1] + ' C ' + c1[0] + ' ' + c1[1] + ', ' + c2[0] + ' ' + c2[1] + ', ' + p2[0] + ' ' + p2[1]);
-                var ax = p2[0] - c2[0], ay = p2[1] - c2[1], L = Math.hypot(ax, ay) || 1;
-                ax /= L; ay /= L;
-                var s = 8, px = -ay, py = ax;
-                e.tri.setAttribute('points', p2[0] + ',' + p2[1] + ' '
-                    + (p2[0] - ax * s + px * s * 0.45) + ',' + (p2[1] - ay * s + py * s * 0.45) + ' '
-                    + (p2[0] - ax * s - px * s * 0.45) + ',' + (p2[1] - ay * s - py * s * 0.45));
-            });
-        }
-        function sidePt2(n, side) {
-            var x = n.x || 0, y = n.y || 0, w = n.width || 0, h = n.height || 0;
-            if (side === 'top') return [x + w / 2, y];
-            if (side === 'bottom') return [x + w / 2, y + h];
-            if (side === 'left') return [x, y + h / 2];
-            return [x + w, y + h / 2];
-        }
     }
     // SSR 直达的触发在 enterApp 的 SSR_CANVAS 分支内（时序原因，见该处注释）；SPA 点击走 selectFile 分支
 
@@ -3492,18 +3414,20 @@
         // 标签页：#tag/<name>（兼容 hash 前导斜杠 #/tag/... 与 #tag/...）
         var tm = h.replace(/^\//, '').match(/^tag\/(.+)$/);
         if (tm) {
-            showTag(tm[1]);
+            // 标签名可能在 hash 里被 URL 编码（中文/嵌套标签 #a/b）：解码后匹配
+            var tagName;
+            try { tagName = decodeURI(tm[1]); } catch (e) { tagName = tm[1]; }
+            // 规范化标签页地址到首页路径名（/#/tag/<name>）：标签页是靠片段导航（location.hash）
+            // 打开的，此时 pathname 还残留在旧文章路径（如 /Article.md#/tag/...）。若不改掉，
+            // 地址栏会一直指向旧文章：刷新先闪旧文再切标签、标签列表里点文章时 selectFile 因
+            // pathname 为 .md 而跳过更新地址、甚至 URL 与显示内容完全不符。
+            try { if (location.pathname !== '/') history.replaceState(null, '', '/#/tag/' + tm[1]); } catch (e) {}
+            showTag(tagName);
             return;
         }
         if (!h) {
-            // hash 为空 → 回到首页（渲染首页文章正文）
-            $('md-view').style.display = 'none';
-            $('tag-view').style.display = 'none';
-            $('doc-wrap').style.display = 'none';
-            $('archive-view').style.display = '';
-            $('toc-panel').style.display = 'none';
+            // hash 为空 → 回到首页（与普通文章完全一致的渲染管线）
             renderHome();
-            renderRecentNotes();
             // 重置滚动位置（避免回归档时错位）
             $('content').scrollTop = 0;
             return;
@@ -3529,24 +3453,20 @@
     // SPA 路径导航（pushState）的返回/前进：popstate 时按当前路径恢复文章或回首页
     window.addEventListener('popstate', function () {
         var h = decodeURI(location.hash.replace(/^#/, ''));
-        // hash 本身是文档路由（#dir/note.md，页内 wikilink 的往返）→ 按 hash 走，
-        // 不能落到 pathname 分支：片段导航时 pathname 还是旧文章，会把刚打开的文章覆盖回去
-        if (h && /\.(md|canvas)$/i.test(h)) {
+        // 任意非空 hash（文章路径 / 标签页 #/tag/... / 数字ID）都交给 hash 路由：
+        // 片段导航（location.hash、锚点、标签点击）会触发 popstate，此时 pathname
+        // 仍是旧文章，不能优先用 pathname 恢复——否则刚打开的标签列表/文章会被覆盖回旧文章。
+        if (h) {
             handleHash();
             return;
         }
+        // 无 hash：pushState 路径导航（/xxx.md）的返回/前进按 pathname 恢复
         var p = location.pathname.replace(/^\//, '');
         if (/(\.md|\.canvas)$/i.test(p)) {
             selectFile({ path: p });
-        } else if (location.hash) {
-            handleHash();
         } else {
             hideSpecialViews();  // 返回首页：清掉可能残留的 PDF/画布/图谱（互斥）
-            $('md-view').style.display = 'none';
-            $('doc-wrap').style.display = 'none';
-            $('archive-view').style.display = '';
-            $('toc-panel').style.display = 'none';
-            $('content').scrollTop = 0;
+            renderHome();
         }
     });
 
@@ -3558,7 +3478,7 @@
 })();
 
 // 滚动条宽度测量：#content 内部滚动条的宽度写入 CSS 变量 --sbw，
-// 供 .doc-wrap/.archive-flex translate 补偿（否则滚动条会让居中偏左约半个滚动条宽）
+// 供 .doc-wrap translate 补偿（否则滚动条会让居中偏左约半个滚动条宽）
 (function () {
     var ce = document.getElementById('content');
     if (!ce) return;
