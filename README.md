@@ -18,15 +18,9 @@
 ![WebDAV](https://img.shields.io/badge/WebDAV-Obsidian%20Sync-7c3aed?style=flat-square)
 ![AI RAG](https://img.shields.io/badge/AI-RAG%20QnA-f59e0b?style=flat-square)
 
-[**官方站点 · Official Site**](https://docs.dasiwo.com) · [**邮箱 · contact@dasiwo.com**](mailto:contact@dasiwo.com)
+[**官方站点**](https://docs.dasiwo.com) · [**核心特性**](#核心特性) · [**快速部署**](#快速部署) · [**详细文档**](#详细文档)
 
 </div>
-
----
-
-**目录 · TOC**
-
-[这是什么](#这是什么) · [核心特性](#核心特性) · [快速部署](#快速部署) · [详细文档](#详细文档) · [许可证](#许可证)
 
 ---
 

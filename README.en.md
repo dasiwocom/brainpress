@@ -18,15 +18,9 @@
 ![WebDAV](https://img.shields.io/badge/WebDAV-Obsidian%20Sync-7c3aed?style=flat-square)
 ![AI RAG](https://img.shields.io/badge/AI-RAG%20QnA-f59e0b?style=flat-square)
 
-[**Official Site · docs.dasiwo.com**](https://docs.dasiwo.com) · [**Email · contact@dasiwo.com**](mailto:contact@dasiwo.com)
+[**Official Site**](https://docs.dasiwo.com) · [**Features**](#features) · [**Deploy**](#deploy) · [**Documentation**](#documentation)
 
 </div>
-
----
-
-**TOC**
-
-[What is this](#what-is-this) · [Features](#features) · [Deploy](#deploy) · [Documentation](#documentation) · [License](#license)
 
 ---
 
