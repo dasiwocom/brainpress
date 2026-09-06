@@ -27,7 +27,15 @@
         return decodeURIComponent(escape(atob(s)));
     }
     function protectObsidian(text) {
-        return text
+        // 围栏代码块(```/~~~)整块摘出保护：块内 $ 变量($uri 等)、[[ ]]、![[ ]] 都是代码，
+        // 不能被公式/嵌入/链接正则误判（否则 nginx 示例里的 $uri 会被当 LaTeX 吞掉 $）。
+        // 还原放在最后，marked 渲染前代码块已恢复原样，内部内容始终不碰占位替换。
+        var fences = [];
+        var shielded = text.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, function (m) {
+            fences.push(m);
+            return '%%OBS_FENCE%%' + fences.length + '%%END%%';
+        });
+        return shielded
             // 块级公式先替换，避免内联正则吃掉 $$ 的定界符；I/D 标记行内/块级
             .replace(/\$\$([\s\S]+?)\$\$/g, function (m, inner) {
                 if (!inner.trim()) return m;
@@ -42,6 +50,9 @@
             })
             .replace(/\[\[([^\]]+)\]\]/g, function (m, inner) {
                 return '%%OBS_LINK%%' + b64e(inner) + '%%END%%';
+            })
+            .replace(/%%OBS_FENCE%%(\d+)%%END%%/g, function (m, i) {
+                return fences[Number(i) - 1];
             });
     }
     function restoreObsidian(html) {

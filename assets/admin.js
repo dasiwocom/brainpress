@@ -2,8 +2,8 @@
  * 依赖：页面内联的 window.ADMIN_MENU_MD（侧滑菜单 md 内容）
  */
 function $(id) { return document.getElementById(id); }
-// CSRF token：后台配置 GET 派发，写接口提交时回传（admin.php 校验）
-var CSRF_TOKEN = '';
+// CSRF token：由后台页面直接注入（window.CSRF_TOKEN），无注入时才从配置 GET 兜底
+var CSRF_TOKEN = window.CSRF_TOKEN || '';
 // 三栏布局初始化
 var appEl = $('app');
 if (appEl) appEl.classList.add('show');
@@ -96,7 +96,7 @@ function applyFontPreset(preset) {
 }
 fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function (d) {
     if (!d.ok) return;
-    CSRF_TOKEN = d.csrf || '';
+    if (!CSRF_TOKEN) CSRF_TOKEN = d.csrf || '';
     try { $('dav-url').textContent = d.webdav_url; } catch (e) { console.log('restore dav:', e); }
     try { davAccounts = (d.webdav_mounts || []).map(function (m) { return { user: m.user || '', pass: m.pass || '', path: m.path || '' }; }); renderDavRows(); } catch (e) { console.log('restore webdav_mounts:', e); }
     try { $('minio-endpoint').value = d.minio.endpoint; } catch (e) { console.log('restore minio:', e); }

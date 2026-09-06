@@ -68,7 +68,7 @@ function handle_api(string $uri, string $method, array $config): never
     // 文件树（按渲染开关多选合并：本地 vault/ + MinIO 桶）
     if ($uri === '/api/list' && $method === 'GET') {
         $renderWebdav = $config['render_webdav'] ?? false;
-        $renderMinio = $config['render_minio'] ?? true;
+        $renderMinio = $config['render_minio'] ?? false;
         $tree = [];
         $seen = []; // 同名去重（本地优先）
 
@@ -117,7 +117,7 @@ function handle_api(string $uri, string $method, array $config): never
     if ($uri === '/api/file' && $method === 'GET') {
         $rel = (string)($_GET['path'] ?? '');
         $renderWebdav = $config['render_webdav'] ?? false;
-        $renderMinio = $config['render_minio'] ?? true;
+        $renderMinio = $config['render_minio'] ?? false;
 
         // Custom Path 优先（最多 5 条）：目录 → rel 必须落在目录内；单文件 → 只匹配该文件（防路径穿越）
         $customPaths = $config['custom_paths'] ?? [];

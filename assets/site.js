@@ -4,6 +4,18 @@
 (function () {
     'use strict';
     var state = { path: null, tree: [] };
+    // 文章渲染缓存：目录树切换复用已渲染 HTML，免重复网络请求 + 整篇 md 重渲染（FIFO 上限防内存膨胀）
+    var _articleCache = {}, _articleCacheOrder = [];
+    function cacheArticle(path, html) {
+        if (!_articleCache[path]) {
+            _articleCacheOrder.push(path);
+            if (_articleCacheOrder.length > 50) {
+                var evicted = _articleCacheOrder.shift();
+                delete _articleCache[evicted];
+            }
+        }
+        _articleCache[path] = html;
+    }
     /* 渲染核心已抽到 assets/render.js（window.BP_Render，纯 Markdown→DOM，无壳状态耦合）；
        此处保留编排层：processObsidian 仍留 site.js（嵌入/锚点/反链需 state.tree/视图切换） */
     var esc = BP_Render.esc;
@@ -720,22 +732,27 @@
             return;
         }
         try {
-            // 先请求内容并渲染好，再一次性切换视图（避免空白闪烁）
-            var data = await api('/api/file?path=' + encodeURIComponent(node.path));
-            if (!data || !data.ok) {
-                toast((data && data.error) || 'Failed to read file');
-                return;
+            // 已渲染缓存命中：跳过网络与 md 重渲染，直接回显（来回切换秒开）
+            var html = _articleCache[node.path];
+            if (html === undefined) {
+                // 先请求内容并渲染好，再一次性切换视图（避免空白闪烁）
+                var data = await api('/api/file?path=' + encodeURIComponent(node.path));
+                if (!data || !data.ok) {
+                    toast((data && data.error) || 'Failed to read file');
+                    return;
+                }
+                // Excalidraw 判定：扩展名或内容特征（真实 frontmatter 标记 + 真实代码围栏——
+                // 宽松的子串匹配会把"介绍 excalidraw 的文档"误判成绘画文件）
+                var raw = data.content || '';
+                if (/\.excalidraw\.md$/i.test(node.path) || (raw.indexOf('excalidraw-plugin:') !== -1 && /^```compressed-json\s*$/m.test(raw))) {
+                    window.EXCALIDRAW_PATH = node.path;
+                    window.EXCALIDRAW_RAW = raw;
+                    renderExcalidraw();
+                    return;
+                }
+                html = mdToHtml(data.content);
+                cacheArticle(node.path, html);
             }
-            // Excalidraw 判定：扩展名或内容特征（真实 frontmatter 标记 + 真实代码围栏——
-            // 宽松的子串匹配会把"介绍 excalidraw 的文档"误判成绘画文件）
-            var raw = data.content || '';
-            if (/\.excalidraw\.md$/i.test(node.path) || (raw.indexOf('excalidraw-plugin:') !== -1 && /^```compressed-json\s*$/m.test(raw))) {
-                window.EXCALIDRAW_PATH = node.path;
-                window.EXCALIDRAW_RAW = raw;
-                renderExcalidraw();
-                return;
-            }
-            var html = mdToHtml(data.content);
             showArticle(html, node.path);
             // 更新地址栏：SPA 点击已 pushState 路径 URL 时不重复设 hash（避免 /path#path 冗余）
             try {

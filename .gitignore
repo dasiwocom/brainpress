@@ -1,5 +1,5 @@
-# Config with secrets
-/config.json
+# 本地真实配置（含密钥，不提交；config.json 是随仓库发布的干净模板，请勿塞入密钥）
+/config.local.json
 
 # ima 索引缓存（非秘密但属运行时产物）
 /ima_cache.json

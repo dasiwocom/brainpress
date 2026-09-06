@@ -465,7 +465,7 @@ var SITE_TITLE = <?php echo json_encode($siteTitle); ?>;
 var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : 'false'; ?>;
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
-<script src="/assets/render.js?v=20260905p" defer></script>
-<script src="/assets/site.js?v=20260905q" defer></script>
+<script src="/assets/render.js?v=20260905s" defer></script>
+<script src="/assets/site.js?v=20260905t" defer></script>
 </body>
 </html>

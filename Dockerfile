@@ -25,6 +25,11 @@ RUN chmod +x /usr/local/share/brainpress/entrypoint.sh
 # 应用本体 = 仓库根全部源码（含 vault/）。curl/mbstring 官方镜像已内置
 COPY . /var/www/html
 
+# 留一份独立的 vault 种子副本到 /seed/vault：entrypoint 检测「挂载卷为空」时
+# 拷贝进 /var/www/html/vault，让首次部署也能看到内置示例库（避免挂卷即空白）。
+# .dockerignore 挡掉的 config.json/cache/日志本就不含 vault 内容，无碍。
+COPY vault /seed/vault
+
 # 安全布局：Web 根 root 所有、代码只读（php:8.3-apache 基础镜像默认把
 # /var/www/html 设为 www-data 可写 1777，这里收掉）。
 # 运行时需要写的只有四处，单独建成 www-data 属主：

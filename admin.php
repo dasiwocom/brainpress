@@ -20,7 +20,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'webdav_mounts' => webdav_mounts_list($config),
             'webdav_url' => 'https://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . '/dav/',
             'render_webdav' => $config['render_webdav'] ?? false,
-            'render_minio' => $config['render_minio'] ?? true,
+            'render_minio' => $config['render_minio'] ?? false,
             'render_ima' => $config['render_ima'] ?? false,
             'custom_paths' => $config['custom_paths'] ?? [],
             'rss_feeds' => $config['rss_feeds'] ?? [],
@@ -225,6 +225,9 @@ if (strpos($uri, '/api/admin/') === 0) {
 /* --- 页面：/admin --- */
 if ($uri === '/admin') {
     $needsSetup = empty($config['password_hash']);
+    // 权限自检：config.json 写入不了就提前提示（避免设置密码时 500 摸不着头脑）
+    $cfgMissing = !file_exists(CONFIG_FILE);
+    $configWritable = $cfgMissing ? is_writable(dirname(CONFIG_FILE)) : is_writable(CONFIG_FILE);
     if ($needsSetup || !is_authed()) {
         header('Content-Type: text/html; charset=utf-8');
         ?>
@@ -265,9 +268,14 @@ if ($uri === '/admin') {
             cursor:pointer; font-family:inherit; outline:none;
         }
         .msg { margin-top:14px; font-size:13px; color:#ef4444; min-height:18px; text-align:center; }
+        .perm-warn { position:fixed; top:0; left:0; right:0; padding:10px 16px; font-size:13px; color:#b45309; background:#fef3c7; text-align:center; line-height:1.5; z-index:10; }
+        .perm-warn code { background:rgba(0,0,0,.06); padding:1px 5px; border-radius:4px; }
         </style>
         </head>
         <body>
+        <?php if (!$configWritable): ?>
+        <div class="perm-warn">⚠ config.json 不可写（PHP 用户对目录/文件无写权限）<br>请在服务器执行：<code>chown -R www:www <?php echo htmlspecialchars(dirname(CONFIG_FILE)); ?></code>，再刷新本页</div>
+        <?php endif; ?>
         <div class="card">
             <div class="logo">BrainPress</div>
             <div class="sub"><?php echo $needsSetup ? 'Set a password to protect this site' : 'Enter password to continue'; ?></div>
@@ -335,6 +343,7 @@ if ($uri === '/admin') {
     <title>Admin — BrainPress</title>
     <script>
     var DEFAULT_LIGHT = <?php echo json_encode($config['default_light'] ?? false); ?>;
+    window.CSRF_TOKEN = <?php echo json_encode(csrf_token()); ?>;
     (function () {
         try {
             if (!DEFAULT_LIGHT && localStorage.getItem('vp-theme') === 'dark') {
