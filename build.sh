@@ -11,6 +11,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# 阿里云个人仓库不接受 BuildKit 的 OCI 空层（unknown manifest class for
+# application/vnd.oci.empty.v1+json），强制传统构建器生成 Docker schema2 清单
+export DOCKER_BUILDKIT=0
+
 REGISTRY="crpi-k60hf4g69i7wfk22.cn-hongkong.personal.cr.aliyuncs.com"
 REPO="dasiwocom/brainpress"
 VERSION="${1:-latest}"
