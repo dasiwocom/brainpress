@@ -68,6 +68,18 @@
         return data;
     }
 
+    // 与 PHP tree_to_md 对齐（rawurlencode + 还原斜杠）：文件名含空格/括号/加号/逗号等字符时，
+    // 树 markdown 的链接 URL 必须预编码，否则 marked 解析不出 <a> 或 href 错乱
+    function pathHref(path) {
+        return encodeURIComponent(path).replace(/[!'()*]/g, function (c) {
+            return '%' + c.charCodeAt(0).toString(16).toUpperCase();
+        }).replace(/%2F/g, '/');
+    }
+    // 完整解码路径片段：decodeURI 会保留 %2B/%2C 等保留字符的转义，二次编码后路径失配 → 文件不存在
+    function decPath(s) {
+        try { return decodeURIComponent(s); } catch (e) { return decodeURI(s); }
+    }
+
     function renderHome() {
         if (!window.HOME_MD) {
             hideSpecialViews();
@@ -167,7 +179,7 @@
         if (window.SSR_MD) {
             renderHome(); // 预渲染主页（隐藏状态）：SSR 直达时主页默认未渲染，logo 回首页需立即可用
             var h0 = '';
-            try { h0 = decodeURI(location.hash.replace(/^#/, '')); } catch (e) {}
+            try { h0 = decPath(location.hash.replace(/^#/, '')); } catch (e) {}
             // 直达标签页（/Article.md#/tag/<name>）：不渲染正文，直接进标签页，避免先闪一遍文章
             if (h0 && /^\/?tag\//.test(h0)) {
                 state.path = '';
@@ -229,7 +241,7 @@
         // 带 hash（直达文章）：完整路径立即加载（selectFile 不依赖树，避免黑屏等待 loadTree）；
         // 数字 ID / 纯文件名依赖 _docMap（loadTree 构建），保持隐藏等 loadTree 后 handleHash 处理
         var h = '';
-        try { h = decodeURI(location.hash.replace(/^#/, '')); } catch (e) {}
+        try { h = decPath(location.hash.replace(/^#/, '')); } catch (e) {}
         if (h) {
             var tm = h.replace(/^\//, '').match(/^tag\/(.+)$/);
             if (tm) {
@@ -311,7 +323,7 @@
                     if (/^\d+$/.test(h) && window._docMap && window._docMap[h]) {
                         path = window._docMap[h];
                     } else {
-                        path = decodeURI(h);
+                        path = decPath(h);
                         // 兜底：纯文件名（无路径前缀）时查 _docMap 显示名映射
                         if (path.indexOf('/') === -1 && window._docMap && window._docMap[path]) {
                             path = window._docMap[path];
@@ -2712,7 +2724,7 @@
                 if (item.rss_item || item.rss_placeholder) return; // RSS 占位/文章不进菜单 markdown（动态加载）
                 if (is_media(item.name) || is_image(item.name)) return;
                 var name = item.name.replace(/\.(md|pdf|canvas|html)$/i, '');
-                var href = item.path.replace(/%2F/g, '/');
+                var href = pathHref(item.path);
                 lines.push(prefix + '- [' + name + '](/' + href + ')');
             }
         });
@@ -2806,7 +2818,7 @@
                         var h = href.replace(/^#/, '');
                         if (!h) return;
                         setFrontDrawer(false);
-                        selectFile({ path: decodeURI(h) });
+                        selectFile({ path: decPath(h) });
                     });
                 })(as[j]);
             }
@@ -2928,7 +2940,7 @@
                         if (aliasG && href === '/' + aliasG) { window.location.href = href; return; }
                         var h = href.replace(/^#/, '');
                         if (!h) return;
-                        selectFile({ path: decodeURI(h) });
+                        selectFile({ path: decPath(h) });
                     }
                 };
                 leftTree.addEventListener('click', leftTree._treeClickHandler);
@@ -3003,7 +3015,7 @@
                 if (aliasG && href === '/' + aliasG) { window.location.href = href; return; }
                 var h = href.replace(/^#/, '');
                 if (!h) return;
-                selectFile({ path: decodeURI(h) });
+                selectFile({ path: decPath(h) });
             }
         });
     })();
@@ -3024,7 +3036,7 @@
         if (/(\.md|\.canvas|\.html)$/i.test(href) && href.charAt(0) === '/') {
             e.preventDefault();
             var p = href.substring(1);
-            try { p = decodeURI(p); } catch (err) {}  // 菜单/内链 href 带 URL 编码 → 解码后再查（防双重编码）
+            try { p = decPath(p); } catch (err) {}  // 菜单/内链 href 带 URL 编码 → 解码后再查（防双重编码）
             try { history.pushState(null, '', href); } catch (err) {}
             selectFile({ path: p });
         }
@@ -3059,7 +3071,7 @@
             }
         } else if (h) {
             // 完整路径直达（新逻辑：#posts/draft/xxx.md）
-            var p = decodeURI(h);
+            var p = decPath(h);
             // 兜底：纯文件名（无路径前缀）时查 _docMap 显示名映射
             if (p.indexOf('/') === -1 && window._docMap && window._docMap[p]) {
                 p = window._docMap[p];
@@ -3072,7 +3084,7 @@
     window.addEventListener('hashchange', handleHash);
     // SPA 路径导航（pushState）的返回/前进：popstate 时按当前路径恢复文章或回首页
     window.addEventListener('popstate', function () {
-        var h = decodeURI(location.hash.replace(/^#/, ''));
+        var h = decPath(location.hash.replace(/^#/, ''));
         // 任意非空 hash（文章路径 / 标签页 #/tag/... / 数字ID）都交给 hash 路由：
         // 片段导航（location.hash、锚点、标签点击）会触发 popstate，此时 pathname
         // 仍是旧文章，不能优先用 pathname 恢复——否则刚打开的标签列表/文章会被覆盖回旧文章。

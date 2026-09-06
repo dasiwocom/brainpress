@@ -1,6 +1,7 @@
 # Docker 构建上下文 = 仓库根（唯一源码）。这里只排除运行时数据，不入镜像。
 .git
 config.json
+config.local.json
 ima_cache.json
 cache/
 *.log
