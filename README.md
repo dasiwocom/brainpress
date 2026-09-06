@@ -1,5 +1,7 @@
 <div align="center">
 
+[**简体中文**](./README.md) · [**English**](./README.en.md)
+
 # 🧠 BrainPress
 
 **如果 Obsidian 是你的第二大脑，BrainPress 就是大脑印刷机。**  
@@ -102,14 +104,15 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 ## 📚 详细文档 | Documentation
 
-部署细节、全部配置字段、公开 API 参考都放在文档站（与 GitHub 同步维护），README 不再堆砌：
+详细文档都以 Markdown 存放在仓库 `vault/BrainPress/`（与站点内容同源，全部字段见 [Configuration](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md)）：
 
-| 内容 | 入口 |
-|------|------|
-| 部署 / 安全加固 | [vault/BrainPress/Deployment.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.zh.md) |
-| 配置字段全解 | [vault/BrainPress/Configuration.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md) |
-| API 参考 | [vault/BrainPress/API-Reference.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.zh.md) |
-| GitHub 仓库 | https://github.com/dasiwocom/brainpress |
+| 文档 | 说明 | 阅读 |
+|------|------|------|
+| **Introduction** | 总览 / 架构 / 快速配置 | [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.zh.md) · [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.md) |
+| **Getting Started** | 上手教程 | [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.zh.md) · [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.md) |
+| **Deployment** | 部署与安全加固 | [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.zh.md) · [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.md) |
+| **Configuration** | 全部配置字段 | [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md) · [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.md) |
+| **API Reference** | API 详解 | [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.zh.md) · [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.md) |
 
 ---
 
