@@ -18,13 +18,13 @@
 ![WebDAV](https://img.shields.io/badge/WebDAV-Obsidian%20Sync-7c3aed?style=flat-square)
 ![AI RAG](https://img.shields.io/badge/AI-RAG%20QnA-f59e0b?style=flat-square)
 
-[**官方站点**](https://docs.dasiwo.com) · [**核心特性**](#核心特性) · [**快速部署**](#快速部署) · [**详细文档**](#详细文档)
+[**官方站点**](https://docs.dasiwo.com) · [**核心特性**](#features) · [**快速部署**](#deploy) · [**详细文档**](#docs)
 
 </div>
 
 ---
 
-<a name="这是什么"></a>
+<a name="about"></a>
 
 ## ✨ 这是什么？
 
@@ -36,7 +36,7 @@
 
 ---
 
-<a name="核心特性"></a>
+<a name="features"></a>
 
 ## 🎯 核心特性
 
@@ -54,7 +54,7 @@
 
 ---
 
-<a name="快速部署"></a>
+<a name="deploy"></a>
 
 ## 🚀 快速部署
 
@@ -106,7 +106,7 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 ---
 
-<a name="详细文档"></a>
+<a name="docs"></a>
 
 ## 📚 详细文档
 
@@ -122,7 +122,7 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 ---
 
-<a name="许可证"></a>
+<a name="license"></a>
 
 ## 📄 许可证
 
