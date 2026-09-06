@@ -178,7 +178,7 @@ html.dark #vp-nav { background:transparent; -webkit-backdrop-filter:saturate(1.2
     transform:translate3d(-100%,0,0);
     will-change:transform;
     transition:transform .2s ease-out;
-    overflow-y:auto;
+    overflow-y:auto; overflow-x:hidden;
 }
 #vp-drawer.open { transform:translate3d(0,0,0); }
 /* 抽屉打开时锁定页面滚动 */
@@ -215,7 +215,7 @@ html.dark .drawer-md a:active { color:var(--vp-c-brand); }
     display:block; flex:1; min-width:0;
 }
 .drawer-md li.has-children > ul {
-    flex-basis:100%;
+    flex-basis:100%; min-width:0;
 }
 /* 目录项左侧箭头（JS 插入的 SVG chevron 元素）：收起 > / 展开 rotate 90° ↓ */
 .drawer-md .dir-arrow {

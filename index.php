@@ -291,7 +291,7 @@ var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
 </script>
 
 <script src="/assets/lz-string.min.js" defer></script>
-    <link rel="stylesheet" href="/assets/site.css?v=20260905k">
+    <link rel="stylesheet" href="/assets/site.css?v=20260906a">
 <style>/* 阅读列宽（后台可调）：覆盖 site.css 的默认值 */
 :root { --vp-content-w:<?php echo $contentW; ?>px; }
 </style>
