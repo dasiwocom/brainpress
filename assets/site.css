@@ -49,7 +49,7 @@ html.dark .hljs-meta, html.dark .hljs-tag { color:#9b9b9b; }
     /* 图谱专用色（完全照搬 Obsidian 默认主题：亮=深灰，暗=白灰，线=浅灰） */
     --graph-node:#4a4a4a;
     --graph-node-focused:#202020;
-    --graph-line:rgba(0,0,0,.15);
+    --graph-line:rgba(74,74,74,.13);
     --graph-line-hot:#202020;
 }
 html.dark {
@@ -70,7 +70,7 @@ html.dark {
     /* 图谱专用颜色——暗色：白灰点 + 浅灰连线（Obsidian 默认主题） */
     --graph-node:#e3e3e3;
     --graph-node-focused:#ffffff;
-    --graph-line:rgba(255,255,255,.20);
+    --graph-line:rgba(255,255,255,.16);
     --graph-line-hot:#ffffff;
 }
 html,body {
@@ -792,7 +792,7 @@ html.dark .cv-group { stroke:#b8b857; }
 .graph-empty { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--vp-c-text-3); font-size:14px; }
 /* 连线：Quartz 同款——svg stroke 用 CSS 变量，亮色深灰/暗色浅灰，始终与背景对比 */
 .graph-link { stroke:var(--graph-line); stroke-width:1; opacity:1; transition:opacity .3s ease, stroke-width .3s ease, stroke .3s ease; }
-.graph-link-hot { opacity:1 !important; stroke-width:1.8; stroke:var(--graph-line-hot) !important; }
+.graph-link-hot { opacity:1 !important; stroke-width:1.2; stroke:var(--graph-line-hot) !important; }
 .graph-link-dim { opacity:.08 !important; }
 .graph-node-fill { fill:var(--graph-node); }
 .graph-node-focused { fill:var(--graph-node-focused); }
