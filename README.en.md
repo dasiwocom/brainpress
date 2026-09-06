@@ -105,11 +105,11 @@ All docs ship as Markdown inside the repo at `vault/BrainPress/` — the same so
 
 | Doc | About | Read |
 |-----|-------|------|
-| **Introduction** | Overview / architecture / quick config | [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.md) · [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.zh.md) |
-| **Getting Started** | Tutorial | [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.md) · [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.zh.md) |
-| **Deployment** | Deploy & security hardening | [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.md) · [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.zh.md) |
-| **Configuration** | Every config field | [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.md) · [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md) |
-| **API Reference** | Public API details | [EN](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.md) · [ZHS](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.zh.md) |
+| **Introduction** | Overview / architecture / quick config | [Introduction.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.md) |
+| **Getting Started** | Tutorial | [GettingStarted.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.md) |
+| **Deployment** | Deploy & security hardening | [Deployment.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.md) |
+| **Configuration** | Every config field | [Configuration.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.md) |
+| **API Reference** | API details | [API-Reference.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.md) |
 
 ---
 
