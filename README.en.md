@@ -111,13 +111,13 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 All docs ship as Markdown inside the repo at `vault/BrainPress/` — the same source that powers your site:
 
-| Doc | About | Read |
-|-----|-------|------|
-| **Introduction** | Overview / architecture / quick config | [Introduction.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.md) |
-| **Getting Started** | Tutorial | [GettingStarted.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.md) |
-| **Deployment** | Deploy & security hardening | [Deployment.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.md) |
-| **Configuration** | Every config field | [Configuration.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.md) |
-| **API Reference** | API details | [API-Reference.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.md) |
+| Doc | Read |
+|-----|------|
+| **Introduction** · Overview / architecture / quick config | [Introduction.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.md) |
+| **Getting Started** · Tutorial | [GettingStarted.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.md) |
+| **Deployment** · Deploy & security hardening | [Deployment.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.md) |
+| **Configuration** · Every config field | [Configuration.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.md) |
+| **API Reference** · API details | [API-Reference.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.md) |
 
 ---
 

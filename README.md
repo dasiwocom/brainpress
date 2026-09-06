@@ -112,13 +112,13 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 详细文档都以 Markdown 存放在仓库 `vault/BrainPress/`，与站点内容同源：
 
-| 文档 | 说明 | 入口 |
-|------|------|------|
-| **Introduction** | 总览 / 架构 / 快速配置 | [Introduction.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.zh.md) |
-| **Getting Started** | 上手教程 | [GettingStarted.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.zh.md) |
-| **Deployment** | 部署与安全加固 | [Deployment.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.zh.md) |
-| **Configuration** | 全部配置字段 | [Configuration.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md) |
-| **API Reference** | API 详解 | [API-Reference.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.zh.md) |
+| 文档 | 入口 |
+|------|------|
+| **Introduction** · 总览 / 架构 / 快速配置 | [Introduction.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Introduction.zh.md) |
+| **Getting Started** · 上手教程 | [GettingStarted.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/GettingStarted.zh.md) |
+| **Deployment** · 部署与安全加固 | [Deployment.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.zh.md) |
+| **Configuration** · 全部配置字段 | [Configuration.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md) |
+| **API Reference** · API 详解 | [API-Reference.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.zh.md) |
 
 ---
 
