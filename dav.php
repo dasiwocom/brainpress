@@ -1,6 +1,6 @@
 <?php
 /**
- * BrainPress v1.1.0 — WebDAV 端点（Obsidian Remotely Save 同步）
+ * BrainPress v3.0.0 — WebDAV 端点（Obsidian Remotely Save 同步）
  * 由 index.php 在 /dav 路径命中时 require；生产 nginx 无需感知本文件。
  */
 

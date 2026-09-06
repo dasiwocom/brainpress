@@ -1,6 +1,6 @@
 <?php
 /**
- * BrainPress v1.0.0 — 公共函数层
+ * BrainPress v3.0.0 — 公共函数层
  * 被 index.php（主站）和 admin.php（后台）共同 require。
  * 包含：session/config 初始化、MinIO S3 直连、认证、文件扫描、工具函数。
  */

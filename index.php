@@ -1,6 +1,6 @@
 <?php
 /**
- * BrainPress v1.1.0 — 文档站（主站入口）
+ * BrainPress v3.0.0 — 文档站（主站入口）
  * 公共函数层见 functions.php；公开 API 见 api.php；WebDAV 见 dav.php；
  * 后台见 admin.php（nginx 转发 /admin、/api/admin/）。
  */

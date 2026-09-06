@@ -1,6 +1,6 @@
 <?php
 /**
- * BrainPress v1.1.0 — 公开 API（/api/*）
+ * BrainPress v3.0.0 — 公开 API（/api/*）
  * 由 index.php 在 /api/ 路径命中时 require（生产 nginx 将 /api/ 交给主入口，无需感知本文件）。
  * 端点：setup/login/logout、list、file、search、graph、ask、article-list、llms.txt、note。
  * /api/admin/* 的配置管理在 admin.php（nginx 直接转发）。

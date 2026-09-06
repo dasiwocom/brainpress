@@ -1,6 +1,6 @@
 <?php
 /**
- * BrainPress v1.1.0 — 后台管理（独立入口，nginx 将 /admin 和 /api/admin/ 转发到此）
+ * BrainPress v3.0.0 — 后台管理（独立入口，nginx 将 /admin 和 /api/admin/ 转发到此）
  * 页面：/admin（未登录 → 登录页；已登录 → 配置面板）
  * API：/api/admin/config（GET 读取 / POST 保存）
  * 登录 API（/api/setup、/api/login、/api/logout）保留在 index.php（nginx /api/ 主路由）
