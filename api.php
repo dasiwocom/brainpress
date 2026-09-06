@@ -86,21 +86,8 @@ function handle_api(string $uri, string $method, array $config): never
         }
 
         if ($renderMinio) {
-            $minioTree = minio_ls('');
-            $minioTree = array_values(array_filter($minioTree, function ($n) use ($seen) {
-                // 目录/文件同名都跳过（本地优先）
-                return !isset($seen[$n['name']]);
-            }));
-            foreach ($minioTree as &$n) {
-                if ($n['type'] === 'dir') {
-                    $children = minio_ls($n['path']);
-                    // 过滤掉本地已有的同名文件
-                    $n['children'] = array_values(array_filter($children, function ($f) use ($seen) {
-                        return !isset($seen[$f['name']]);
-                    }));
-                }
-            }
-            unset($n);
+            // 按渲染类型开关过滤 + 本地同名优先 + 空目录剪除
+            $minioTree = minio_tree_filtered($config, '', $seen);
             $tree = array_merge($tree, $minioTree);
         }
 
@@ -128,6 +115,7 @@ function handle_api(string $uri, string $method, array $config): never
             $rp = realpath($customPath);
             if ($rp === false) continue;
             if (is_file($rp) && (is_md($rp) || is_canvas($rp)) && $rel === basename($rp)) {
+                if (!render_type_file_enabled($config, $rp)) fail('文件不存在');  // 渲染类型关闭 → 挂载文件视为不存在
                 $content = @file_get_contents($rp);
                 if ($content === false) fail('文件不可读');
                 if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -141,6 +129,7 @@ function handle_api(string $uri, string $method, array $config): never
                 // 目录挂载与主 vault 同级平权：rel 直接落在挂载根内解析（无前缀包装）
                 $full = realpath($rp . '/' . $rel);
                 if ($full !== false && strpos($full, $rp . '/') === 0 && is_file($full) && (is_md($full) || is_canvas($full))) {
+                    if (!render_type_file_enabled($config, $full)) fail('文件不存在');  // 渲染类型关闭 → 挂载文件视为不存在
                     $content = @file_get_contents($full);
                     if ($content === false) fail('文件不可读');
                     if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -163,6 +152,7 @@ function handle_api(string $uri, string $method, array $config): never
         // ima mount: rel matches the ima index → proxy-fetch content from the server (md/canvas/txt through the full-text pipeline; PDF through /vault/ stream)
         $imaEntry = ima_index_lookup($config, $rel);
         if ($imaEntry !== null) {
+            if (!render_type_file_enabled($config, $rel)) fail('文件不存在');  // 渲染类型关闭 → 视为不存在（与主 vault 一致）
             $raw = ima_read_raw($config, $rel);
             if ($raw === null) fail('file not found');
             $bytes = $raw['bytes'];
@@ -232,6 +222,7 @@ function handle_api(string $uri, string $method, array $config): never
             // 去掉可能的 posts/ 前缀（桶根就是文章根）
             $rel = preg_replace('#^posts/#', '', $rel);
             if (!is_md($rel) && !is_html($rel)) fail('文件不存在');
+            if (!render_type_file_enabled($config, $rel)) fail('文件不存在');  // 渲染类型关闭 → MinIO 文件视为不存在
             $content = minio_cat($rel);
             if ($content === null) fail('文件不存在');
             if (strlen($content) > MAX_FILE_SIZE) fail('文件过大');
@@ -364,6 +355,7 @@ function handle_api(string $uri, string $method, array $config): never
         $hits = [];
         foreach ($files as $f) {
             if (is_excluded($f['path'], $excludes)) continue;
+            if (!render_type_enabled($config, 'markdown')) continue;  // 渲染类型关闭 → 不参与 AI 检索
             $aiAbs = resolve_vault_file($f['path'], $config);
             if ($aiAbs === null) continue;
             $content = (string)@file_get_contents($aiAbs);

@@ -41,7 +41,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'ai_enabled' => $config['ai_enabled'] ?? true,
             'graph_show_labels' => $config['graph_show_labels'] ?? false,
             'graph_path' => $config['graph_path'] ?? '',
-            'render_types' => $config['render_types'] ?? ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true],
+            'render_types' => $config['render_types'] ?? ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true, 'png' => true],
             'article_footer' => $config['article_footer'] ?? true,
             'article_footer_html' => $config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026',
             'default_light' => $config['default_light'] ?? false,
@@ -179,6 +179,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'pdf'      => !isset($renderTypes['pdf'])      ? true : !empty($renderTypes['pdf']),
             'html'     => !isset($renderTypes['html'])     ? true : !empty($renderTypes['html']),
             'canvas'   => !isset($renderTypes['canvas'])   ? true : !empty($renderTypes['canvas']),
+            'png'      => !isset($renderTypes['png'])      ? true : !empty($renderTypes['png']),
         ];
         $config['default_light'] = !empty($body['default_light']);
         $config['front_drawer_expanded'] = !empty($body['front_drawer_expanded']);
@@ -528,6 +529,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="render-row"><span class="render-label">PDF renders <small>(.pdf)</small></span><button class="switch" id="switch-rt-pdf" aria-label="toggle pdf render"></button></div>
             <div class="render-row"><span class="render-label">HTML renders <small>(.html)</small></span><button class="switch" id="switch-rt-html" aria-label="toggle html render"></button></div>
             <div class="render-row"><span class="render-label">Canvas renders <small>(.canvas)</small></span><button class="switch" id="switch-rt-canvas" aria-label="toggle canvas render"></button></div>
+            <div class="render-row"><span class="render-label">PNG images render <small>(.png)</small></span><button class="switch" id="switch-rt-png" aria-label="toggle png render"></button></div>
             <div class="msg" id="msg-types"></div>
         </div>
 
@@ -608,7 +610,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     <script>
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260905h"></script>
+    <script src="/assets/admin.js?v=20260906d"></script>
     </body>
     </html>
     <?php

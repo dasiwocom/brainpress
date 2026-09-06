@@ -8,6 +8,12 @@ set -e
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT="${1:-8080}"
 
+# 本地配置优先：存在 config.local.json（git 忽略，可放密钥/本地开关）时用它，
+# 否则用随仓库发布的干净模板 config.json。Docker 部署用环境变量 BP_CONFIG_FILE 指向持久化配置。
+if [ -f "$DIR/config.local.json" ]; then
+    export BP_CONFIG_FILE="$DIR/config.local.json"
+fi
+
 if [ "$1" = "stop" ]; then
     pkill -f "php -S 127.0.0.1:.*$DIR/router.php" 2>/dev/null || pkill -f "php -S 127.0.0.1:8080" 2>/dev/null || true
     echo "已停止"

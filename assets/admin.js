@@ -72,6 +72,7 @@ bindSwitch('switch-rt-markdown');
 bindSwitch('switch-rt-pdf');
 bindSwitch('switch-rt-html');
 bindSwitch('switch-rt-canvas');
+bindSwitch('switch-rt-png');
 bindSwitch('switch-light');
 bindSwitch('switch-drawer');
 bindSwitch('switch-ai-enabled');
@@ -132,11 +133,12 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (d.graph_show_labels) $('switch-graph-labels').classList.add('on'); } catch (e) {}
     try { if (d.pin_navbar) $('switch-pin-nav').classList.add('on'); } catch (e) {}
     // 渲染文件类型开关（默认全开）
-    var rt = d.render_types || { markdown: true, pdf: true, html: true, canvas: true };
+    var rt = d.render_types || { markdown: true, pdf: true, html: true, canvas: true, png: true };
     try { if (rt.markdown !== false) $('switch-rt-markdown').classList.add('on'); } catch (e) {}
     try { if (rt.pdf !== false) $('switch-rt-pdf').classList.add('on'); } catch (e) {}
     try { if (rt.html !== false) $('switch-rt-html').classList.add('on'); } catch (e) {}
     try { if (rt.canvas !== false) $('switch-rt-canvas').classList.add('on'); } catch (e) {}
+    try { if (rt.png !== false) $('switch-rt-png').classList.add('on'); } catch (e) {}
     try { $('graph-path').value = d.graph_path || ''; } catch (e) {}
     try { $('site-title').value = d.site_title || 'BrainPress'; } catch (e) {}
     try { $('home-article').value = d.home_article || ''; } catch (e) {}
@@ -458,7 +460,8 @@ function saveConfig() {
             markdown: $('switch-rt-markdown').classList.contains('on'),
             pdf: $('switch-rt-pdf').classList.contains('on'),
             html: $('switch-rt-html').classList.contains('on'),
-            canvas: $('switch-rt-canvas').classList.contains('on')
+            canvas: $('switch-rt-canvas').classList.contains('on'),
+            png: $('switch-rt-png').classList.contains('on')
         },
         pin_navbar: $('switch-pin-nav').classList.contains('on'),
         graph_path: $('graph-path').value.trim(),

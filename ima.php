@@ -201,24 +201,32 @@ function ima_cache(array $config): array {
 function ima_tree(array $config, array $excludes): array {
     if (!ima_enabled($config)) return [];
     $data = ima_cache($config);
-    return ima_nested_to_tree($data['nested'] ?? [], $excludes);
+    return ima_nested_to_tree($data['nested'] ?? [], $excludes, $config['render_types'] ?? null);
+}
+
+/** ima 文件扩展名是否允许展示：主 vault 的目录树按 render_types 过滤，ima 挂载需一致（关闭 PDF 时 ima PDF 不再出现在树里） */
+function ima_type_allowed(string $ext, ?array $renderTypes): bool {
+    if ($ext === 'pdf')    return !array_key_exists('pdf', (array)$renderTypes) ? true : !empty($renderTypes['pdf']);
+    if ($ext === 'md')     return !array_key_exists('markdown', (array)$renderTypes) ? true : !empty($renderTypes['markdown']);
+    if ($ext === 'canvas') return !array_key_exists('canvas', (array)$renderTypes) ? true : !empty($renderTypes['canvas']);
+    if ($ext === 'txt')    return true;
+    return false; // 其它类型（docx/doc 等）不收录 —— 只渲染 md/pdf/canvas/txt
 }
 
 /** Convert the ima index's nested structure into scan_tree-equivalent entries */
-function ima_nested_to_tree(array $nested, array $excludes): array {
+function ima_nested_to_tree(array $nested, array $excludes, ?array $renderTypes = null): array {
     $items = [];
     foreach ($nested as $kb) {
         if (empty($kb['files']) && empty($kb['dirs'])) continue; // skip empty knowledge bases
         $node = ['name' => $kb['name'], 'path' => $kb['name'], 'type' => 'dir', 'children' => []];
         foreach (($kb['dirs'] ?? []) as $dir) {
-            $node['children'][] = ima_dir_node($dir, $kb['name']);
+            $sub = ima_dir_node($dir, $kb['name'], $renderTypes);
+            if (!empty($sub['children'])) $node['children'][] = $sub; // 空目录（内容全被渲染类型过滤）不展示
         }
         foreach (($kb['files'] ?? []) as $f) {
             $ext = $f['type'];
-            if ($ext === 'pdf' || $ext === 'md' || $ext === 'canvas' || $ext === 'txt') {
-                $node['children'][] = ['name' => $f['name'], 'path' => $kb['name'] . '/' . $f['name'], 'type' => 'file'];
-            }
-            // other types (docx, etc.) aren't collected — BrainPress only renders md/pdf/canvas
+            if (!ima_type_allowed($ext, $renderTypes)) continue;
+            $node['children'][] = ['name' => $f['name'], 'path' => $kb['name'] . '/' . $f['name'], 'type' => 'file'];
         }
         if (!empty($node['children'])) $items[] = $node;
     }
@@ -226,15 +234,16 @@ function ima_nested_to_tree(array $nested, array $excludes): array {
 }
 
 /** Recursively build an ima directory node; $ancPath = ancestor path prefix */
-function ima_dir_node(array $dir, string $ancPath): array {
+function ima_dir_node(array $dir, string $ancPath, ?array $renderTypes = null): array {
     $path = $ancPath . '/' . $dir['name'];
     $children = [];
     foreach (($dir['dirs'] ?? []) as $sub) {
-        $children[] = ima_dir_node($sub, $path);
+        $subNode = ima_dir_node($sub, $path, $renderTypes);
+        if (!empty($subNode['children'])) $children[] = $subNode;
     }
     foreach (($dir['files'] ?? []) as $f) {
         $ext = $f['type'];
-        if (in_array($ext, ['pdf', 'md', 'canvas', 'txt'], true)) {
+        if (ima_type_allowed($ext, $renderTypes)) {
             $children[] = ['name' => $f['name'], 'path' => $path . '/' . $f['name'], 'type' => 'file'];
         }
     }

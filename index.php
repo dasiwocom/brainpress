@@ -49,7 +49,7 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
         $mainRoot = realpath(PANEL_DIR . '/vault');
         $localFull = $mainRoot === false ? false : realpath($mainRoot . '/' . $rel);
         if ($localFull !== false && strpos($localFull, $mainRoot . '/') === 0 && is_file($localFull)) {
-            if (is_md($localFull) || is_pdf($localFull) || is_canvas($localFull) || is_html($localFull)) {
+            if (is_md($localFull) || is_pdf($localFull) || is_canvas($localFull) || is_html($localFull) || is_png($localFull)) {
                 if (is_excluded($rel, $config['exclude_paths'] ?? [])) fail('Not Found', 404); // 隐藏列表 → 视为不存在
                 if (is_md($localFull) && is_unpublished((string)@file_get_contents($localFull))) fail('Not Found', 404); // 选择性发布
                 if (!render_type_file_enabled($config, $localFull)) fail('Not Found', 404); // 渲染类型关闭 → 视为不存在
@@ -135,7 +135,7 @@ if (preg_match('#\.md$#i', $uri)) {
                 $ssrArticleContent = $rawContent;
             }
         }
-    } elseif (ima_index_lookup($config, $rel) !== null) {
+    } elseif (ima_index_lookup($config, $rel) !== null && render_type_enabled($config, 'markdown')) {
         // ima mount md: proxy-fetch body and inline it (open-and-read)
         if (!is_excluded($rel, $config['exclude_paths'] ?? [])) {
             $raw = ima_read_raw($config, $rel);

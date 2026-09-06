@@ -92,6 +92,7 @@
         "markdown": true,
         "pdf": true,
         "html": true,
-        "canvas": true
+        "canvas": true,
+        "png": true
     }
 }

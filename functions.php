@@ -145,6 +145,31 @@ function minio_cat(string $rel): ?string {
     return $body;
 }
 
+/** MinIO 文件树：按渲染类型开关过滤（只保留可渲染的 md/html；Markdown/HTML 关闭则对应隐藏），
+ *  $seen 为已由本地/其它来源占用的文件名（本地优先，重复名不显示）。空目录剪除。 */
+function minio_tree_filtered(array $config, string $prefix, array &$seen): array {
+    $rt = (array)($config['render_types'] ?? []);
+    $rtMd = !array_key_exists('markdown', $rt) ? true : !empty($rt['markdown']);
+    $rtHtml = !array_key_exists('html', $rt) ? true : !empty($rt['html']);
+    $out = [];
+    foreach (minio_ls($prefix) as $n) {
+        if (isset($seen[$n['name']])) continue;  // 与本地重名 → 本地优先
+        if (($n['type'] ?? '') === 'dir') {
+            $children = minio_tree_filtered($config, $n['path'], $seen);
+            if (!$children) continue;  // 过滤后空目录不显示
+            $out[] = ['name' => $n['name'], 'path' => $n['path'], 'type' => 'dir', 'children' => $children];
+            continue;
+        }
+        $ext = strtolower(pathinfo($n['name'], PATHINFO_EXTENSION));
+        if ($ext === 'md' && !$rtMd) continue;    // Markdown 渲染关闭
+        if ($ext === 'html' && !$rtHtml) continue; // HTML 渲染关闭
+        if ($ext !== 'md' && $ext !== 'html') continue;  // MinIO 只渲染 md/html，其余一律不展示
+        $seen[$n['name']] = true;
+        $out[] = ['name' => $n['name'], 'path' => $n['path'], 'type' => 'file'];
+    }
+    return $out;
+}
+
 /* ---------- 响应与认证 ---------- */
 
 function json_out(array $data, int $code = 200): never {
@@ -234,8 +259,13 @@ function is_html(string $path): bool {
     return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'html';
 }
 
+/** 是否为 PNG 图片（可作独立渲染类型开关） */
+function is_png(string $path): bool {
+    return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'png';
+}
+
 /** 渲染文件类型开关：某类型关闭则该类型文件视为不存在（文档树隐藏 + 直接访问 404 一致）。
- *  white-list：'markdown' | 'pdf' | 'html' | 'canvas'。缺省全开。 */
+ *  white-list：'markdown' | 'pdf' | 'html' | 'canvas' | 'png'。缺省全开。 */
 function render_type_enabled(array $config, string $type): bool {
     $rt = (array)($config['render_types'] ?? []);
     return !array_key_exists($type, $rt) ? true : !empty($rt[$type]);
@@ -245,6 +275,7 @@ function render_type_file_enabled(array $config, string $full): bool {
     if (is_pdf($full)) return render_type_enabled($config, 'pdf');
     if (is_html($full)) return render_type_enabled($config, 'html');
     if (is_canvas($full)) return render_type_enabled($config, 'canvas');
+    if (is_png($full)) return render_type_enabled($config, 'png');
     return true;
 }
 
@@ -340,12 +371,13 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
     }
     // 渲染文件类型白名单：关闭某类型则该类型文件不进入文档树/菜单/搜索（默认全开）
     if ($renderTypes === null) {
-        $renderTypes = ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true];
+        $renderTypes = ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true, 'png' => true];
     }
     $rtMarkdown = !empty($renderTypes['markdown']);
     $rtPdf      = !empty($renderTypes['pdf']);
     $rtHtml     = !empty($renderTypes['html']);
     $rtCanvas   = !empty($renderTypes['canvas']);
+    $rtPng      = !empty($renderTypes['png']);
     $items = [];
     $entries = scandir_tree_cached($dir);
     foreach ($entries as $entry) {
@@ -383,6 +415,7 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
             ];
         } elseif (is_image($full)) {
             if ($forMount) continue;  // 挂载目录不收录图片（无静态路由的死链）
+            if (is_png($full) && !$rtPng) continue;  // PNG 渲染关闭 → 树中不显示
             // 图片文件也收录（嵌入显示用）
             $items[] = [
                 'name' => $entry,
@@ -632,6 +665,7 @@ function merge_custom_trees(array $tree, array $config): array {
     foreach (custom_mount_roots($config) as $m) {
         if ($m['isFile']) {
             if (abs_entry_hits($m['root'], $absEx)) continue;   // 整个单文件挂载被隐藏
+            if (!render_type_file_enabled($config, $m['root'])) continue;  // 渲染类型关闭 → 挂载文件不显示
             $name = basename($m['root']);
             if (!isset($seen[$name])) {
                 $tree[] = ['name' => $name, 'path' => $name, 'type' => 'file'];
@@ -654,7 +688,7 @@ function merge_custom_trees(array $tree, array $config): array {
         }
         // 挂载内容与主 vault 同级平权：relPrefix='' 扫描后逐节点合并进顶层（同名目录递归并入、同名文件主 vault 优先），
         // 不包一层挂载名目录——custom 和 vault 本来就是同一层级的内容来源
-        $customTree = scan_tree($m['root'], '', [], $relPinDirs, $relPinArticles, true);
+        $customTree = scan_tree($m['root'], '', [], $relPinDirs, $relPinArticles, true, false, $config['render_types'] ?? null);
         $customTree = filter_abs_hidden($customTree, $m['root'], $absEx);
         merge_tree_node($tree, $customTree);
         $seen = [];
