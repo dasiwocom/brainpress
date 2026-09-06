@@ -106,30 +106,17 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 | 内容 | 入口 |
 |------|------|
-| 官网 & 全套文档 | **https://docs.dasiwo.com** |
-| 部署 / 安全加固 | [部署文档](https://docs.dasiwo.com/BrainPress/Deployment.zh.md) |
-| 配置字段全解 | [配置文档](https://docs.dasiwo.com/BrainPress/Configuration.zh.md) |
-| API 参考 | [API Reference](https://docs.dasiwo.com/BrainPress/API-Reference.zh.md) |
+| 部署 / 安全加固 | [vault/BrainPress/Deployment.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Deployment.zh.md) |
+| 配置字段全解 | [vault/BrainPress/Configuration.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md) |
+| API 参考 | [vault/BrainPress/API-Reference.zh.md](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/API-Reference.zh.md) |
 | GitHub 仓库 | https://github.com/dasiwocom/brainpress |
 
 ---
 
-## 🔒 安全提示 | Security Notes
-
-- `config.json` 含全部密钥（密码哈希、API Key、WebDAV 密码）——**必须阻止 Web 访问**。
-- ⚠️ 仓库公开：上传前确认 `config.json` 无真实密钥；一旦 commit 真实密钥会永久留在 git 历史。
-- 管理员密码以 bcrypt 哈希存储；AI Key 仅服务器端使用，永不发往前端。
-
----
-
-## 📄 许可证 & 联系 | License & Contact
+## 📄 许可证 | License
 
 **作者**：Ryan · **性质**：个人项目，自由使用、自由修改。  
 *Personal project — free to use and modify.*
-
-任何问题、建议或部署求助，欢迎联系：
-
-📮 **contact@dasiwo.com** · 🌐 **docs.dasiwo.com** · 🐙 **github.com/dasiwocom/brainpress**
 
 ---
 
