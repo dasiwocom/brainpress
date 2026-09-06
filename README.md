@@ -6,8 +6,6 @@
 
 **如果 Obsidian 是你的第二大脑，BrainPress 就是大脑印刷机。**
 
-用 Obsidian 写笔记，用 BrainPress 印成书。
-
 ---
 ![PHP](https://img.shields.io/badge/PHP-8.0%2B-777BB4?style=flat-square&logo=php&logoColor=white)
 ![License](https://img.shields.io/badge/license-personal-5672cd?style=flat-square)

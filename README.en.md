@@ -6,8 +6,6 @@
 
 **If Obsidian is your second brain, BrainPress is your brain printer.**
 
-*Write with Obsidian, print with BrainPress.*
-
 ---
 ![PHP](https://img.shields.io/badge/PHP-8.0%2B-777BB4?style=flat-square&logo=php&logoColor=white)
 ![License](https://img.shields.io/badge/license-personal-5672cd?style=flat-square)
