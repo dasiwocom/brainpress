@@ -39,7 +39,6 @@ if (strpos($uri, '/api/admin/') === 0) {
             'ai_model' => $config['ai_model'] ?? 'deepseek-chat',
             'ai_mode' => $config['ai_mode'] ?? 'hybrid',
             'ai_enabled' => $config['ai_enabled'] ?? true,
-            'graph_show_labels' => $config['graph_show_labels'] ?? false,
             'graph_path' => $config['graph_path'] ?? '',
             'render_types' => $config['render_types'] ?? ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true, 'png' => true],
             'article_footer' => $config['article_footer'] ?? true,
@@ -171,7 +170,6 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['ai_model'] = trim((string)($body['ai_model'] ?? '')) !== '' ? trim((string)$body['ai_model']) : 'deepseek-chat';
         $config['ai_mode'] = !empty($body['ai_mode']) ? 'hybrid' : 'strict';
         $config['ai_enabled'] = !empty($body['ai_enabled']);
-        $config['graph_show_labels'] = !empty($body['graph_show_labels']);
         $config['graph_path'] = trim((string)($body['graph_path'] ?? ''), "/ \t");
         $renderTypes = (array)($body['render_types'] ?? []);
         $config['render_types'] = [
@@ -514,10 +512,9 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="msg" id="msg-site"></div>
         </div>
 
-        <!-- 视图：Graph（知识图谱设置：文件名显示 + 访问路径别名） -->
+        <!-- 视图：Graph（知识图谱设置：访问路径别名） -->
         <div id="view-graph" style="display:none">
-            <p class="desc">Knowledge graph view settings. Show file names controls whether node labels are always visible or only on hover.</p>
-            <div class="render-row"><span class="render-label">Show file names</span><button class="switch" id="switch-graph-labels" aria-label="toggle graph file name labels"></button></div>
+            <p class="desc">Knowledge graph view settings. Node names are always shown (Obsidian-style).</p>
             <div class="field-row"><span class="field-label">Graph path alias</span><input type="text" id="graph-path" placeholder="e.g. Visual-Knowledge/graph — tree entry + 302 to /graph; empty = bottom entry"></div>
             <div class="msg" id="msg-graph"></div>
         </div>
@@ -610,7 +607,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     <script>
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260906d"></script>
+    <script src="/assets/admin.js?v=20260906e"></script>
     </body>
     </html>
     <?php

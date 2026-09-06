@@ -46,11 +46,11 @@ html.dark .hljs-meta, html.dark .hljs-tag { color:#9b9b9b; }
     --vp-c-brand-dark:#5672cd;
     --vp-c-code:#f6f8fa;
     --vp-c-card:#ffffff;
-    /* 图谱专用颜色（Quartz/Obsidian 观感）——亮色：深色节点 + 浅灰连线 */
-    --graph-hub:#1a1a1a;
-    --graph-secondary:#666666;
-    --graph-line:#b0b0b5;
-    --graph-line-hot:#1a1a1a;
+    /* 图谱专用色（完全照搬 Obsidian 默认主题：亮=深灰，暗=白灰，线=浅灰） */
+    --graph-node:#4a4a4a;
+    --graph-node-focused:#202020;
+    --graph-line:rgba(0,0,0,.15);
+    --graph-line-hot:#202020;
 }
 html.dark {
     --bg:#1b1b1f; --fg:#e3e3e3; --muted:#8f8f94; --line:#2e2e32;
@@ -67,9 +67,9 @@ html.dark {
     --vp-c-brand-dark:#3e63dd;
     --vp-c-code:#161618;
     --vp-c-card:#202024;
-    /* 图谱专用颜色——暗色：白色枢纽 + 灰节点 + 浅灰连线 */
-    --graph-hub:#ffffff;
-    --graph-secondary:#888888;
+    /* 图谱专用颜色——暗色：白灰点 + 浅灰连线（Obsidian 默认主题） */
+    --graph-node:#e3e3e3;
+    --graph-node-focused:#ffffff;
     --graph-line:rgba(255,255,255,.20);
     --graph-line-hot:#ffffff;
 }
@@ -791,20 +791,17 @@ html.dark .cv-group { stroke:#b8b857; }
 #graph-svg { width:100%; height:100%; display:block; }
 .graph-empty { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--vp-c-text-3); font-size:14px; }
 /* 连线：Quartz 同款——svg stroke 用 CSS 变量，亮色深灰/暗色浅灰，始终与背景对比 */
-.graph-link { stroke:var(--graph-line); stroke-width:1; opacity:1; transition:opacity .25s ease, stroke-width .25s ease, stroke .25s ease; }
-.graph-link-hot { opacity:1 !important; stroke-width:2; stroke:var(--graph-line-hot) !important; }
-.graph-link-dim { opacity:.2 !important; }
-/* 节点颜色：CSS 变量随主题自动切换——亮色深色节点、暗色白/灰节点 */
-.graph-hub { fill:var(--graph-hub); }
-.graph-secondary { fill:var(--graph-secondary); }
-.graph-green { fill:#22c55e; }
-.graph-label { font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; font-size:10px; font-weight:400; line-height:1.2; fill:var(--vp-c-text-1); paint-order:stroke; stroke:var(--vp-c-bg); stroke-width:2px; stroke-linejoin:round; pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .18s ease, fill .25s ease, stroke .25s ease, color .25s ease; }
-.graph-node { cursor:pointer; transition:opacity .25s ease; will-change:transform; touch-action:manipulation; }
-.graph-node circle { transition:transform .2s ease, fill .25s ease, stroke .25s ease; transform-box:fill-box; transform-origin:center; }
+.graph-link { stroke:var(--graph-line); stroke-width:1; opacity:1; transition:opacity .3s ease, stroke-width .3s ease, stroke .3s ease; }
+.graph-link-hot { opacity:1 !important; stroke-width:1.8; stroke:var(--graph-line-hot) !important; }
+.graph-link-dim { opacity:.08 !important; }
+.graph-node-fill { fill:var(--graph-node); }
+.graph-node-focused { fill:var(--graph-node-focused); }
+.graph-label { font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif; font-size:11px; font-weight:400; line-height:1.2; fill:var(--vp-c-text-2); pointer-events:none; text-rendering:optimizeLegibility; transition:opacity .2s ease; }
+.graph-node { cursor:pointer; transition:opacity .3s ease; will-change:transform; touch-action:manipulation; }
+.graph-node circle:not(.graph-hit) { transition:transform .22s cubic-bezier(.4,0,.2,1), fill .3s ease, r .22s cubic-bezier(.4,0,.2,1); }
 .graph-node .graph-hit { cursor:pointer; pointer-events:all; }
-.graph-node:hover circle:not(.graph-hit) { transform:scale(1.25); }
-/* hover 高亮：非邻居淡化（class 切换——轻量） */
-.graph-dim { opacity:.1; }
+.graph-node:hover circle:not(.graph-hit) { transform:scale(1.15); }
+.graph-dim { opacity:.08; }
 
 /* 抽屉固定入口已移除：Graph view 现作为虚拟条目直接进文章树（见 $frontMenuMd 拼接） */
 

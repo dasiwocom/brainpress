@@ -77,7 +77,6 @@ bindSwitch('switch-light');
 bindSwitch('switch-drawer');
 bindSwitch('switch-ai-enabled');
 bindSwitch('switch-ai-mode');
-bindSwitch('switch-graph-labels');
 bindSwitch('switch-pin-nav');
 bindSwitch('switch-footer');
 // 脚注：失焦保存（支持 HTML）
@@ -130,7 +129,6 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (d.front_drawer_expanded !== false) $('switch-drawer').classList.add('on'); } catch (e) {}
     try { if (d.ai_mode !== 'strict') $('switch-ai-mode').classList.add('on'); } catch (e) {}
     try { if (d.ai_enabled !== false) $('switch-ai-enabled').classList.add('on'); } catch (e) {}
-    try { if (d.graph_show_labels) $('switch-graph-labels').classList.add('on'); } catch (e) {}
     try { if (d.pin_navbar) $('switch-pin-nav').classList.add('on'); } catch (e) {}
     // 渲染文件类型开关（默认全开）
     var rt = d.render_types || { markdown: true, pdf: true, html: true, canvas: true, png: true };
@@ -455,7 +453,6 @@ function saveConfig() {
         front_drawer_expanded: $('switch-drawer').classList.contains('on'),
         ai_mode: $('switch-ai-mode').classList.contains('on'),
         ai_enabled: $('switch-ai-enabled').classList.contains('on'),
-        graph_show_labels: $('switch-graph-labels').classList.contains('on'),
         render_types: {
             markdown: $('switch-rt-markdown').classList.contains('on'),
             pdf: $('switch-rt-pdf').classList.contains('on'),

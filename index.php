@@ -291,7 +291,7 @@ var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
 </script>
 
 <script src="/assets/lz-string.min.js" defer></script>
-    <link rel="stylesheet" href="/assets/site.css?v=20260906a">
+    <link rel="stylesheet" href="/assets/site.css?v=20260906b">
 <style>/* 阅读列宽（后台可调）：覆盖 site.css 的默认值 */
 :root { --vp-content-w:<?php echo $contentW; ?>px; }
 </style>
@@ -440,8 +440,6 @@ var SSR_PDF = <?php echo json_encode($ssrPdfPath !== '' ? $ssrPdfPath : null); ?
 var AI_ENABLED = <?php echo !empty($config['ai_enabled'] ?? true) ? 'true' : 'false'; ?>;
 // Graph View 直达（/graph）：前端渲染知识图谱（?dir= 由 fetch 参数决定）
 var SSR_GRAPH = <?php echo $ssrGraph ? 'true' : 'false'; ?>;
-// Graph 设置：文件名标签默认显示（后台 Graph 视图开关）
-var GRAPH_SHOW_LABELS = <?php echo !empty($config['graph_show_labels']) ? 'true' : 'false'; ?>;
 // 固定顶部栏（后台偏好设置控制）：开启时导航栏不随滚动隐藏
 var PIN_NAVBAR = <?php echo !empty($config['pin_navbar']) ? 'true' : 'false'; ?>;
 // Excalidraw 绘画直达（.excalidraw.md）：内联原文——前端 lz-string 解码 compressed-json → SVG 渲染
@@ -466,6 +464,6 @@ var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : '
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
 <script src="/assets/render.js?v=20260905s" defer></script>
-<script src="/assets/site.js?v=20260906c" defer></script>
+<script src="/assets/site.js?v=20260906i" defer></script>
 </body>
 </html>

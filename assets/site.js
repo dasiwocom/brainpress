@@ -1416,6 +1416,7 @@
     // Obsidian 风格图谱：白色枢纽 + 灰色小节点 + 绿色点缀，无目录着色
     var graphColors = {};
     var graphTransform = { x: 0, y: 0, k: 1 };
+    var graphHoverNode = null;
     var graphNodes = [], graphLinks = [];
     var graphSvgG = null;
     function renderGraph(nodes, links) {
@@ -1428,7 +1429,7 @@
         W = graphWrap.clientWidth || (window.innerWidth - 96);
         H = graphWrap.clientHeight || (window.innerHeight - 120);
         cx = W / 2; cy = H / 2;
-        // 度数（节点大小 + 颜色分级：高度数白色枢纽、低度数灰色、部分绿色点缀）
+        // 度数（节点大小 + 三阶颜色分级：枢纽 / 中间 / 叶子 + 绿色点缀）
         degree = {};
         nodes.forEach(function (n) { degree[n.id] = 0; });
         links.forEach(function (l) {
@@ -1436,24 +1437,21 @@
             degree[l.target] = (degree[l.target] || 0) + 1;
         });
         nodes.forEach(function (n) { n.deg = degree[n.id] || 0; });
-        // 初始位置：目录分区（同目录节点初始聚在同一扇区——布局成簇、避免对称死锁）
+        // 初始位置：确定性网格起步（间距按视口缩放——节点少铺得开、节点多也合理，不挤成一团）
         var dirGroups = {};
         nodes.forEach(function (n) { (dirGroups[n.dir] = dirGroups[n.dir] || []).push(n); });
         var dKeys = Object.keys(dirGroups);
-        var sector = 0;
-        dKeys.forEach(function (d) {
-            var arr = dirGroups[d];
-            var ang = (sector / Math.max(1, dKeys.length)) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
-            sector++;
-            var rad = Math.min(W, H) * 0.25;  // 更靠近中心，配合短 REST 让图谱初始即紧凑
-            var ccx = cx + Math.cos(ang) * rad, ccy = cy + Math.sin(ang) * rad;
-            arr.forEach(function (n, i) {
-                var a = (i / Math.max(1, arr.length)) * Math.PI * 2;
-                var r = Math.min(80, Math.sqrt(arr.length) * 25);  // 同目录初始半径也收紧
-                n.x = ccx + Math.cos(a) * r + (Math.random() - 0.5) * 20;
-                n.y = ccy + Math.sin(a) * r + (Math.random() - 0.5) * 20;
-                n.vx = 0; n.vy = 0; n.fixed = false;
-            });
+        var N0 = nodes.length;
+        var gridS = Math.round(Math.min(W, H) / Math.max(2, Math.sqrt(N0))) * 0.85;
+        gridS = Math.max(42, gridS);
+        var gCols = Math.max(1, Math.ceil(Math.sqrt(N0 * (W / H))));
+        var gRows = Math.max(1, Math.ceil(N0 / gCols));
+        var gx0 = cx - (gCols - 1) * gridS / 2;
+        var gy0 = cy - (gRows - 1) * gridS / 2;
+        nodes.forEach(function (n, i) {
+            n.x = gx0 + (i % gCols) * gridS;
+            n.y = gy0 + Math.floor(i / gCols) * gridS;
+            n.vx = 0; n.vy = 0; n.fixed = false;
         });
         // 同目录弱吸引对（预构建——stepOnce 每帧用，聚类但不画线）
         clusterPairs = [];
@@ -1465,12 +1463,25 @@
                 }
             }
         });
-        // 快速初排（45 轮同步，带 alpha 衰减——避免打开时长时间空白，又保留可见的舒展动画）
+        // 快速初排（55 轮同步，带 alpha 衰减——更充分舒展后再交给 rAF）
         simAlpha = 1; simAlphaTarget = 0;
-        for (var iter = 0; iter < 45; iter++) {
+        for (var iter = 0; iter < 55; iter++) {
             stepOnce();
             simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
         }
+        // 默认缩放自适应（Obsidian 同款——初加载自动 fit 整张图进视口）
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        nodes.forEach(function (n) {
+            if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
+            if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
+        });
+        var pad = 80;  // 边距（节点名不贴边）
+        var bbW = (maxX - minX) || 1, bbH = (maxY - minY) || 1;
+        var kFit = Math.min((W - pad * 2) / bbW, (H - pad * 2) / bbH);
+        kFit = Math.max(0.25, Math.min(0.6, kFit));
+        graphTransform.k = kFit;
+        graphTransform.x = (W - (minX + maxX) * kFit) / 2;
+        graphTransform.y = (H - (minY + maxY) * kFit) / 2;
         // 渲染 SVG（缓存元素引用——每帧直接更新，不 querySelectorAll）
         graphSvgG = document.createElementNS(GNS, 'g');
         graphSvg.appendChild(graphSvgG);
@@ -1485,7 +1496,6 @@
             line.setAttribute('class', 'graph-link');
             line.setAttribute('data-s', l.source);
             line.setAttribute('data-t', l.target);
-            // 连线固定 1px（Quartz/Obsidian 统一细线——干净利落）
             line.setAttribute('stroke-width', '1');
             line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
             line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
@@ -1493,31 +1503,18 @@
             simLineEls.push(line);
         });
         simEls = [];
-        // 节点尺寸：Quartz 同款——2 + sqrt(degree)，不再放大
-        var maxDeg = 0;
-        nodes.forEach(function (n) { if ((degree[n.id] || 0) > maxDeg) maxDeg = degree[n.id] || 0; });
-        var hubThreshold = 1;
-        // 绿色点缀：度数排名前 5%（Quartz 用 tertiary；Obsidian 用 #22c55e 强调高连接节点）
-        var greenSet = {};
-        var sortedByDeg = nodes.slice().sort(function (a, b) { return (degree[b.id] || 0) - (degree[a.id] || 0); });
-        var greenThreshold = nodes.length > 8 ? Math.floor(nodes.length * 0.05) : 0;
-        for (var gi = 0; gi < Math.min(greenThreshold, sortedByDeg.length); gi++) {
-            if ((degree[sortedByDeg[gi].id] || 0) > 1) greenSet[sortedByDeg[gi].id] = true;
-        }
-        window.__graphGreen = greenSet;
+        // 单色（照搬 Obsidian 默认主题：所有节点同色，高连接枢纽更大）
         nodes.forEach(function (n) {
             var d = degree[n.id] || 0;
-            var r = 2 + Math.sqrt(d);   // Quartz 精确公式 nodeRadius
+            // 节点半径：Obsidian 同款——轻微差异（degree 0→2.2px，4→4.2px，9→5.2px，16→6.2px，绝不夸张）
+            var r = 2.2 + Math.sqrt(d);
             n.r = r;
             var node = document.createElementNS(GNS, 'g');
             node.setAttribute('class', 'graph-node');
             node.setAttribute('data-id', n.id);
             var c = document.createElementNS(GNS, 'circle');
             c.setAttribute('r', r);
-            // 颜色走 CSS 变量（.graph-hub/.graph-secondary/.graph-green）——随主题自动切换，不硬编码
-            var cls = d >= hubThreshold ? 'graph-hub' : 'graph-secondary';
-            if (greenSet[n.id]) cls = 'graph-green';
-            c.setAttribute('class', cls);
+            c.setAttribute('class', 'graph-node-fill');
             node.appendChild(c);
             // 透明 hit-area：视觉小圆点 + 更大的不可见触摸/点击区（移动端 ≥ 22px 半径才点得准）
             var hit = document.createElementNS(GNS, 'circle');
@@ -1528,19 +1525,19 @@
             var t = document.createElementNS(GNS, 'text');
             t.setAttribute('text-anchor', 'middle');
             t.setAttribute('class', 'graph-label');
-            t.setAttribute('opacity', window.GRAPH_SHOW_LABELS ? '1' : '0');
-            t.setAttribute('transform', 'translate(0,' + (r + 11) + ') scale(' + (1 / (graphTransform.k || 1)) + ')');
+            t.setAttribute('opacity', '1');
+            t.setAttribute('data-name-on', n.name);
+            t.setAttribute('transform', 'translate(0,' + (r + 12) + ') scale(' + (1 / (graphTransform.k || 1)) + ')');
             t.textContent = n.name;
             node.appendChild(t);
             node.addEventListener('click', function (ev) {
                 ev.stopPropagation();
-                // 拖拽过的节点不跳转（拖拽后浏览器仍会触发 click）
                 if (n._dragged) { n._dragged = false; return; }
                 selectFile({ path: n.path });
             });
-            // hover：显示标签 + 高亮邻居（class 切换——轻量）
-            node.addEventListener('mouseenter', function () { t.setAttribute('opacity', '1'); highlightNode(n.id); });
-            node.addEventListener('mouseleave', function () { t.setAttribute('opacity', '0'); highlightNode(-1); });
+            // hover：高亮邻居 + 当前节点标签常显（Obsidian 同款；即使缩小到阈值下也显示）
+            node.addEventListener('mouseenter', function () { graphHoverNode = n; t.setAttribute('opacity', '1'); highlightNode(n.id); });
+            node.addEventListener('mouseleave', function () { graphHoverNode = null; t.setAttribute('opacity', String((graphTransform.k < 1.2 ? 0 : Math.min(1, (graphTransform.k - 1.2) / 0.6)))); highlightNode(-1); });
             // 节点拖拽：锁定位置 + alphaTarget=0.3 再加热（邻居实时跟随，松手自然冷却）；
             // 移动超 5px 视为拖拽（抑制 click 跳转）
             node.addEventListener('pointerdown', function (ev) {
@@ -1654,8 +1651,8 @@
         var nodes = graphNodes;
         if (!nodes.length || simAlpha <= 0) return;
         var a = simAlpha;
-        // 力参数：对标 Obsidian 紧凑感——更短链接、更强中心、适中斥力、碰撞防重叠
-        var REP = 1800, SPRING = 0.08, REST = 55, DIST_MAX = 500;
+        // 力参数：对标 Obsidian 宽松舒展感——更长链接、温和中心引力、适中斥力、碰撞防重叠
+        var REP = 2200, SPRING = 0.04, REST = 160, DIST_MAX = 900;
         // 多体斥力 + 碰撞（Quartz 用 forceCollide(nodeRadius)，这里合一循环省 O(n²)）
         for (var i = 0; i < nodes.length; i++) {
             if (nodes[i].fixed) continue;
@@ -1700,14 +1697,14 @@
             ca.vx += (cdx / cd) * cf; ca.vy += (cdy / cd) * cf;
             cb.vx -= (cdx / cd) * cf; cb.vy -= (cdy / cd) * cf;
         }
-        // 积分：中心引力（更强，Obsidian 面板观感——节点向中心聚拢成团）+ 阻尼 + 位移
+        // 积分：中心引力（温和，Obsidian 观感——节点自然聚拢但不紧挤）+ 阻尼 + 位移
         nodes.forEach(function (n) {
             if (n.fixed) return;
-            n.vx += (cx - n.x) * 0.06 * a;
-            n.vy += (cy - n.y) * 0.06 * a;
+            n.vx += (cx - n.x) * 0.03 * a;
+            n.vy += (cy - n.y) * 0.03 * a;
             n.vx *= 0.6; n.vy *= 0.6;
-            if (n.vx > 5) n.vx = 5; if (n.vx < -5) n.vx = -5;
-            if (n.vy > 5) n.vy = 5; if (n.vy < -5) n.vy = -5;
+            if (n.vx > 10) n.vx = 10; if (n.vx < -10) n.vx = -10;
+            if (n.vy > 10) n.vy = 10; if (n.vy < -10) n.vy = -10;
             n.x += n.vx; n.y += n.vy;
             if (n.x < 12) n.vx += (12 - n.x) * 0.1 * a;
             if (n.x > W - 12) n.vx -= (n.x - (W - 12)) * 0.1 * a;
@@ -1779,18 +1776,17 @@
         if (!graphSvgG) return;
         var k = graphTransform.k;
         graphSvgG.setAttribute('transform', 'translate(' + graphTransform.x + ',' + graphTransform.y + ') scale(' + k + ')');
-        // 标签两件事（Obsidian 同款观感）：
-        // ① 屏幕等大——反缩放 1/k（钳制 0.7~2.2），缩放时字号不随世界坐标缩水/爆炸
-        // ② 阈值显示——k≥0.75 全部显示，缩小后全部隐藏（无例外，页面干净）
-        var s = Math.min(2.2, Math.max(0.7, 1 / k));
+        // 标签两件事（Obsidian 同款）：
+        // ① 屏幕等大——反缩放 1/k（钳制 0.6~2.5），字号缩放时不缩水/爆炸
+        // ② 缩放阈值淡入——k≥1.2 开始显现、k≥1.8 完全显示（Obsidian 同款：默认 fit 无标题，放大到准局部才出现）
+        var s = Math.min(2.5, Math.max(0.6, 1 / k));
+        var labelOpacity = k < 1.2 ? 0 : Math.min(1, (k - 1.2) / 0.6);
         for (var i = 0; i < simEls.length; i++) {
-            var txt = simEls[i].lastChild;  // text 是 node g 的最后一个子元素
+            var txt = simEls[i].lastChild;
             if (!txt) continue;
             var n = graphNodes[i];
-            txt.setAttribute('transform', 'translate(0,' + ((n.r || 4) + 11) + ') scale(' + s + ')');
-            if (window.GRAPH_SHOW_LABELS) {
-                txt.setAttribute('opacity', k >= 0.75 ? '1' : '0');
-            }
+            txt.setAttribute('transform', 'translate(0,' + ((n.r || 4) + 12) + ') scale(' + s + ')');
+            txt.setAttribute('opacity', graphHoverNode === n ? '1' : String(labelOpacity));
         }
     }
     // hover 高亮邻居（class 切换：邻居亮、其余淡化）
@@ -1808,6 +1804,17 @@
             if (!n) continue;
             var on = (id < 0 || n.id == id || neighbors[n.id]);
             simEls[i].classList.toggle('graph-dim', !on);
+            // hover 当前节点加深（Obsidian color-node-focused 观感）
+            if (id >= 0 && n.id == id) {
+                var fb = simEls[i].querySelector('.graph-node-fill');
+                if (fb) fb.setAttribute('class', 'graph-node-fill graph-node-focused');
+            }
+        }
+        if (id < 0) {
+            for (var f = 0; f < simEls.length; f++) {
+                var fb2 = simEls[f].querySelector('.graph-node-fill.graph-node-focused');
+                if (fb2) fb2.setAttribute('class', 'graph-node-fill');
+            }
         }
         for (var j = 0; j < simLineEls.length; j++) {
             var l = graphLinks[j];
