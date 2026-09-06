@@ -4,11 +4,9 @@
 
 # 🧠 BrainPress
 
-**如果 Obsidian 是你的第二大脑，BrainPress 就是大脑印刷机。**  
-*If Obsidian is your second brain, BrainPress is your brain printer.*
+**如果 Obsidian 是你的第二大脑，BrainPress 就是大脑印刷机。**
 
-用 Obsidian 写笔记，用 BrainPress 印成书。  
-*Write with Obsidian, print with BrainPress.*
+用 Obsidian 写笔记，用 BrainPress 印成书。
 
 ---
 ![PHP](https://img.shields.io/badge/PHP-8.0%2B-777BB4?style=flat-square&logo=php&logoColor=white)
@@ -20,13 +18,21 @@
 ![WebDAV](https://img.shields.io/badge/WebDAV-Obsidian%20Sync-7c3aed?style=flat-square)
 ![AI RAG](https://img.shields.io/badge/AI-RAG%20QnA-f59e0b?style=flat-square)
 
-[**官方文档 · Docs**](https://docs.dasiwo.com) · [**GitHub**](https://github.com/dasiwocom/brainpress) · [**联系 · Contact**](mailto:contact@dasiwo.com)
+[**官方站点 · Official Site**](https://docs.dasiwo.com) · [**邮箱 · contact@dasiwo.com**](mailto:contact@dasiwo.com)
 
 </div>
 
 ---
 
-## ✨ 这是什么？ | What is this?
+**目录 · TOC**
+
+[这是什么](#这是什么) · [核心特性](#核心特性) · [快速部署](#快速部署) · [详细文档](#详细文档) · [许可证](#许可证)
+
+---
+
+<a name="这是什么"></a>
+
+## ✨ 这是什么？
 
 **BrainPress** 是一个**自托管 Markdown 知识库系统**：指向一个笔记文件夹，立即渲染成可浏览、可搜索、可 AI 问答的网站——**无需构建、无需数据库、无需 Node.js**。
 
@@ -36,7 +42,9 @@
 
 ---
 
-## 🎯 核心特性 | Features
+<a name="核心特性"></a>
+
+## 🎯 核心特性
 
 - 📄 **实时 Markdown 渲染** — 改笔记、刷新即生效，无需重新构建
 - ✍️ **完整 Obsidian 语法** — Callout、KaTeX 公式、高亮、嵌套标签、块 ID、脚注、双链 `[[]]` 与嵌入 `![[]]`；代码块带行号
@@ -52,7 +60,9 @@
 
 ---
 
-## 🚀 快速部署 | Deploy
+<a name="快速部署"></a>
+
+## 🚀 快速部署
 
 ### 方式一：Docker 一键部署
 
@@ -102,9 +112,11 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 ---
 
-## 📚 详细文档 | Documentation
+<a name="详细文档"></a>
 
-详细文档都以 Markdown 存放在仓库 `vault/BrainPress/`（与站点内容同源，全部字段见 [Configuration](https://github.com/dasiwocom/brainpress/blob/main/vault/BrainPress/Configuration.zh.md)）：
+## 📚 详细文档
+
+详细文档都以 Markdown 存放在仓库 `vault/BrainPress/`，与站点内容同源：
 
 | 文档 | 说明 | 入口 |
 |------|------|------|
@@ -116,11 +128,12 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 ---
 
-## 📄 许可证 | License
+<a name="许可证"></a>
 
-**作者**：Ryan · **性质**：个人项目，自由使用、自由修改。  
-*Personal project — free to use and modify.*
+## 📄 许可证
+
+**作者**：Ryan · **性质**：个人项目，自由使用、自由修改。
 
 ---
 
-<div align="center"><b>用 Obsidian 写，用 BrainPress 印。</b><br><i>Write with Obsidian, print with BrainPress.</i></div>
+<div align="center"><b>用 Obsidian 写，用 BrainPress 印。</b></div>

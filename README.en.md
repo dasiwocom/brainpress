@@ -18,11 +18,19 @@
 ![WebDAV](https://img.shields.io/badge/WebDAV-Obsidian%20Sync-7c3aed?style=flat-square)
 ![AI RAG](https://img.shields.io/badge/AI-RAG%20QnA-f59e0b?style=flat-square)
 
-[**Docs**](https://docs.dasiwo.com) · [**GitHub**](https://github.com/dasiwocom/brainpress) · [**Contact**](mailto:contact@dasiwo.com)
+[**Official Site · docs.dasiwo.com**](https://docs.dasiwo.com) · [**Email · contact@dasiwo.com**](mailto:contact@dasiwo.com)
 
 </div>
 
 ---
+
+**TOC**
+
+[What is this](#what-is-this) · [Features](#features) · [Deploy](#deploy) · [Documentation](#documentation) · [License](#license)
+
+---
+
+<a name="what-is-this"></a>
 
 ## ✨ What is this?
 
@@ -33,6 +41,8 @@ It also ships a **WebDAV sync endpoint**, so Obsidian's *Remotely Save* plugin c
 > Born for **AI memory visualization** — an AI writes notes about what it learns, and you watch it "think" in the browser; these days it works just as well for humans.
 
 ---
+
+<a name="features"></a>
 
 ## 🎯 Features
 
@@ -49,6 +59,8 @@ It also ships a **WebDAV sync endpoint**, so Obsidian's *Remotely Save* plugin c
 - 🌗 **Dark/light mode** + font presets, **only local assets** (no CDN)
 
 ---
+
+<a name="deploy"></a>
 
 ## 🚀 Deploy
 
@@ -99,6 +111,8 @@ location ~* (config\.json|\.user\.ini|\.env|\.bak|\.tmp|\.log)$ { return 404; }
 
 ---
 
+<a name="documentation"></a>
+
 ## 📚 Documentation
 
 All docs ship as Markdown inside the repo at `vault/BrainPress/` — the same source that powers your site:
@@ -113,10 +127,12 @@ All docs ship as Markdown inside the repo at `vault/BrainPress/` — the same so
 
 ---
 
+<a name="license"></a>
+
 ## 📄 License
 
 **Author**: Ryan · **Type**: personal project — free to use and modify.
 
 ---
 
-<div align="center"><b>Write with Obsidian, print with BrainPress.</b><br><i>用 Obsidian 写，用 BrainPress 印。</i></div>
+<div align="center"><b>Write with Obsidian, print with BrainPress.</b></div>
