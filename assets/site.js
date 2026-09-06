@@ -1478,7 +1478,7 @@
         var pad = 80;  // 边距（节点名不贴边）
         var bbW = (maxX - minX) || 1, bbH = (maxY - minY) || 1;
         var kFit = Math.min((W - pad * 2) / bbW, (H - pad * 2) / bbH);
-        kFit = Math.max(0.25, Math.min(0.6, kFit));
+        kFit = Math.max(0.25, Math.min(1.0, kFit));
         graphTransform.k = kFit;
         graphTransform.x = (W - (minX + maxX) * kFit) / 2;
         graphTransform.y = (H - (minY + maxY) * kFit) / 2;
@@ -1776,17 +1776,51 @@
         if (!graphSvgG) return;
         var k = graphTransform.k;
         graphSvgG.setAttribute('transform', 'translate(' + graphTransform.x + ',' + graphTransform.y + ') scale(' + k + ')');
-        // 标签两件事（Obsidian 同款）：
+        // 标签三件事（Obsidian 同款）：
         // ① 屏幕等大——反缩放 1/k（钳制 0.6~2.5），字号缩放时不缩水/爆炸
-        // ② 缩放阈值淡入——k≥1.2 开始显现、k≥1.8 完全显示（Obsidian 同款：默认 fit 无标题，放大到准局部才出现）
+        // ② 缩放阈值淡入——k≥1.2 开始显现、k≥1.8 完全显示（默认 fit 无标题，放大到准局部才出现）
+        // ③ 标题都显示、但撞上的让位——节点间距本就够放标题，个别真重叠时低位序节点标签淡出
+        //    （连标题都显示，仅剩极少数重叠），Obsidian 观感：标题全在、不糊成一团
         var s = Math.min(2.5, Math.max(0.6, 1 / k));
         var labelOpacity = k < 1.2 ? 0 : Math.min(1, (k - 1.2) / 0.6);
-        for (var i = 0; i < simEls.length; i++) {
+        var tx = graphTransform.x, ty = graphTransform.y;
+        // 居中优先（后放的需让位）——spatial 序，度数高只作为并列时的优先级
+        var order = graphNodes.map(function (n, i) { return i; });
+        order.sort(function (a, b) {
+            var da = degree[graphNodes[a].id] || 0, db = degree[graphNodes[b].id] || 0;
+            if (da !== db) return db - da;
+            return a - b;
+        });
+        var placed = [];  // 已显示标签的屏幕矩形
+        for (var oi = 0; oi < order.length; oi++) {
+            var i = order[oi];
             var txt = simEls[i].lastChild;
             if (!txt) continue;
             var n = graphNodes[i];
             txt.setAttribute('transform', 'translate(0,' + ((n.r || 4) + 12) + ') scale(' + s + ')');
-            txt.setAttribute('opacity', graphHoverNode === n ? '1' : String(labelOpacity));
+            var isHover = graphHoverNode === n;
+            if (isHover) { txt.setAttribute('opacity', '1'); continue; }
+            if (labelOpacity <= 0) { txt.setAttribute('opacity', '0'); continue; }
+            // 估算标签屏幕包围盒（中文字≈1em、ASCII≈0.55em；屏幕字号恒定≈10px）
+            var fs = 10, tw = 0, cs = txt.textContent || '';
+            for (var ci = 0; ci < cs.length; ci++) {
+                var cc = cs.charCodeAt(ci);
+                tw += (cc >= 0x2E80 ? 1.0 : (cc >= 0x20 && cc <= 0x7E ? 0.55 : 0.9)) * fs;
+            }
+            var r = n.r || 4;
+            var cx = n.x * k + tx;
+            var cy = n.y * k + (r + 12) * k + ty;   // 标签基线屏幕位置
+            var pad = 3;
+            var x0 = cx - tw / 2 - pad, x1 = cx + tw / 2 + pad;
+            var y0 = cy - 12 - pad, y1 = cy + 2 + pad;
+            var collide = false;
+            for (var pi = 0; pi < placed.length; pi++) {
+                var p = placed[pi];
+                if (x0 < p.x1 && x1 > p.x0 && y0 < p.y1 && y1 > p.y0) { collide = true; break; }
+            }
+            if (collide) { txt.setAttribute('opacity', '0'); continue; }
+            placed.push({ x0: x0, y0: y0, x1: x1, y1: y1 });
+            txt.setAttribute('opacity', String(labelOpacity));
         }
     }
     // hover 高亮邻居（class 切换：邻居亮、其余淡化）
