@@ -95,13 +95,9 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
     }
 }
 
-// 虚拟页别名路径：访问配置的别名 → 302 跳转真实路由（页面本体不变）。
-// 别名等于 /graph 本身时不做 302（否则 /graph → /graph 无限重定向 → 页面空白）
+// 虚拟页别名路径：访问配置的别名即渲染图谱页（$ssrGraph 判断，无需 302）。
+// （注意：不再硬编码 /graph——历史 302 会把 /GraphView 这种自定义别名跳转坏）
 $graphAlias = trim((string)($config['graph_path'] ?? ''), "/ \t");
-if ($graphAlias !== '' && $graphAlias !== 'graph' && !preg_match('#\.md$#i', $graphAlias) && $uri === '/' . $graphAlias) {
-    header('Location: /graph', true, 302);
-    exit;
-}
 
 // WebDAV 端点（Obsidian Remotely Save 同步）：实现在 dav.php
 if (strpos($uri, '/dav/') === 0 || $uri === '/dav') {
@@ -203,10 +199,11 @@ if (preg_match('#\.html$#i', $uri)) {
     }
 }
 
-// 服务端渲染 Graph View：/graph 或 /graph?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）。
+// 服务端渲染 Graph View：/<别名> 或 /<别名>?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）。
 // Graph 仅在后台配置了路径别名后开启（$graphAlias 非空 = 开启；留空 = 功能关闭，不占用任何资源）
 $graphEnabled = $graphAlias !== '';
-$ssrGraph = $graphEnabled && preg_match('#^/graph(/|\\?|$)#', $uri) ? true : false;
+$graphAliasPreg = $graphAlias !== '' ? preg_quote($graphAlias, '#') : '(?!)';
+$ssrGraph = $graphEnabled && preg_match('#^/' . $graphAliasPreg . '(/|\\?|$)#i', $uri) ? true : false;
 
 // RSS 伪路径（rss://…/url/guid）直接访问时无害化：若是索引页则正常渲染；否则重定向回首页（这些路径只作为侧边栏点击由前端/API处理，不建立真实路由）
 if ($uri !== '/' && $uri !== '/index.php' && $ssrArticlePath === '' && $ssrPdfPath === '' && $ssrExcalidrawPath === '' && $ssrCanvasPath === '' && !$ssrGraph) {
