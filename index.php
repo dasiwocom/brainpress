@@ -95,9 +95,10 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
     }
 }
 
-// 虚拟页别名路径：访问配置的别名 → 302 跳转真实路由（页面本体不变）
+// 虚拟页别名路径：访问配置的别名 → 302 跳转真实路由（页面本体不变）。
+// 别名等于 /graph 本身时不做 302（否则 /graph → /graph 无限重定向 → 页面空白）
 $graphAlias = trim((string)($config['graph_path'] ?? ''), "/ \t");
-if ($graphAlias !== '' && !preg_match('#\.md$#i', $graphAlias) && $uri === '/' . $graphAlias) {
+if ($graphAlias !== '' && $graphAlias !== 'graph' && !preg_match('#\.md$#i', $graphAlias) && $uri === '/' . $graphAlias) {
     header('Location: /graph', true, 302);
     exit;
 }
@@ -202,8 +203,10 @@ if (preg_match('#\.html$#i', $uri)) {
     }
 }
 
-// 服务端渲染 Graph View：/graph 或 /graph?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）
-$ssrGraph = preg_match('#^/graph(/|\\?|$)#', $uri) ? true : false;
+// 服务端渲染 Graph View：/graph 或 /graph?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）。
+// Graph 仅在后台配置了路径别名后开启（$graphAlias 非空 = 开启；留空 = 功能关闭，不占用任何资源）
+$graphEnabled = $graphAlias !== '';
+$ssrGraph = $graphEnabled && preg_match('#^/graph(/|\\?|$)#', $uri) ? true : false;
 
 // RSS 伪路径（rss://…/url/guid）直接访问时无害化：若是索引页则正常渲染；否则重定向回首页（这些路径只作为侧边栏点击由前端/API处理，不建立真实路由）
 if ($uri !== '/' && $uri !== '/index.php' && $ssrArticlePath === '' && $ssrPdfPath === '' && $ssrExcalidrawPath === '' && $ssrCanvasPath === '' && !$ssrGraph) {
@@ -228,7 +231,8 @@ $frontTree = (($config['render_webdav'] ?? false) && is_dir(PANEL_DIR . '/vault'
     : [];
 $frontMenuMd = tree_to_md(merge_rss_tree(merge_ima_tree(merge_custom_trees($frontTree, $config), $config), $config));
 // Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
-if (trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
+// 留空 = Graph 功能关闭，不注入任何条目
+if ($graphEnabled && trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
     $frontMenuMd = rtrim($frontMenuMd) . "\n- [Graph-View](/graph)";
 }
 // 站点设置：标题 / 默认日间 / 前台抽屉默认展开 / 首页文章
@@ -437,7 +441,10 @@ var FRONT_MENU_MD = <?php echo json_encode($frontMenuMd); ?>;
 var FRONT_DRAWER_EXPANDED = <?php echo $frontDrawerExpanded ? 'true' : 'false'; ?>;
 // 强制展开目录（后台目录管理设置，优先级高于默认展开开关）
 var FRONT_EXPANDED_DIRS = <?php echo json_encode(expand_effective_entries($config)); ?>;
-var GRAPH_ALIAS_PATH = <?php echo json_encode(trim((string)($config['graph_path'] ?? ''), "/ \t")); ?>;
+var GRAPH_ALIAS_PATH = <?php echo json_encode($graphAlias); ?>;
+// Graph 功能总开关：后台 graph_path 留空 = 关闭（前端不再请求 /api/graph、不渲染图谱）。
+// 开启（填了别名）时返回 true；开启状态 = graph_path 非空
+var GRAPH_ENABLED = <?php echo $graphEnabled ? 'true' : 'false'; ?>;
 var GRAPH_HIGHLIGHT_DIRECT = <?php echo (!isset($config['graph_highlight_direct']) || !empty($config['graph_highlight_direct'])) ? 'true' : 'false'; ?>;
 
 // 首页文章（后台站点设置配置，内联零请求；空 = 未配置）
@@ -475,6 +482,6 @@ var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : '
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
 <script src="/assets/render.js?v=20260905s" defer></script>
-<script src="/assets/site.js?v=20260907b" defer></script>
+<script src="/assets/site.js?v=20260907m" defer></script>
 </body>
 </html>

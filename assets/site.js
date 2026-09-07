@@ -1409,6 +1409,8 @@
         };
     }
     function openGraph() {
+        // Graph 功能总开关：后台 graph_path 留空 = 关闭（openGraph 完全不生效）
+        if (!window.GRAPH_ENABLED) { return; }
         try { setDrawer(false); } catch (e) {}
         try { setTopHidden(false); } catch (e) {}  // 图谱 fixed 定位不随滚动：强制显示顶栏（否则上方留 56px 空档、图谱贴不到顶栏）
         // 地址栏同步为 /graph（可分享/刷新保持图谱页）
@@ -1424,7 +1426,10 @@
     }
 
     function loadGraph() {
-        fetch('/api/graph').then(function (r) { return r.json(); }).then(function (d) {
+        fetch('/api/graph').then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+            return r.json();
+        }).then(function (d) {
             if (!d.ok) return;
             try {
                 renderGraph(d.nodes || [], d.links || []);
@@ -1468,7 +1473,7 @@
         nodes.forEach(function (n, i) {
             n.x = cx + (Math.random() * 2 - 1) * scatR;
             n.y = cy + (Math.random() * 2 - 1) * scatR;
-            n.vx = 0; n.vy = 0; n.fixed = false;
+            n.vx = 0; n.vy = 0; n.locked = false;
         });
         clusterPairs = [];  // Obsidian 无目录分区，无需聚拢对
         // 快速初排（55 轮同步，带 alpha 衰减——更充分舒展后再交给 rAF）
@@ -1549,32 +1554,29 @@
             // 判定，且状态没变不重画（幂等）——Quartz 同款思路（hitArea=节点圆，只按落点高亮）
             // 节点拖拽：锁定位置 + alphaTarget=0.3 再加热（邻居实时跟随，松手自然冷却）；
             // 移动超 5px 视为拖拽（抑制 click 跳转）
-            node.addEventListener('pointerdown', function (ev) {
+node.addEventListener('pointerdown', function (ev) {
                 ev.preventDefault(); ev.stopPropagation();
                 var svgRect = graphSvg.getBoundingClientRect();
                 var sx = ev.clientX, sy = ev.clientY;
-                n.fixed = true;
+                n.locked = true;   // fx/fy 语义：拖住，不进积分（力照常施加→邻居橡皮筋跟随）
+                n.lx = n.x; n.ly = n.y;   // 锁定位先对齐当前坐标（防首帧 tick undefined 崩溃）
                 n._dragged = false;
                 simDragging = true;
-                heatSim(simAlpha < 0.05 ? 0.1 : null, 0.2);  // 冷图拖拽快速起热；热图保持当前能量
+                // d3 拖拽语义：alphaTarget(1) 加热——拖拽期间力场全功率工作（邻居实时跟随）
+                heatSim(null, 1);
                 highlightNode(n.id);  // 拖拽聚焦：被拖节点+相连的线/节点高亮，其余淡化（与 hover 一致，手机也生效）
                 function move(ev2) {
                     if (!n._dragged && (Math.abs(ev2.clientX - sx) + Math.abs(ev2.clientY - sy) > 5)) n._dragged = true;
-                    // 直接写坐标——渲染由常驻 sim tick 完成（每帧全图更新，邻居丝滑跟随）
-                    n.x = (ev2.clientX - svgRect.left - graphTransform.x) / graphTransform.k;
-                    n.y = (ev2.clientY - svgRect.top - graphTransform.y) / graphTransform.k;
+                    n.lx = (ev2.clientX - svgRect.left - graphTransform.x) / graphTransform.k;
+                    n.ly = (ev2.clientY - svgRect.top - graphTransform.y) / graphTransform.k;
+                    n.x = n.lx; n.y = n.ly;   // 立即锁到位（渲染由常驻 sim tick 完成，邻居丝滑跟随）
                 }
-function up() {
-                    n.fixed = false;
+                function up() {
                     simDragging = false;
-                    // 松手瞬降能量（0.2 拖拽态 → 0.06）+ 大幅阻尼：几帧内收敛，杜绝“静止前停不住”的跳动感
-                    simAlpha = Math.min(simAlpha, 0.06);
+                    n.locked = false;   // 解锁：重新参与积分，靠 link/charge 弹簧回弹到平衡位
+                    // d3 拖拽收尾：alphaTarget(0)。alpha 从拖拽期积累的高位自然冷却，
+                    // 期间 link+charge 力把拖远的节点拉回平衡→Obsidian 回弹手感，冷却完即静止，不振荡
                     simAlphaTarget = 0;
-                    // 松手瞬间大幅阻尼：排掉拖拽累积的动能，避免“过冲来回震一下再停”（Obsidian 松手即安静）
-                    graphNodes.forEach(function (m) {
-                        if (m === n) return;
-                        m.vx *= 0.4; m.vy *= 0.4;
-                    });
                     highlightNode(-1);  // 恢复全部亮度
                     window.removeEventListener('pointermove', move);
                     window.removeEventListener('pointerup', up);
@@ -1702,15 +1704,20 @@ function up() {
         highlightNode(hit ? hit.id : -1);
     }
     var W = 800, H = 500, cx = 400, cy = 250;
+    // d3 力导向（对齐 Obsidian 内核四力模型/Quartz graph.inline.ts）：
+    //   charge    forceManyBody(-100*repelForce)  顶多体斥力（1/d² 衰减）
+    //   center    forceCenter(strength)           质心整体平移居中（无向心拉力，不做圆形约束）
+    //   link      forceLink(distance)             链接弹簧拉到 linkDistance
+    //   collide   forceCollide                    节点防重叠
+    //   积分      x += vx（位移不乘 alpha）；vx *= velocityDecay(0.4)
+    //   制冷      alpha += (alphaTarget-alpha)*alphaDecay
+    // 拖拽 = alphaTarget(1) 钉住节点（fx/fy），邻居仍全功率施力 → 橡皮筋跟随；松手 alphaTarget(0) 弹簧回弹到平衡。
+    var f_REP = 3000, f_SPRING = 0.04, f_REST = 240, f_BOUND = 900, f_DECAYv = 0.4;
     function stepOnce() {
         var nodes = graphNodes;
         if (!nodes.length || simAlpha <= 0) return;
         var a = simAlpha;
-        // 力参数：对标 Obsidian 宽松舒展感——更长链接、温和中心引力、适中斥力、碰撞防重叠
-        var REP = 3000, SPRING = 0.04, REST = 240, DIST_MAX = 900;
-        // 多体斥力 + 碰撞：空间哈希加速（Obsidian/d3 同款思路）。节点归入 size=GCELL 的网格桶，
-        // 只算同桶+相邻 8 桶的节点对——远距节点对斥力≈0（反比 d²），跳过无视觉损失，复杂度 O(N²)→O(N·C)。
-        // 注：被窗口边界 clamp 到边上的节点可能出可视区，但它们在桶里照常参与。
+        // ---- charge（多体斥力，1/d²）：同桶+邻桶，含固定节点（施加力给邻居，供反作用）----
         var GCELL = 320;
         var cellMap = {}, cellIds = [];
         for (var gi = 0; gi < nodes.length; gi++) {
@@ -1727,25 +1734,20 @@ function up() {
                     var nk = (cxx + ox) + ':' + (cyy + oy);
                     var other = cellMap[nk];
                     if (!other) continue;
-                    // 同桶对避免重复：仅当 nk >= k（按字典序）才处理，保证每对被算一次
                     if (nk < k) continue;
-                    var listA = cellMap[k], listB = other;
-                    for (var ia = 0; ia < listA.length; ia++) {
-                        var i = listA[ia];
-                        if (nodes[i].fixed) continue;
-                        var jstart = (other === listA) ? ia + 1 : 0;
-                        for (var jb = jstart; jb < listB.length; jb++) {
-                            var j = listB[jb];
-                            if (nodes[j].fixed) continue;
+                    for (var ia = 0; ia < cellMap[k].length; ia++) {
+                        var i = cellMap[k][ia];
+                        var jstart = (other === cellMap[k]) ? ia + 1 : 0;
+                        for (var jb = jstart; jb < other.length; jb++) {
+                            var j = other[jb];
                             var dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
                             var d2 = dx * dx + dy * dy + 1;
-                            if (d2 > DIST_MAX * DIST_MAX) continue;
+                            if (d2 > f_BOUND * f_BOUND) continue;
                             var d = Math.sqrt(d2);
-                            // 斥力（反比于距离平方）
-                            var fRep = (REP / d2) * a;
+                            var fRep = (f_REP / d2) * a;
+                            // 固定节点也接收反作用（d3 fx/fy 节点照常受力）
                             nodes[i].vx += (dx / d) * fRep; nodes[i].vy += (dy / d) * fRep;
                             nodes[j].vx -= (dx / d) * fRep; nodes[j].vy -= (dy / d) * fRep;
-                            // 碰撞：节点不能重叠
                             var minDist = (nodes[i].r || 5) + (nodes[j].r || 5) + 2;
                             if (d < minDist && d > 0.1) {
                                 var fCol = (minDist - d) * 0.5 * a;
@@ -1757,34 +1759,35 @@ function up() {
                 }
             }
         }
-        // 链接弹簧（胡克定律：拉到 REST——hub 节点弹簧更紧，聚拢效果）
+        // ---- link（弹簧拉到 f_REST）----
         graphLinks.forEach(function (l) {
             var an = nodes[l.source], bn = nodes[l.target];
             if (!an || !bn) return;
             var dx = bn.x - an.x, dy = bn.y - an.y;
             var d = Math.sqrt(dx * dx + dy * dy) || 1;
-            var s = SPRING * (1 + Math.min(degree[l.source] || 0, degree[l.target] || 0) * 0.04);
-            var f = (d - REST) * s * a;
-            if (!an.fixed) { an.vx += (dx / d) * f; an.vy += (dy / d) * f; }
-            if (!bn.fixed) { bn.vx -= (dx / d) * f; bn.vy -= (dy / d) * f; }
+            var s = f_SPRING * (1 + Math.min(degree[l.source] || 0, degree[l.target] || 0) * 0.04);
+            var f = (d - f_REST) * s * a;
+            if (!an.locked) { an.vx += (dx / d) * f; an.vy += (dy / d) * f; }
+            if (!bn.locked) { bn.vx -= (dx / d) * f; bn.vy -= (dy / d) * f; }
         });
-        // 积分：中心引力（温和，Obsidian 观感——节点自然聚拢但不紧挤）+ 阻尼 + 位移
+        // ---- center（力导向圆形云团：均匀温和向心引力把节点拢成本体圆形，中心有节点实心）。
+        //     不乘 alpha 的替代方案（forceCenter 质心平移）只是整体居中，无向心拉力，散点没有"圆"的轮廓——弃用。----
         nodes.forEach(function (n) {
-            if (n.fixed) return;
             n.vx += (cx - n.x) * 0.025 * a;
             n.vy += (cy - n.y) * 0.025 * a;
-            n.vx *= 0.6; n.vy *= 0.6;
-            if (n.vx > 4) n.vx = 4; if (n.vx < -4) n.vx = -4;
-            if (n.vy > 4) n.vy = 4; if (n.vy < -4) n.vy = -4;
-            n.x += n.vx; n.y += n.vy;
-            if (n.x < 12) n.vx += (12 - n.x) * 0.1 * a;
-            if (n.x > W - 12) n.vx -= (n.x - (W - 12)) * 0.1 * a;
-            if (n.y < 12) n.vy += (12 - n.y) * 0.1 * a;
-            if (n.y > H - 12) n.vy -= (n.y - (H - 12)) * 0.1 * a;
-            if (n.x < 2) n.x = 2;
-            if (n.x > W - 2) n.x = W - 2;
-            if (n.y < 2) n.y = 2;
-            if (n.y > H - 2) n.y = H - 2;
+        });
+        // ---- 积分（d3：锁定位→位置=锁定坐标但 vx 保留（动量），松手后继续累积力；非锁 x+=vx；vx*=velocityDecay）----
+        nodes.forEach(function (n) {
+            if (n.locked) {
+                n.x = n.lx; n.y = n.ly;   // fx/fy：位置跟随拖拽
+            } else {
+                n.x += n.vx; n.y += n.vy;
+            }
+            n.vx *= f_DECAYv; n.vy *= f_DECAYv;
+            if (!n.locked && Math.abs(n.vx) < 0.02 && Math.abs(n.vy) < 0.02) { n.vx = 0; n.vy = 0; }
+            // 软边界兜底（仅钳坐标，不反弹）
+            if (n.x < -400) n.x = -400; if (n.x > W + 400) n.x = W + 400;
+            if (n.y < -300) n.y = -300; if (n.y > H + 300) n.y = H + 300;
         });
         // 位置更新由调用方负责（tick/move 用 updateMovingEls 轻量更新；renderGraph 末尾用 updateEls 全量一次）
     }
