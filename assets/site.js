@@ -600,7 +600,7 @@
         pv.innerHTML = '<div style="margin:auto;color:var(--vp-c-text-mute);font-size:13px;">Loading…</div>';
         loadPdfJs(function () {
             pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/pdfjs/pdf.worker.min.js';
-            pdfjsLib.getDocument('/vault/' + path).promise.then(function (doc) {
+            pdfjsLib.getDocument('/vault/' + path + '?embed=1').promise.then(function (doc) {
                 pv.innerHTML = '';
                 var host = document.createElement('div');
                 pv.appendChild(host);
@@ -973,7 +973,7 @@
         if (/\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(name)) {
             var img = document.createElement('img');
             img.className = 'ob-embed-img';
-            img.src = '/vault/' + encodeURI(resolveAsset(name));
+            img.src = '/vault/' + encodeURI(resolveAsset(name)) + '?embed=1';
             img.alt = name;
             // 不用 lazy：离屏图片不发起请求，onerror 永不触发，缺失兜底与重试机制会失效
             img.onerror = function () { embedFail(img, name); };  // 树未就绪猜错路径 → 落 missing 等重试
@@ -985,7 +985,7 @@
             vid.className = 'ob-embed-media';
             vid.controls = true;
             vid.preload = 'metadata';
-            vid.src = '/vault/' + encodeURI(resolveAsset(name));
+            vid.src = '/vault/' + encodeURI(resolveAsset(name)) + '?embed=1';
             vid.onerror = function () { embedFail(vid, name); };
             el.innerHTML = '';
             el.classList.add('loaded');
@@ -995,7 +995,7 @@
             aud.className = 'ob-embed-media';
             aud.controls = true;
             aud.preload = 'metadata';
-            aud.src = '/vault/' + encodeURI(resolveAsset(name));
+            aud.src = '/vault/' + encodeURI(resolveAsset(name)) + '?embed=1';
             aud.onerror = function () { embedFail(aud, name); };
             el.innerHTML = '';
             el.classList.add('loaded');
@@ -1014,7 +1014,7 @@
     function mountPdfEmbed(el, name, sub) {
         loadPdfJs(function () {
             pdfjsLib.GlobalWorkerOptions.workerSrc = '/assets/pdfjs/pdf.worker.min.js';
-            pdfjsLib.getDocument('/vault/' + encodeURI(resolveAsset(name))).promise.then(function (doc) {
+            pdfjsLib.getDocument('/vault/' + encodeURI(resolveAsset(name)) + '?embed=1').promise.then(function (doc) {
                 el.innerHTML = '';
                 el.classList.add('loaded');
                 buildPdfPane(el, doc, { sub: sub });
@@ -2291,7 +2291,7 @@
                 el('rect', { x: x, y: y, width: w, height: h, rx: 8 }, cp);
                 hostCard.appendChild(cp);
                 var im = el('image', { x: x, y: y, width: w, height: h, 'clip-path': 'url(#' + cid + ')', preserveAspectRatio: 'xMidYMid slice' }, hostCard);
-                im.setAttribute('href', '/vault/' + encodeURI(String(n.file || '').replace(/^\.?\//, '')).replace(/%2F/gi, '/'));
+                im.setAttribute('href', '/vault/' + encodeURI(String(n.file || '').replace(/^\.?\//, '')).replace(/%2F/gi, '/') + '?embed=1');
                 cards[n.id].baseX = x; cards[n.id].baseY = y;
                 return;
             }

@@ -52,7 +52,11 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
             if (is_md($localFull) || is_pdf($localFull) || is_canvas($localFull) || is_html($localFull) || is_png($localFull)) {
                 if (is_excluded($rel, $config['exclude_paths'] ?? [])) fail('Not Found', 404); // 隐藏列表 → 视为不存在
                 if (is_md($localFull) && is_unpublished((string)@file_get_contents($localFull))) fail('Not Found', 404); // 选择性发布
-                if (!render_type_file_enabled($config, $localFull)) fail('Not Found', 404); // 渲染类型关闭 → 视为不存在
+                // 渲染类型关闭 → 视为不存在；但 ?embed=1（页面内嵌图片的 <img>/<video>/<audio>/canvas 节点）放行——文件仍是合法存在，只是不出现在树/列表
+                if (!render_type_file_enabled($config, $localFull)) {
+                    $isEmbed = !empty($_GET['embed']) && is_image($localFull);
+                    if (!$isEmbed) fail('Not Found', 404);
+                }
             }
             $ext = strtolower(pathinfo($localFull, PATHINFO_EXTENSION));
             header('Content-Type: ' . ($mimeMap[$ext] ?? 'application/octet-stream'));
@@ -67,7 +71,10 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
                 $full = realpath($m['root'] . '/' . $rel);
                 if ($full === false || strpos($full, $m['root'] . '/') !== 0 || !is_file($full)) continue;
                 if (is_excluded($rel, $config['exclude_paths'] ?? [])) fail('Not Found', 404); // 隐藏列表 → 视为不存在
-                if (!render_type_file_enabled($config, $full)) fail('Not Found', 404); // 渲染类型关闭 → 视为不存在
+                if (!render_type_file_enabled($config, $full)) {
+                    $isEmbed = !empty($_GET['embed']) && is_image($full);
+                    if (!$isEmbed) fail('Not Found', 404); // 渲染类型关闭 → 视为不存在；?embed=1 嵌入图片放行
+                }
                 $ext = strtolower(pathinfo($full, PATHINFO_EXTENSION));
                 header('Content-Type: ' . ($mimeMap[$ext] ?? 'application/octet-stream'));
                 header('Content-Length: ' . (string)filesize($full));
@@ -77,7 +84,10 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
             // ima mount static files (PDF, etc.): proxy-fetch then forward (download requires X-IMA-* headers)
             if (ima_index_lookup($config, $rel) !== null) {
                 if (is_excluded($rel, $config['exclude_paths'] ?? [])) fail('Not Found', 404);
-                if (!render_type_file_enabled($config, $rel)) fail('Not Found', 404);
+                if (!render_type_file_enabled($config, $rel)) {
+                    $isEmbed = !empty($_GET['embed']) && is_image($rel);
+                    if (!$isEmbed) fail('Not Found', 404); // 渲染类型关闭 → 视为不存在；?embed=1 嵌入图片放行
+                }
                 if (ima_stream_file($config, $rel)) exit;
             }
         }
@@ -464,6 +474,6 @@ var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : '
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
 <script src="/assets/render.js?v=20260905s" defer></script>
-<script src="/assets/site.js?v=20260906k" defer></script>
+<script src="/assets/site.js?v=20260906l" defer></script>
 </body>
 </html>
