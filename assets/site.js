@@ -613,6 +613,22 @@
 
     // 文章渲染统一出口：内联 HTML → 高亮/降级/标题/视图切换/增强（selectFile 与 SSR 共用）
     function showArticle(html, nodePath, titleOverride) {
+        // markdown 图片（![](x.png)）的 <img> 不带嵌入标记——png 渲染开关关闭时 /vault/ 门禁会 404。
+        // 统一补 ?embed=1：文章内 <img> 一律视为"嵌入引用"（与 ![[..]] 同语义）。相对图片以文章所在目录为基，重写为 /vault/ 绝对路径（与程序内嵌逻辑一致）
+        var baseDir = String(nodePath || '').replace(/[^/]*$/, '');
+        html = html.replace(/<img\b([^>]*)\bsrc="([^"]+)"([^>]*)>/gi, function (m0, att1, src, att2) {
+            var nsrc = src;
+            if (src.indexOf('/vault/') === 0) {
+                nsrc = src.split('?')[0] + '?embed=1';
+            } else if (/^https?:\/\//i.test(src) || src.indexOf('data:') === 0) {
+                // 外部/内联图片不动
+            } else if (/\.md$/i.test(String(nodePath || ''))) {
+                // 相对图片：仅当本页是 vault markdown 文章才重写为 /vault/ 绝对路径（首页/RSS 无真实相对基）
+                var rel = baseDir + decodeURIComponent(src.split('?')[0].replace(/^\.\//, ''));
+                nsrc = '/vault/' + rel.split('?')[0] + '?embed=1';
+            }
+            return '<img' + att1 + 'src="' + nsrc + '"' + att2 + '>';
+        });
         $('md-view').innerHTML = html;
         renderMermaid($('md-view'));
         // 正文允许 H1：不再降级（标题栏显示文件名，正文 H1 与文件名可并存）

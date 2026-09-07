@@ -288,10 +288,31 @@ function ima_access_info(array $config, array $entry): ?array {
     return ['url' => $url, 'headers' => $headers];
 }
 
-/** Read an ima file's raw bytes (server proxy). Returns [bytes, mime] or null */
+/** ima 内容磁盘缓存：原始字节单独存文件 + 小型 meta（大 PDF 用二进制直读，不用 var_export 转义——后者 89MB 内容解析极慢） */
+function ima_content_cache_path(string $rel, string $suffix = 'meta'): string {
+    static $d = null;
+    if ($d === null) {
+        $d = sys_get_temp_dir() . '/brainpress_ima_content';
+        if (!is_dir($d)) @mkdir($d, 0775, true);
+    }
+    return $d . '/' . sha1($rel) . ($suffix === 'data' ? '.bin' : '.meta');
+}
+
+/** Read an ima file's raw bytes (server proxy). Returns [bytes, mime] or null.
+ *  带磁盘缓存：命中且在 TTL 内直接返回，避免每次点击文章都 live 拉腾讯（切换秒开）。
+ *  live 拉取失败时清掉过期缓存再重试一次（签名 URL 失效不会把坏数据沉淀成"一直失败"）。 */
 function ima_read_raw(array $config, string $rel): ?array {
     $entry = ima_index_lookup($config, $rel);
     if ($entry === null) return null;
+    $metaFile = ima_content_cache_path($rel, 'meta');
+    $dataFile = ima_content_cache_path($rel, 'data');
+    if (is_file($metaFile)) {
+        $m = @(include $metaFile);
+        if (is_array($m) && !empty($m['mime']) && (int)($m['ts'] ?? 0) + IMA_CACHE_TTL > time() && is_file($dataFile)) {
+            $bytes = @file_get_contents($dataFile);
+            if ($bytes !== false) return ['bytes' => $bytes, 'mime' => $m['mime']];
+        }
+    }
     $info = ima_access_info($config, $entry);
     if ($info === null) return null;
     $mime = 'application/octet-stream';
@@ -311,7 +332,14 @@ function ima_read_raw(array $config, string $rel): ?array {
     $bytes = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
     curl_close($ch);
-    if ($bytes === false || $code !== 200 || $bytes === '') return null;
+    if ($bytes === false || $code !== 200 || $bytes === '') {
+        // live 失败：删掉过期缓存，避免"永失败缓存"粘住
+        @unlink($metaFile); @unlink($dataFile);
+        return null;
+    }
+    if (@file_put_contents($dataFile, $bytes) !== false) {
+        @file_put_contents($metaFile, '<?php return ' . var_export(['ts' => time(), 'mime' => $mime], true) . ";\n");
+    }
     return ['bytes' => $bytes, 'mime' => $mime];
 }
 
