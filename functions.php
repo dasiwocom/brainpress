@@ -415,12 +415,13 @@ function scan_tree(string $dir, string $relPrefix = '', array $excludes = [], ar
             ];
         } elseif (is_image($full)) {
             if ($forMount) continue;  // 挂载目录不收录图片（无静态路由的死链）
-            if (is_png($full) && !$rtPng) continue;  // PNG 渲染关闭 → 树中不显示
-            // 图片文件也收录（嵌入显示用）
+            // 图片文件收录：始终保留进树(JSON)供前端 findAsset 按名解析嵌入（![[x.png]]）；
+            // png 渲染开关只决定是否可作为"独立文档"呈现——关闭时打 asset 标记：不列入侧栏菜单/不可点击打开，但嵌入解析仍命中
             $items[] = [
                 'name' => $entry,
                 'path' => $rel,
                 'type' => 'file',
+                'asset' => !empty($rtPng) ? false : (is_png($full) ? true : false),
             ];
         } elseif (is_pdf($full)) {
             if (!$rtPdf || $forMount) continue;  // PDF 渲染关闭 / 挂载 PDF 无静态路由，阅读器加载不到
