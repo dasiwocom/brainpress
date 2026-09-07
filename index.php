@@ -438,6 +438,7 @@ var FRONT_DRAWER_EXPANDED = <?php echo $frontDrawerExpanded ? 'true' : 'false'; 
 // 强制展开目录（后台目录管理设置，优先级高于默认展开开关）
 var FRONT_EXPANDED_DIRS = <?php echo json_encode(expand_effective_entries($config)); ?>;
 var GRAPH_ALIAS_PATH = <?php echo json_encode(trim((string)($config['graph_path'] ?? ''), "/ \t")); ?>;
+var GRAPH_HIGHLIGHT_DIRECT = <?php echo (!isset($config['graph_highlight_direct']) || !empty($config['graph_highlight_direct'])) ? 'true' : 'false'; ?>;
 
 // 首页文章（后台站点设置配置，内联零请求；空 = 未配置）
 var HOME_MD = <?php echo json_encode($homeMd); ?>;
@@ -474,6 +475,6 @@ var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : '
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
 <script src="/assets/render.js?v=20260905s" defer></script>
-<script src="/assets/site.js?v=20260906l" defer></script>
+<script src="/assets/site.js?v=20260907a" defer></script>
 </body>
 </html>

@@ -35,6 +35,7 @@
     "front_drawer_expanded": true,
     "home_article": "BrainPress/Introduction.zh.md",
     "graph_path": "",
+    "graph_highlight_direct": true,
     "content_width": 840,
     "exclude_paths": [],
     "pinned_articles": [],

@@ -79,6 +79,7 @@ bindSwitch('switch-ai-enabled');
 bindSwitch('switch-ai-mode');
 bindSwitch('switch-pin-nav');
 bindSwitch('switch-footer');
+bindSwitch('switch-graph-direct');
 // 脚注：失焦保存（支持 HTML）
 $('footer-html').addEventListener('change', saveConfig);
 // 字体切换：选择后立即保存 + 实时预览
@@ -138,6 +139,7 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (rt.canvas !== false) $('switch-rt-canvas').classList.add('on'); } catch (e) {}
     try { if (rt.png !== false) $('switch-rt-png').classList.add('on'); } catch (e) {}
     try { $('graph-path').value = d.graph_path || ''; } catch (e) {}
+    try { if (d.graph_highlight_direct !== false) $('switch-graph-direct').classList.add('on'); } catch (e) {}
     try { $('site-title').value = d.site_title || 'BrainPress'; } catch (e) {}
     try { $('home-article').value = d.home_article || ''; } catch (e) {}
     try { $('content-width').value = d.content_width || 840; } catch (e) {}
@@ -462,6 +464,7 @@ function saveConfig() {
         },
         pin_navbar: $('switch-pin-nav').classList.contains('on'),
         graph_path: $('graph-path').value.trim(),
+        graph_highlight_direct: $('switch-graph-direct').classList.contains('on'),
         site_title: $('site-title').value.trim(),
         home_article: $('home-article').value.trim(),
         content_width: parseInt($('content-width').value, 10) || '',

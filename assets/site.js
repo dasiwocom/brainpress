@@ -1383,6 +1383,15 @@
     var graphWrap = $('graph-canvas-wrap');
     var graphEmpty = $('graph-empty');
     var GNS = 'http://www.w3.org/2000/svg';
+    // 视口鼠标位置 → graph 内部坐标（与节点 n.x/y 同系）：手动按 graphTransform 逆变换，
+    // 与拖拽写的坐标同一公式，所以 hover 判定与"手指点到的点"精确一致
+    function svgMousePoint(ev) {
+        var rect = graphSvg.getBoundingClientRect();
+        return {
+            x: (ev.clientX - rect.left - graphTransform.x) / (graphTransform.k || 1),
+            y: (ev.clientY - rect.top - graphTransform.y) / (graphTransform.k || 1)
+        };
+    }
     function openGraph() {
         try { setDrawer(false); } catch (e) {}
         try { setTopHidden(false); } catch (e) {}  // 图谱 fixed 定位不随滚动：强制显示顶栏（否则上方留 56px 空档、图谱贴不到顶栏）
@@ -1437,32 +1446,15 @@
             degree[l.target] = (degree[l.target] || 0) + 1;
         });
         nodes.forEach(function (n) { n.deg = degree[n.id] || 0; });
-        // 初始位置：确定性网格起步（间距按视口缩放——节点少铺得开、节点多也合理，不挤成一团）
-        var dirGroups = {};
-        nodes.forEach(function (n) { (dirGroups[n.dir] = dirGroups[n.dir] || []).push(n); });
-        var dKeys = Object.keys(dirGroups);
+        // 初始位置：Obsidian 力导向——画布内随机散点起步（无网格规律），由三力自然收敛成整体圆网
         var N0 = nodes.length;
-        var gridS = Math.round(Math.min(W, H) / Math.max(2, Math.sqrt(N0))) * 0.85;
-        gridS = Math.max(42, gridS);
-        var gCols = Math.max(1, Math.ceil(Math.sqrt(N0 * (W / H))));
-        var gRows = Math.max(1, Math.ceil(N0 / gCols));
-        var gx0 = cx - (gCols - 1) * gridS / 2;
-        var gy0 = cy - (gRows - 1) * gridS / 2;
+        var scatR = Math.min(W, H) * 0.45;   // 随机散布半径（视口 45%，几乎全长）
         nodes.forEach(function (n, i) {
-            n.x = gx0 + (i % gCols) * gridS;
-            n.y = gy0 + Math.floor(i / gCols) * gridS;
+            n.x = cx + (Math.random() * 2 - 1) * scatR;
+            n.y = cy + (Math.random() * 2 - 1) * scatR;
             n.vx = 0; n.vy = 0; n.fixed = false;
         });
-        // 同目录弱吸引对（预构建——stepOnce 每帧用，聚类但不画线）
-        clusterPairs = [];
-        dKeys.forEach(function (d) {
-            var arr = dirGroups[d];
-            for (var i = 0; i < arr.length; i++) {
-                for (var j = i + 1; j < arr.length; j++) {
-                    clusterPairs.push([arr[i].id, arr[j].id]);
-                }
-            }
-        });
+        clusterPairs = [];  // Obsidian 无目录分区，无需聚拢对
         // 快速初排（55 轮同步，带 alpha 衰减——更充分舒展后再交给 rAF）
         simAlpha = 1; simAlphaTarget = 0;
         for (var iter = 0; iter < 55; iter++) {
@@ -1506,8 +1498,8 @@
         // 单色（照搬 Obsidian 默认主题：所有节点同色，高连接枢纽更大）
         nodes.forEach(function (n) {
             var d = degree[n.id] || 0;
-            // 节点半径：Obsidian 同款——轻微差异（degree 0→2.2px，4→4.2px，9→5.2px，16→6.2px，绝不夸张）
-            var r = 2.2 + Math.sqrt(d);
+            // 节点半径：Obsidian 同款——轻微差异（degree 0→3.0px，4→5.0px，9→6.0px，16→7.0px，绝不夸张）
+            var r = 3.0 + Math.sqrt(d);
             n.r = r;
             var node = document.createElementNS(GNS, 'g');
             node.setAttribute('class', 'graph-node');
@@ -1530,14 +1522,15 @@
             t.setAttribute('transform', 'translate(0,' + (r + 12) + ') scale(' + (1 / (graphTransform.k || 1)) + ')');
             t.textContent = n.name;
             node.appendChild(t);
+            n._labelEl = t;
             node.addEventListener('click', function (ev) {
                 ev.stopPropagation();
                 if (n._dragged) { n._dragged = false; return; }
                 selectFile({ path: n.path });
             });
-            // hover：高亮邻居 + 当前节点标签常显（Obsidian 同款；即使缩小到阈值下也显示）
-            node.addEventListener('mouseenter', function () { graphHoverNode = n; t.setAttribute('opacity', '1'); highlightNode(n.id); });
-            node.addEventListener('mouseleave', function () { graphHoverNode = null; t.setAttribute('opacity', String((graphTransform.k < 1.2 ? 0 : Math.min(1, (graphTransform.k - 1.2) / 0.6)))); highlightNode(-1); });
+            // hover 不绑节点事件（节点动画移动时鼠标相对节点会在"透明大 hit 区"边缘反复进出→逐帧开/关高亮→闪）。
+            // 统一由 graphSvg 的 pointermove 记录鼠标位置 + rAF 帧末 computeHover() 按实际距离(mouse 落点)
+            // 判定，且状态没变不重画（幂等）——Quartz 同款思路（hitArea=节点圆，只按落点高亮）
             // 节点拖拽：锁定位置 + alphaTarget=0.3 再加热（邻居实时跟随，松手自然冷却）；
             // 移动超 5px 视为拖拽（抑制 click 跳转）
             node.addEventListener('pointerdown', function (ev) {
@@ -1547,7 +1540,7 @@
                 n.fixed = true;
                 n._dragged = false;
                 simDragging = true;
-                heatSim(simAlpha < 0.05 ? 0.15 : null, 0.3);  // 冷图拖拽快速起热；热图保持当前能量
+                heatSim(simAlpha < 0.05 ? 0.1 : null, 0.2);  // 冷图拖拽快速起热；热图保持当前能量
                 highlightNode(n.id);  // 拖拽聚焦：被拖节点+相连的线/节点高亮，其余淡化（与 hover 一致，手机也生效）
                 function move(ev2) {
                     if (!n._dragged && (Math.abs(ev2.clientX - sx) + Math.abs(ev2.clientY - sy) > 5)) n._dragged = true;
@@ -1555,10 +1548,17 @@
                     n.x = (ev2.clientX - svgRect.left - graphTransform.x) / graphTransform.k;
                     n.y = (ev2.clientY - svgRect.top - graphTransform.y) / graphTransform.k;
                 }
-                function up() {
+function up() {
                     n.fixed = false;
                     simDragging = false;
-                    simAlphaTarget = 0;  // 松手 → 自然冷却收敛
+                    // 松手瞬降能量（0.2 拖拽态 → 0.06）+ 大幅阻尼：几帧内收敛，杜绝“静止前停不住”的跳动感
+                    simAlpha = Math.min(simAlpha, 0.06);
+                    simAlphaTarget = 0;
+                    // 松手瞬间大幅阻尼：排掉拖拽累积的动能，避免“过冲来回震一下再停”（Obsidian 松手即安静）
+                    graphNodes.forEach(function (m) {
+                        if (m === n) return;
+                        m.vx *= 0.4; m.vy *= 0.4;
+                    });
                     highlightNode(-1);  // 恢复全部亮度
                     window.removeEventListener('pointermove', move);
                     window.removeEventListener('pointerup', up);
@@ -1644,34 +1644,100 @@
     // 拖拽时抬高 alphaTarget=0.3 再加热（邻居实时跟随），松手后自然冷却。不再用"最多 N 帧硬停"的土办法
     var simRaf = null;
     var simAlpha = 0, simAlphaTarget = 0, simDragging = false;
-    var ALPHA_DECAY = 1 - Math.pow(0.001, 1 / 300);  // ≈0.023/帧（d3 默认曲线：300 帧衰减到千分之一）
+    var ALPHA_DECAY = 1 - Math.pow(0.001, 1 / 140);  // ≈0.048/帧（比 d3 默认更快冷却：松手后安静得快，清新优雅不拖尾）
     var simEls = [], simLineEls = [], clusterPairs = [], linkAdj = {}, degree = {};
+    var graphNodeCache = null, graphLinkCache = null;  // 增量 DOM 同步缓存（位置变了才写 SVG 属性）
+    // hover 统一判定：graphSvg 上记鼠标位置，帧末 computeHover() 按实际距离幂等求命中节点。
+    // 状态不变就不重画 → 节点动画移动不再造成“进/出透明 hit 区”的逐帧闪烁（Quartz 做法：hitArea=节点圆）
+    var graphMouseActive = false, graphMouseX = 0, graphMouseY = 0;
+    graphSvg.addEventListener('pointermove', function (ev) {
+        graphMouseActive = true;
+        var pt = svgMousePoint(ev);
+        graphMouseX = pt.x; graphMouseY = pt.y;
+        computeHover();
+    }, { passive: true });
+    graphSvg.addEventListener('pointerleave', function () {
+        graphMouseActive = false;
+        computeHover();
+    });
+    function computeHover() {
+        if (!graphSvgG) return;
+        var hit = null;
+        if (graphMouseActive) {
+            var best = Infinity;
+            for (var i = 0; i < graphNodes.length; i++) {
+                var n = graphNodes[i];
+                var d2 = (graphMouseX - n.x) * (graphMouseX - n.x) + (graphMouseY - n.y) * (graphMouseY - n.y);
+                var rr = (n.r || 3) + 3;
+                if (d2 <= rr * rr && d2 < best) { best = d2; hit = n; }
+            }
+        }
+        if (hit === graphHoverNode) return;   // 幂等：没变不重画 → 不闪
+        if (graphHoverNode) {
+            // 旧 hover 标签恢复默认透明度
+            var oldLabel = graphHoverNode._labelEl;
+            if (oldLabel) oldLabel.setAttribute('opacity', String(graphTransform.k < 1.2 ? 0 : Math.min(1, (graphTransform.k - 1.2) / 0.6)));
+        }
+        graphHoverNode = hit;
+        if (hit) {
+            var lbl = hit._labelEl;
+            if (lbl) lbl.setAttribute('opacity', '1');
+        }
+        highlightNode(hit ? hit.id : -1);
+    }
     var W = 800, H = 500, cx = 400, cy = 250;
     function stepOnce() {
         var nodes = graphNodes;
         if (!nodes.length || simAlpha <= 0) return;
         var a = simAlpha;
         // 力参数：对标 Obsidian 宽松舒展感——更长链接、温和中心引力、适中斥力、碰撞防重叠
-        var REP = 2200, SPRING = 0.04, REST = 160, DIST_MAX = 900;
-        // 多体斥力 + 碰撞（Quartz 用 forceCollide(nodeRadius)，这里合一循环省 O(n²)）
-        for (var i = 0; i < nodes.length; i++) {
-            if (nodes[i].fixed) continue;
-            for (var j = i + 1; j < nodes.length; j++) {
-                if (nodes[j].fixed) continue;
-                var dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
-                var d2 = dx * dx + dy * dy + 1;
-                if (d2 > DIST_MAX * DIST_MAX) continue;
-                var d = Math.sqrt(d2);
-                // 斥力（反比于距离平方）
-                var fRep = (REP / d2) * a;
-                if (!nodes[i].fixed) { nodes[i].vx += (dx / d) * fRep; nodes[i].vy += (dy / d) * fRep; }
-                if (!nodes[j].fixed) { nodes[j].vx -= (dx / d) * fRep; nodes[j].vy -= (dy / d) * fRep; }
-                // 碰撞：节点不能重叠
-                var minDist = (nodes[i].r || 5) + (nodes[j].r || 5) + 2;
-                if (d < minDist && d > 0.1) {
-                    var fCol = (minDist - d) * 0.5 * a;
-                    if (!nodes[i].fixed) { nodes[i].vx += (dx / d) * fCol; nodes[i].vy += (dy / d) * fCol; }
-                    if (!nodes[j].fixed) { nodes[j].vx -= (dx / d) * fCol; nodes[j].vy -= (dy / d) * fCol; }
+        var REP = 3000, SPRING = 0.04, REST = 240, DIST_MAX = 900;
+        // 多体斥力 + 碰撞：空间哈希加速（Obsidian/d3 同款思路）。节点归入 size=GCELL 的网格桶，
+        // 只算同桶+相邻 8 桶的节点对——远距节点对斥力≈0（反比 d²），跳过无视觉损失，复杂度 O(N²)→O(N·C)。
+        // 注：被窗口边界 clamp 到边上的节点可能出可视区，但它们在桶里照常参与。
+        var GCELL = 320;
+        var cellMap = {}, cellIds = [];
+        for (var gi = 0; gi < nodes.length; gi++) {
+            var gk = Math.floor(nodes[gi].x / GCELL) + ':' + Math.floor(nodes[gi].y / GCELL);
+            (cellMap[gk] = cellMap[gk] || []).push(gi);
+            if (cellMap[gk].length === 1) cellIds.push(gk);
+        }
+        for (var ci = 0; ci < cellIds.length; ci++) {
+            var k = cellIds[ci];
+            var km = k.split(':');
+            var cxx = +km[0], cyy = +km[1];
+            for (var oy = -1; oy <= 1; oy++) {
+                for (var ox = -1; ox <= 1; ox++) {
+                    var nk = (cxx + ox) + ':' + (cyy + oy);
+                    var other = cellMap[nk];
+                    if (!other) continue;
+                    // 同桶对避免重复：仅当 nk >= k（按字典序）才处理，保证每对被算一次
+                    if (nk < k) continue;
+                    var listA = cellMap[k], listB = other;
+                    for (var ia = 0; ia < listA.length; ia++) {
+                        var i = listA[ia];
+                        if (nodes[i].fixed) continue;
+                        var jstart = (other === listA) ? ia + 1 : 0;
+                        for (var jb = jstart; jb < listB.length; jb++) {
+                            var j = listB[jb];
+                            if (nodes[j].fixed) continue;
+                            var dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+                            var d2 = dx * dx + dy * dy + 1;
+                            if (d2 > DIST_MAX * DIST_MAX) continue;
+                            var d = Math.sqrt(d2);
+                            // 斥力（反比于距离平方）
+                            var fRep = (REP / d2) * a;
+                            nodes[i].vx += (dx / d) * fRep; nodes[i].vy += (dy / d) * fRep;
+                            nodes[j].vx -= (dx / d) * fRep; nodes[j].vy -= (dy / d) * fRep;
+                            // 碰撞：节点不能重叠
+                            var minDist = (nodes[i].r || 5) + (nodes[j].r || 5) + 2;
+                            if (d < minDist && d > 0.1) {
+                                var fCol = (minDist - d) * 0.5 * a;
+                                nodes[i].vx += (dx / d) * fCol; nodes[i].vy += (dy / d) * fCol;
+                                nodes[j].vx -= (dx / d) * fCol; nodes[j].vy -= (dy / d) * fCol;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1686,25 +1752,14 @@
             if (!an.fixed) { an.vx += (dx / d) * f; an.vy += (dy / d) * f; }
             if (!bn.fixed) { bn.vx -= (dx / d) * f; bn.vy -= (dy / d) * f; }
         });
-        // 同目录弱吸引（距离 120 内互相靠近）
-        for (var cp = 0; cp < clusterPairs.length; cp++) {
-            var ca = nodes[clusterPairs[cp][0]], cb = nodes[clusterPairs[cp][1]];
-            if (!ca || !cb || ca.fixed || cb.fixed) continue;
-            var cdx = cb.x - ca.x, cdy = cb.y - ca.y;
-            var cd = Math.sqrt(cdx * cdx + cdy * cdy) || 1;
-            if (cd > 120) continue;
-            var cf = (cd - 120) * 0.004 * a;
-            ca.vx += (cdx / cd) * cf; ca.vy += (cdy / cd) * cf;
-            cb.vx -= (cdx / cd) * cf; cb.vy -= (cdy / cd) * cf;
-        }
         // 积分：中心引力（温和，Obsidian 观感——节点自然聚拢但不紧挤）+ 阻尼 + 位移
         nodes.forEach(function (n) {
             if (n.fixed) return;
-            n.vx += (cx - n.x) * 0.03 * a;
-            n.vy += (cy - n.y) * 0.03 * a;
+            n.vx += (cx - n.x) * 0.025 * a;
+            n.vy += (cy - n.y) * 0.025 * a;
             n.vx *= 0.6; n.vy *= 0.6;
-            if (n.vx > 10) n.vx = 10; if (n.vx < -10) n.vx = -10;
-            if (n.vy > 10) n.vy = 10; if (n.vy < -10) n.vy = -10;
+            if (n.vx > 4) n.vx = 4; if (n.vx < -4) n.vx = -4;
+            if (n.vy > 4) n.vy = 4; if (n.vy < -4) n.vy = -4;
             n.x += n.vx; n.y += n.vy;
             if (n.x < 12) n.vx += (12 - n.x) * 0.1 * a;
             if (n.x > W - 12) n.vx -= (n.x - (W - 12)) * 0.1 * a;
@@ -1718,20 +1773,33 @@
         // 位置更新由调用方负责（tick/move 用 updateMovingEls 轻量更新；renderGraph 末尾用 updateEls 全量一次）
     }
     function updateMovingEls() {
-        // 每帧全量同步节点与线（Quartz/Obsidian 做法——tick 里原子更新，避免"节点旧、线新"错位）
+        // 增量同步：节点/线位置与上次一致的跳过（力模拟里多数节点静止或微动，DOM 写从 O(N) 降到实际变化的一小撮）
+        if (!graphNodeCache) graphNodeCache = [];
+        if (!graphLinkCache) graphLinkCache = [];
         for (var i = 0; i < simEls.length; i++) {
             var n = graphNodes[i];
             if (!n) continue;
-            simEls[i].setAttribute('transform', 'translate(' + n.x.toFixed(1) + ',' + n.y.toFixed(1) + ')');
+            var px = graphNodeCache[i], py = graphNodeCache[i + 1];
+            var nxtx = n.x, nxty = n.y;
+            if (px !== nxtx || py !== nxty) {
+                simEls[i].setAttribute('transform', 'translate(' + nxtx.toFixed(1) + ',' + nxty.toFixed(1) + ')');
+                graphNodeCache[i] = nxtx; graphNodeCache[i + 1] = nxty;
+            }
         }
         for (var j = 0; j < simLineEls.length; j++) {
             var l = graphLinks[j];
             var a = graphNodes[l.source], b = graphNodes[l.target];
             if (!a || !b) continue;
-            simLineEls[j].setAttribute('x1', a.x.toFixed(1));
-            simLineEls[j].setAttribute('y1', a.y.toFixed(1));
-            simLineEls[j].setAttribute('x2', b.x.toFixed(1));
-            simLineEls[j].setAttribute('y2', b.y.toFixed(1));
+            var c4 = j * 4;
+            var c0 = graphLinkCache[c4], c1 = graphLinkCache[c4 + 1], c2 = graphLinkCache[c4 + 2], c3 = graphLinkCache[c4 + 3];
+            if (c0 !== a.x || c1 !== a.y || c2 !== b.x || c3 !== b.y) {
+                simLineEls[j].setAttribute('x1', a.x.toFixed(1));
+                simLineEls[j].setAttribute('y1', a.y.toFixed(1));
+                simLineEls[j].setAttribute('x2', b.x.toFixed(1));
+                simLineEls[j].setAttribute('y2', b.y.toFixed(1));
+                graphLinkCache[c4] = a.x; graphLinkCache[c4 + 1] = a.y;
+                graphLinkCache[c4 + 2] = b.x; graphLinkCache[c4 + 3] = b.y;
+            }
         }
     }
     function updateEls() {
@@ -1756,13 +1824,14 @@
         function tick() {
             simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
             // 能量自然耗尽 → 停帧（拖拽中 simDragging=true 保持运转）
-            if (!simDragging && simAlphaTarget === 0 && simAlpha < 0.002) {
+            if (!simDragging && simAlphaTarget === 0 && simAlpha < 0.015) {
                 simAlpha = 0;
                 simRaf = null;
                 return;
             }
             stepOnce();
             updateMovingEls();
+            computeHover();   // 节点移动时鼠标不动 → 也要按最新位置判定 hover（幂等，不闪）
             simRaf = requestAnimationFrame(tick);
         }
         simRaf = requestAnimationFrame(tick);
@@ -1829,6 +1898,7 @@
         if (!graphSvgG) return;
         var neighbors = {};
         if (id >= 0) {
+            // 仅直接相连（Obsidian 行为：选中只高亮与它直接连线的节点/线）
             graphLinks.forEach(function (l) {
                 if (l.source == id || l.target == id) { neighbors[l.source] = 1; neighbors[l.target] = 1; }
             });
@@ -1852,7 +1922,13 @@
         }
         for (var j = 0; j < simLineEls.length; j++) {
             var l = graphLinks[j];
-            var on2 = (id < 0 || (neighbors[l.source] && neighbors[l.target]));
+            // 线高亮：默认仅亮选中节点直接连出的线（Obsidian 行为：1-2、1-3 亮，2-3 不亮）；
+            // 关闭开关时两端都在邻居集合（2-3 也亮）。
+            var on2 = (id < 0);
+            if (!on2) {
+                if (GRAPH_HIGHLIGHT_DIRECT) on2 = (l.source == id || l.target == id);
+                else on2 = (neighbors[l.source] && neighbors[l.target]);
+            }
             simLineEls[j].classList.toggle('graph-link-dim', !on2);
             simLineEls[j].classList.toggle('graph-link-hot', id >= 0 && on2);  // hover 相关线变粗变亮
         }

@@ -39,6 +39,7 @@ if (strpos($uri, '/api/admin/') === 0) {
             'ai_model' => $config['ai_model'] ?? 'deepseek-chat',
             'ai_mode' => $config['ai_mode'] ?? 'hybrid',
             'ai_enabled' => $config['ai_enabled'] ?? true,
+            'graph_highlight_direct' => !isset($config['graph_highlight_direct']) || !empty($config['graph_highlight_direct']),
             'graph_path' => $config['graph_path'] ?? '',
             'render_types' => $config['render_types'] ?? ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true, 'png' => true],
             'article_footer' => $config['article_footer'] ?? true,
@@ -171,6 +172,7 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['ai_mode'] = !empty($body['ai_mode']) ? 'hybrid' : 'strict';
         $config['ai_enabled'] = !empty($body['ai_enabled']);
         $config['graph_path'] = trim((string)($body['graph_path'] ?? ''), "/ \t");
+        $config['graph_highlight_direct'] = !empty($body['graph_highlight_direct']);
         $renderTypes = (array)($body['render_types'] ?? []);
         $config['render_types'] = [
             'markdown' => !isset($renderTypes['markdown']) ? true : !empty($renderTypes['markdown']),
@@ -516,6 +518,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
         <div id="view-graph" style="display:none">
             <p class="desc">Knowledge graph view settings. Node names are always shown (Obsidian-style).</p>
             <div class="field-row"><span class="field-label">Graph path alias</span><input type="text" id="graph-path" placeholder="e.g. Visual-Knowledge/graph — tree entry + 302 to /graph; empty = bottom entry"></div>
+            <div class="render-row"><span class="render-label">Highlight only direct links <small>(on = pick a node, only its own links light up like Obsidian; off = links between its neighbours also light up)</small></span><button class="switch" id="switch-graph-direct" aria-label="toggle graph direct-link highlight"></button></div>
             <div class="msg" id="msg-graph"></div>
         </div>
 
@@ -607,7 +610,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     <script>
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260906e"></script>
+    <script src="/assets/admin.js?v=20260906g"></script>
     </body>
     </html>
     <?php
