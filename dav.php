@@ -56,11 +56,12 @@ function handle_webdav(string $uri, string $method, array $config): never
     // 相对路径（去掉 /dav/ 前缀）；兼容 Obsidian 附加的库名前缀（/dav/<vault>/...）
     $rel = trim(substr($uri, 4), '/');
     $rel = urldecode($rel);
-    // 剥掉 Obsidian Remotely Save 附加的库名前缀（兼容 obsidian / vault 两种 vault 名）
-    if ($rel === 'obsidian' || strpos($rel, 'obsidian/') === 0) {
+    // 剥掉 Obsidian Remotely Save 附加的库名前缀（兼容大小写 + vault/obsidian 两种 vault 名）
+    $relLower = strtolower($rel);
+    if ($relLower === 'obsidian' || strpos($relLower, 'obsidian/') === 0) {
         $rel = substr($rel, strlen('obsidian'));
         $rel = trim($rel, '/');
-    } elseif ($rel === 'vault' || strpos($rel, 'vault/') === 0) {
+    } elseif ($relLower === 'vault' || strpos($relLower, 'vault/') === 0) {
         $rel = substr($rel, strlen('vault'));
         $rel = trim($rel, '/');
     }
