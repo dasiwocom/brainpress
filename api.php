@@ -269,10 +269,6 @@ function handle_api(string $uri, string $method, array $config): never
 
     // Graph View 数据：扫描 vault 解析 [[wikilink]]，输出节点 + 连线（?dir= 限定范围；links 仅含两端都在范围内的）
     if ($uri === '/api/graph' && $method === 'GET') {
-        // Graph 总开关：后台 graph_path 留空 = 关闭（API 也直接返回关闭，不扫描/不占资源）
-        if (trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
-            fail('graph disabled');
-        }
         $gDir = trim((string)($_GET['dir'] ?? ''));
         $gExcludes = $config['exclude_paths'] ?? [];
         $gFiles = collect_all_md_files($config);

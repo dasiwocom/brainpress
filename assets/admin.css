@@ -352,7 +352,9 @@ body.drawer-open { overflow:hidden; }
     font-size:13px; color:var(--vp-c-text-3); padding:10px 2px;
 }
 
-.render-row { display:flex; align-items:center; justify-content:space-between; min-height:46px; border-bottom:1px solid var(--line); }
+.render-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px; min-height:46px; padding:6px 0; border-bottom:1px solid var(--line); }
+.render-row .switch,
+.render-row .switch.on { flex:none; margin-left:auto; }
 /* Tree 页（Pinned / Expanded / Hidden 三视图）：区块靠 section-title 分隔，行底线全部去掉 */
 #view-pinned .render-row,
 #view-pinned .field-row,

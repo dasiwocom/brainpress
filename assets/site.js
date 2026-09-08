@@ -41,7 +41,6 @@
             if (e) e.style.display = 'none';
         });
     }
-    var backlinksRendering = false;  // 防重入：避免 retryObsidian 与 showArticle 并发渲染导致重复
 
     /* ---------- 基础 ---------- */
     function toast(msg) {
@@ -87,6 +86,7 @@
             $('md-view').style.display = 'none';
             $('tag-view').style.display = 'none';
             $('toc-panel').style.display = 'none';
+            if (lgWrap) lgWrap.style.display = 'none';
             $('empty-state').textContent = 'No home article configured. Set it in Admin → Site Settings.';
             $('empty-state').style.display = '';
             return;
@@ -122,6 +122,7 @@
             $('tag-title').textContent = '#' + tagName;
             $('tag-title').style.display = '';
             $('tag-view').style.display = '';
+            if (lgWrap) lgWrap.style.display = 'none';   // 标签页不显示局部图
             var md = $('tag-list');
             md.innerHTML = '<div class="tag-page-heading">Notes tagged <code>#' + esc(tagName) + '</code></div>';
             var hitCount = 0;
@@ -198,13 +199,6 @@
             renderHome(); // 预渲染主页（隐藏状态）
             state.path = window.SSR_PDF;
             openPdf(window.SSR_PDF);
-            loadTree();
-            return;
-        }
-        // 服务端渲染直达（URL 直接访问 /graph）：图谱视图已由下方 SSR 块打开，这里只建索引树；
-        // 不能走默认主页路径——renderHome 会复显 doc-wrap 并点亮右轨 TOC（图谱页右轨必须留白）
-        if (window.SSR_GRAPH) {
-            state.path = '';
             loadTree();
             return;
         }
@@ -305,7 +299,7 @@
             mountEmbed(el, nm, el.dataset.sub || null);
             touched = true;
         });
-        if (touched) renderBacklinks();
+        // backlinks 功能已移除（页面底部双链列表不再渲染）
     }
     async function loadTree() {
         try {
@@ -590,6 +584,7 @@
         $('empty-state').style.display = 'none';
         $('doc-wrap').style.display = 'flex';
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';  // PDF 无目录 → 右栏留空
+        if (lgWrap) lgWrap.style.display = 'none';   // PDF 视图不显示局部图
         $('md-view').style.display = 'none';
         // 标题：文件名（去 .pdf 扩展名，与目录树一致）
         var docName = path.split('/').pop().replace(/\.pdf$/i, '');
@@ -655,6 +650,7 @@
             $('md-view').appendChild(foot);
         }
         renderToc();
+        lgRender(state.path);   // 当前文章邻域图（Quartz local graph）
         addCodeCopy();
         // 代码高亮/行号按需：文章里有代码块才加载 hljs（首页与无代码文章零开销）；mermaid 不参与
         if (window.hljs) { try { applyHighlight(); } catch (e) {} }
@@ -1190,7 +1186,7 @@
                 if (def) scrollMdTo(def);
             });
         });
-        renderBacklinks();
+        // backlinks 功能已移除
     }
     // 获取笔记的 ID
     function getDocId(path) {
@@ -1247,86 +1243,7 @@
             el.classList.add('ob-embed-missing');
         });
     }
-    // 渲染反向链接（被谁引用）
-    function renderBacklinks() {
-        if (backlinksRendering) return;  // 防并发重复
-        backlinksRendering = true;
-        var wrap = $('backlinks');
-        if (!wrap) return;
-        wrap.innerHTML = '';
-        wrap.style.display = 'none';   // 构建期间隐藏，避免插入时触发颜色过渡
-        if (!state.path) return;
-        var currentName = state.path.split('/').pop().replace(/^\d+-/, '').replace(/\.md$/i, '');
-        var currentId = getDocId(state.path);
-        var refs = [];
-        var map = window._docMap || {};
-        for (var k in map) {
-            var p = map[k];
-            if (p === state.path) continue;
-            var base = p.split('/').pop().replace(/^\d+-/, '').replace(/\.md$/i, '');
-            // 简化：加载每篇笔记内容检查是否引用当前笔记（异步，笔记少可接受）
-            refs.push({ path: p, name: base, id: k });
-        }
-        // 逐个检查引用，并记录引用上下文片段
-        var checked = 0;
-        var found = [];
-        refs.forEach(function (ref) {
-            api('/api/file?path=' + encodeURIComponent(ref.path)).then(function (data) {
-                var c = data.content || '';
-                var idx = c.indexOf('[[' + currentName + ']]');
-                if (idx === -1) idx = c.indexOf('[[' + currentId + ']]');
-                if (idx > -1) {
-                    ref.excerpt = c.slice(Math.max(0, idx - 30), idx + 30 + currentName.length + 4).replace(/\n/g, ' ').trim();
-                    found.push(ref);
-                }
-                checked++;
-                if (checked >= refs.length) showBacklinks(found, wrap);
-            }).catch(function () {
-                checked++;
-                if (checked >= refs.length) showBacklinks(found, wrap);
-            });
-        });
-        if (!refs.length) showBacklinks(found, wrap);
-    }
-    function showBacklinks(found, wrap) {
-        if (!found.length) {
-            wrap.style.display = '';
-            return;
-        }
-        // 头部：标题
-        var head = document.createElement('div');
-        head.className = 'backlinks-head';
-        var title = document.createElement('span');
-        title.className = 'backlinks-title';
-        title.textContent = 'Backlinks';
-        head.appendChild(title);
-        wrap.appendChild(head);
-        // 列表：每条 = 笔记名 + 引用上下文
-        var list = document.createElement('div');
-        list.className = 'backlinks-list';
-        found.forEach(function (ref) {
-            var a = document.createElement('a');
-            a.className = 'backlinks-item';
-            // 用完整路径做 hash（encodeURI 保留斜杠），无 ID 文章也能直达
-            a.href = '#' + encodeURI(ref.path);
-            a.dataset.path = ref.path;
-            var name = document.createElement('span');
-            name.className = 'bl-name';
-            name.textContent = ref.name;
-            a.appendChild(name);
-            if (ref.excerpt) {
-                var ex = document.createElement('span');
-                ex.className = 'bl-excerpt';
-                ex.textContent = ref.excerpt;
-                a.appendChild(ex);
-            }
-            list.appendChild(a);
-        });
-        wrap.appendChild(list);
-        // 内容构建完成后再显示（避免插入时颜色过渡闪烁）
-        wrap.style.display = '';
-        backlinksRendering = false;  // 释放锁，允许后续导航重新渲染
-    }
+    // backlinks 反向链接功能已移除（不再渲染页面底部双链列表）
 
     /* ---------- 搜索功能（见下方） ---------- */
     // （编辑/余额/上传功能已随二层顶部栏移除）
@@ -1392,570 +1309,464 @@
         var savedTheme = localStorage.getItem('vp-theme');
         if (savedTheme === 'dark') applyTheme(true);
     } catch (e) {}
-    // Graph View：/graph 知识图谱（SVG 力导向，零依赖；?dir= 限定目录，节点点击打开文章）
-    var graphView = $('graph-view');
-    var graphInfo = $('graph-info');
-    var graphSvg = $('graph-svg');
-    var graphWrap = $('graph-canvas-wrap');
-    var graphEmpty = $('graph-empty');
-    var GNS = 'http://www.w3.org/2000/svg';
-    // 视口鼠标位置 → graph 内部坐标（与节点 n.x/y 同系）：手动按 graphTransform 逆变换，
-    // 与拖拽写的坐标同一公式，所以 hover 判定与"手指点到的点"精确一致
-    function svgMousePoint(ev) {
-        var rect = graphSvg.getBoundingClientRect();
-        return {
-            x: (ev.clientX - rect.left - graphTransform.x) / (graphTransform.k || 1),
-            y: (ev.clientY - rect.top - graphTransform.y) / (graphTransform.k || 1)
-        };
+
+/* ===== Graph View（Quartz graph.inline.ts 全行为忠诚移植：局部图 + 全屏全局图共用 renderGraph） ===== */
+    // ---- 共享数据与工具 ----
+    var lgWrap = $('graph-local-wrap');
+    var lgBox = $('graph-local-box');
+    var lgSvg = $('graph-local-svg');          // 局部图容器（渲染器在内部创建 svg）
+    var lgData = null;                          // /api/graph 缓存 {ok, nodes, links}
+    var QZG = 'http://www.w3.org/2000/svg';
+    // Quartz「graph-visited」localStorage 访问追踪 → 当前/已访问/未访问三态着色
+    var graphVisited = new Set();
+    function getVisited() {
+        try { return new Set(JSON.parse(localStorage.getItem('graph-visited') || '[]')); } catch (e) { return new Set(); }
     }
-    function openGraph() {
-        // Graph 功能总开关：后台 graph_path 留空 = 关闭（openGraph 完全不生效）
-        if (!window.GRAPH_ENABLED) { return; }
-        try { setDrawer(false); } catch (e) {}
-        try { setTopHidden(false); } catch (e) {}  // 图谱 fixed 定位不随滚动：强制显示顶栏（否则上方留 56px 空档、图谱贴不到顶栏）
-        // 地址栏同步为 /graph（可分享/刷新保持图谱页）
-        try { history.pushState(null, '', '/graph'); } catch (e) {}
-        // Graph 是独立页面：隐藏文章/首页容器，图谱铺满内容区（不套文章格式）
-        hideSpecialViews();
-        $('archive-view').style.display = 'none';
-        $('doc-wrap').style.display = 'none';
-        var gtp = $('toc-panel'); if (gtp) gtp.style.display = 'none';
-        graphView.style.display = 'flex';
-        if (window.console) console.log('GRAPH OPENED');
-        loadGraph();
+    function refreshVisited() { graphVisited = getVisited(); }
+    function addToVisited(id) {
+        try { graphVisited.add(id); localStorage.setItem('graph-visited', JSON.stringify(Array.from(graphVisited))); } catch (e) {}
+    }
+    function normPath(p) { return String(p || '').replace(/^\/+/, ''); }
+
+    // 右栏是否可见：BrainPress 在 ≥1400px 才显示 #right-sidebar（769–1399 与 ≤768 均 display:none）。
+    // 局部图必须始终可见——右栏可见时留在栏内（TOC 上方），否则搬进内容流（正文下方）兜底。
+    function lgIsRail() { return window.matchMedia && window.matchMedia('(min-width:1400px)').matches; }
+
+    // 容器入流：右栏可见 → 放回右栏 TOC 上方；否则（右栏隐藏）→ 放进正文 md-view 内、页脚之前
+    //（紧跟文章正文与反向链接、位于 Created-with 页脚之上 = 「文章正文与页底之间」）
+    function lgSettleContainer() {
+        if (!lgWrap) return;
+        if (lgIsRail()) {
+            var rail = $('right-sidebar');
+            var toc = $('toc-panel');
+            if (rail && lgWrap.parentNode !== rail) rail.insertBefore(lgWrap, toc || null);
+            lgWrap.classList.remove('lg-in-flow');
+        } else {
+            var mdv = $('md-view');
+            if (mdv && lgWrap.parentNode !== mdv) {
+                var foot = mdv.querySelector('.md-footer');
+                mdv.insertBefore(lgWrap, foot || null);
+            }
+            lgWrap.classList.add('lg-in-flow');
+        }
     }
 
-    function loadGraph() {
-        fetch('/api/graph').then(function (r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+    function lgLoadData() {
+        if (lgData) return Promise.resolve(lgData);
+        return fetch('/api/graph').then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
             return r.json();
         }).then(function (d) {
-            if (!d.ok) return;
-            try {
-                renderGraph(d.nodes || [], d.links || []);
-            } catch (err) {
-                graphEmpty.textContent = 'Graph error: ' + (err && err.message ? err.message : err);
-                graphEmpty.style.display = 'flex';
-                if (window.console) console.error('graph:', err);
-            }
-        }).catch(function (err) {
-            graphEmpty.textContent = 'Graph load error: ' + (err && err.message ? err.message : err);
-            graphEmpty.style.display = 'flex';
+            if (d && d.ok) lgData = d;
+            return lgData;
         });
     }
-    // Obsidian 风格图谱：白色枢纽 + 灰色小节点 + 绿色点缀，无目录着色
-    var graphColors = {};
-    var graphTransform = { x: 0, y: 0, k: 1 };
-    var graphHoverNode = null;
-    var graphNodes = [], graphLinks = [];
-    var graphSvgG = null;
-    function renderGraph(nodes, links) {
-        graphNodes = nodes; graphLinks = links;
-        graphSvg.innerHTML = '';
-        graphInfo.textContent = nodes.length + ' articles · ' + links.length + ' links';
-        graphEmpty.style.display = nodes.length ? 'none' : 'flex';
-        if (!nodes.length) return;
-        // 画布尺寸（视口兜底）
-        W = graphWrap.clientWidth || (window.innerWidth - 96);
-        H = graphWrap.clientHeight || (window.innerHeight - 120);
-        cx = W / 2; cy = H / 2;
-        // 度数（节点大小 + 三阶颜色分级：枢纽 / 中间 / 叶子 + 绿色点缀）
-        degree = {};
-        nodes.forEach(function (n) { degree[n.id] = 0; });
-        links.forEach(function (l) {
-            degree[l.source] = (degree[l.source] || 0) + 1;
-            degree[l.target] = (degree[l.target] || 0) + 1;
-        });
-        nodes.forEach(function (n) { n.deg = degree[n.id] || 0; });
-        // 初始位置：Obsidian 力导向——画布内随机散点起步（无网格规律），由三力自然收敛成整体圆网
-        var N0 = nodes.length;
-        var scatR = Math.min(W, H) * 0.45;   // 随机散布半径（视口 45%，几乎全长）
-        nodes.forEach(function (n, i) {
-            n.x = cx + (Math.random() * 2 - 1) * scatR;
-            n.y = cy + (Math.random() * 2 - 1) * scatR;
-            n.vx = 0; n.vy = 0; n.locked = false;
-        });
-        clusterPairs = [];  // Obsidian 无目录分区，无需聚拢对
-        // 快速初排（55 轮同步，带 alpha 衰减——更充分舒展后再交给 rAF）
-        simAlpha = 1; simAlphaTarget = 0;
-        for (var iter = 0; iter < 55; iter++) {
-            stepOnce();
-            simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
-        }
-        // 默认缩放自适应（Obsidian 同款——初加载自动 fit 整张图进视口）
-        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        nodes.forEach(function (n) {
-            if (n.x < minX) minX = n.x; if (n.x > maxX) maxX = n.x;
-            if (n.y < minY) minY = n.y; if (n.y > maxY) maxY = n.y;
-        });
-        var pad = 80;  // 边距（节点名不贴边）
-        var bbW = (maxX - minX) || 1, bbH = (maxY - minY) || 1;
-        var kFit = Math.min((W - pad * 2) / bbW, (H - pad * 2) / bbH);
-        kFit = Math.max(0.25, Math.min(1.0, kFit));
-        graphTransform.k = kFit;
-        graphTransform.x = (W - (minX + maxX) * kFit) / 2;
-        graphTransform.y = (H - (minY + maxY) * kFit) / 2;
-        // 渲染 SVG（缓存元素引用——每帧直接更新，不 querySelectorAll）
-        graphSvgG = document.createElementNS(GNS, 'g');
-        graphSvg.appendChild(graphSvgG);
-        simLineEls = [];
-        linkAdj = {};
-        links.forEach(function (l, li) {
-            (linkAdj[l.source] = linkAdj[l.source] || []).push(li);
-            (linkAdj[l.target] = linkAdj[l.target] || []).push(li);
-            var a = nodes[l.source], b = nodes[l.target];
-            if (!a || !b) return;
-            var line = document.createElementNS(GNS, 'line');
-            line.setAttribute('class', 'graph-link');
-            line.setAttribute('data-s', l.source);
-            line.setAttribute('data-t', l.target);
-            line.setAttribute('stroke-width', '1');
-            line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
-            line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
-            graphSvgG.appendChild(line);
-            simLineEls.push(line);
-        });
-        simEls = [];
-        // 单色（照搬 Obsidian 默认主题：所有节点同色，高连接枢纽更大）
-        nodes.forEach(function (n) {
-            var d = degree[n.id] || 0;
-            // 节点半径：Obsidian 同款——轻微差异（degree 0→3.0px，4→5.0px，9→6.0px，16→7.0px，绝不夸张）
-            var r = 3.0 + Math.sqrt(d);
-            n.r = r;
-            var node = document.createElementNS(GNS, 'g');
-            node.setAttribute('class', 'graph-node');
-            node.setAttribute('data-id', n.id);
-            var c = document.createElementNS(GNS, 'circle');
-            c.setAttribute('r', r);
-            c.setAttribute('class', 'graph-node-fill');
-            node.appendChild(c);
-            // 透明 hit-area：视觉小圆点 + 更大的不可见触摸/点击区（移动端 ≥ 22px 半径才点得准）
-            var hit = document.createElementNS(GNS, 'circle');
-            hit.setAttribute('r', Math.max(13, r + 7));
-            hit.setAttribute('fill', 'transparent');
-            hit.setAttribute('class', 'graph-hit');
-            node.appendChild(hit);
-            var t = document.createElementNS(GNS, 'text');
-            t.setAttribute('text-anchor', 'middle');
-            t.setAttribute('class', 'graph-label');
-            t.setAttribute('opacity', '1');
-            t.setAttribute('data-name-on', n.name);
-            t.setAttribute('transform', 'translate(0,' + (r + 12) + ') scale(' + (1 / (graphTransform.k || 1)) + ')');
-            t.textContent = n.name;
-            node.appendChild(t);
-            n._labelEl = t;
-            node.addEventListener('click', function (ev) {
-                ev.stopPropagation();
-                if (n._dragged) { n._dragged = false; return; }
-                selectFile({ path: n.path });
-            });
-            // hover 不绑节点事件（节点动画移动时鼠标相对节点会在"透明大 hit 区"边缘反复进出→逐帧开/关高亮→闪）。
-            // 统一由 graphSvg 的 pointermove 记录鼠标位置 + rAF 帧末 computeHover() 按实际距离(mouse 落点)
-            // 判定，且状态没变不重画（幂等）——Quartz 同款思路（hitArea=节点圆，只按落点高亮）
-            // 节点拖拽：锁定位置 + alphaTarget=0.3 再加热（邻居实时跟随，松手自然冷却）；
-            // 移动超 5px 视为拖拽（抑制 click 跳转）
-node.addEventListener('pointerdown', function (ev) {
-                ev.preventDefault(); ev.stopPropagation();
-                var svgRect = graphSvg.getBoundingClientRect();
-                var sx = ev.clientX, sy = ev.clientY;
-                n.locked = true;   // fx/fy 语义：拖住，不进积分（力照常施加→邻居橡皮筋跟随）
-                n.lx = n.x; n.ly = n.y;   // 锁定位先对齐当前坐标（防首帧 tick undefined 崩溃）
-                n._dragged = false;
-                simDragging = true;
-                // d3 拖拽语义：alphaTarget(1) 加热——拖拽期间力场全功率工作（邻居实时跟随）
-                heatSim(null, 1);
-                highlightNode(n.id);  // 拖拽聚焦：被拖节点+相连的线/节点高亮，其余淡化（与 hover 一致，手机也生效）
-                function move(ev2) {
-                    if (!n._dragged && (Math.abs(ev2.clientX - sx) + Math.abs(ev2.clientY - sy) > 5)) n._dragged = true;
-                    n.lx = (ev2.clientX - svgRect.left - graphTransform.x) / graphTransform.k;
-                    n.ly = (ev2.clientY - svgRect.top - graphTransform.y) / graphTransform.k;
-                    n.x = n.lx; n.y = n.ly;   // 立即锁到位（渲染由常驻 sim tick 完成，邻居丝滑跟随）
-                }
-                function up() {
-                    simDragging = false;
-                    n.locked = false;   // 解锁：重新参与积分，靠 link/charge 弹簧回弹到平衡位
-                    // d3 拖拽收尾：alphaTarget(0)。alpha 从拖拽期积累的高位自然冷却，
-                    // 期间 link+charge 力把拖远的节点拉回平衡→Obsidian 回弹手感，冷却完即静止，不振荡
-                    simAlphaTarget = 0;
-                    highlightNode(-1);  // 恢复全部亮度
-                    window.removeEventListener('pointermove', move);
-                    window.removeEventListener('pointerup', up);
-                }
-                window.addEventListener('pointermove', move);
-                window.addEventListener('pointerup', up);
-            });
-            graphSvgG.appendChild(node);
-            simEls.push(node);
-        });
-        // 缩放（滚轮，rAF 节流）+ 平移（空白拖拽）
-        graphSvg.addEventListener('wheel', function (ev) {
-            ev.preventDefault();
-            var rect = graphSvg.getBoundingClientRect();
-            var px = ev.clientX - rect.left, py = ev.clientY - rect.top;
-            var k2 = graphTransform.k * (ev.deltaY < 0 ? 1.15 : 0.87);
-            k2 = Math.max(0.2, Math.min(5, k2));
-            graphTransform.x = px - (px - graphTransform.x) * (k2 / graphTransform.k);
-            graphTransform.y = py - (py - graphTransform.y) * (k2 / graphTransform.k);
-            graphTransform.k = k2;
-            applyGraphTransform();
-        }, { passive: false });
-        var panning = null, panPending = false;
-        var pointers = {}, lastPinchDist = 0;
-        graphSvg.addEventListener('pointerdown', function (ev) {
-            pointers[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
-            var nP = Object.keys(pointers).length;
-            if (nP >= 2) {
-                panning = null;  // 双指 = 缩放模式，停止平移
-                var ids = Object.keys(pointers);
-                var p1 = pointers[ids[0]], p2 = pointers[ids[1]];
-                lastPinchDist = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-            } else if (nP === 1 && ev.target === graphSvg) {
-                panning = { x: ev.clientX, y: ev.clientY, ax: 0, ay: 0 };
-            }
-        });
-        window.addEventListener('pointermove', function (ev) {
-            if (pointers[ev.pointerId]) { pointers[ev.pointerId].x = ev.clientX; pointers[ev.pointerId].y = ev.clientY; }
-            var ids = Object.keys(pointers);
-            // 双指：pinch 缩放（围绕两指中点——Obsidian 同款）
-            if (ids.length >= 2 && lastPinchDist > 0) {
-                var p1 = pointers[ids[0]], p2 = pointers[ids[1]];
-                var dist = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-                var rect = graphSvg.getBoundingClientRect();
-                var mx = (p1.x + p2.x) / 2 - rect.left, my = (p1.y + p2.y) / 2 - rect.top;
-                var k2 = graphTransform.k * (dist / lastPinchDist);
-                k2 = Math.max(0.2, Math.min(5, k2));
-                graphTransform.x = mx - (mx - graphTransform.x) * (k2 / graphTransform.k);
-                graphTransform.y = my - (my - graphTransform.y) * (k2 / graphTransform.k);
-                graphTransform.k = k2;
-                lastPinchDist = dist;
-                applyGraphTransform();
-                return;
-            }
-            if (!panning) return;
-            panning.ax += ev.clientX - panning.x;  // 单指平移（累积位移——rAF 合并）
-            panning.ay += ev.clientY - panning.y;
-            panning.x = ev.clientX; panning.y = ev.clientY;
-            if (panPending) return;
-            panPending = true;
-            requestAnimationFrame(function () {
-                panPending = false;
-                graphTransform.x += panning.ax;
-                graphTransform.y += panning.ay;
-                panning.ax = 0; panning.ay = 0;
-                applyGraphTransform();
-            });
-        });
-        function onPtrUp(ev) {
-            delete pointers[ev.pointerId];
-            if (Object.keys(pointers).length < 2) lastPinchDist = 0;
-            if (Object.keys(pointers).length === 0) panning = null;
-        }
-        window.addEventListener('pointerup', onPtrUp);
-        window.addEventListener('pointercancel', onPtrUp);
-        updateEls();  // 节点 SVG translate 定位（移除旧的 CSS transform 后，首次全量渲染位置）
-        applyGraphTransform();
-        // 满能量开局：可见的有机舒展动画（alpha 1→0 约 3 秒缓缓收敛静止）
-        heatSim(1, 0);
-    }
-    // ---- 力导向模拟（Quartz/Obsidian 丝滑感的核心：d3-force 同款 alpha 能量衰减驱动）----
-    // 每帧 alpha 向 target 衰减（约 3 秒从 1 → 0），所有力乘 alpha——开局有生命力的舒展动画、缓缓收敛静止；
-    // 拖拽时抬高 alphaTarget=0.3 再加热（邻居实时跟随），松手后自然冷却。不再用"最多 N 帧硬停"的土办法
-    var simRaf = null;
-    var simAlpha = 0, simAlphaTarget = 0, simDragging = false;
-    var ALPHA_DECAY = 1 - Math.pow(0.001, 1 / 140);  // ≈0.048/帧（比 d3 默认更快冷却：松手后安静得快，清新优雅不拖尾）
-    var simEls = [], simLineEls = [], clusterPairs = [], linkAdj = {}, degree = {};
-    var graphNodeCache = null, graphLinkCache = null;  // 增量 DOM 同步缓存（位置变了才写 SVG 属性）
-    // hover 统一判定：graphSvg 上记鼠标位置，帧末 computeHover() 按实际距离幂等求命中节点。
-    // 状态不变就不重画 → 节点动画移动不再造成“进/出透明 hit 区”的逐帧闪烁（Quartz 做法：hitArea=节点圆）
-    var graphMouseActive = false, graphMouseX = 0, graphMouseY = 0;
-    graphSvg.addEventListener('pointermove', function (ev) {
-        graphMouseActive = true;
-        var pt = svgMousePoint(ev);
-        graphMouseX = pt.x; graphMouseY = pt.y;
-        computeHover();
-    }, { passive: true });
-    graphSvg.addEventListener('pointerleave', function () {
-        graphMouseActive = false;
-        computeHover();
-    });
-    function computeHover() {
-        if (!graphSvgG) return;
-        var hit = null;
-        if (graphMouseActive) {
-            var best = Infinity;
-            for (var i = 0; i < graphNodes.length; i++) {
-                var n = graphNodes[i];
-                var d2 = (graphMouseX - n.x) * (graphMouseX - n.x) + (graphMouseY - n.y) * (graphMouseY - n.y);
-                var rr = (n.r || 3) + 3;
-                if (d2 <= rr * rr && d2 < best) { best = d2; hit = n; }
-            }
-        }
-        if (hit === graphHoverNode) return;   // 幂等：没变不重画 → 不闪
-        if (graphHoverNode) {
-            // 旧 hover 标签恢复默认透明度
-            var oldLabel = graphHoverNode._labelEl;
-            if (oldLabel) oldLabel.setAttribute('opacity', String(graphTransform.k < 1.2 ? 0 : Math.min(1, (graphTransform.k - 1.2) / 0.6)));
-        }
-        graphHoverNode = hit;
-        if (hit) {
-            var lbl = hit._labelEl;
-            if (lbl) lbl.setAttribute('opacity', '1');
-        }
-        highlightNode(hit ? hit.id : -1);
-    }
-    var W = 800, H = 500, cx = 400, cy = 250;
-    // d3 力导向（对齐 Obsidian 内核四力模型/Quartz graph.inline.ts）：
-    //   charge    forceManyBody(-100*repelForce)  顶多体斥力（1/d² 衰减）
-    //   center    forceCenter(strength)           质心整体平移居中（无向心拉力，不做圆形约束）
-    //   link      forceLink(distance)             链接弹簧拉到 linkDistance
-    //   collide   forceCollide                    节点防重叠
-    //   积分      x += vx（位移不乘 alpha）；vx *= velocityDecay(0.4)
-    //   制冷      alpha += (alphaTarget-alpha)*alphaDecay
-    // 拖拽 = alphaTarget(1) 钉住节点（fx/fy），邻居仍全功率施力 → 橡皮筋跟随；松手 alphaTarget(0) 弹簧回弹到平衡。
-    var f_REP = 3000, f_SPRING = 0.04, f_REST = 240, f_BOUND = 900, f_DECAYv = 0.4;
-    function stepOnce() {
-        var nodes = graphNodes;
-        if (!nodes.length || simAlpha <= 0) return;
-        var a = simAlpha;
-        // ---- charge（多体斥力，1/d²）：同桶+邻桶，含固定节点（施加力给邻居，供反作用）----
-        var GCELL = 320;
-        var cellMap = {}, cellIds = [];
-        for (var gi = 0; gi < nodes.length; gi++) {
-            var gk = Math.floor(nodes[gi].x / GCELL) + ':' + Math.floor(nodes[gi].y / GCELL);
-            (cellMap[gk] = cellMap[gk] || []).push(gi);
-            if (cellMap[gk].length === 1) cellIds.push(gk);
-        }
-        for (var ci = 0; ci < cellIds.length; ci++) {
-            var k = cellIds[ci];
-            var km = k.split(':');
-            var cxx = +km[0], cyy = +km[1];
-            for (var oy = -1; oy <= 1; oy++) {
-                for (var ox = -1; ox <= 1; ox++) {
-                    var nk = (cxx + ox) + ':' + (cyy + oy);
-                    var other = cellMap[nk];
-                    if (!other) continue;
-                    if (nk < k) continue;
-                    for (var ia = 0; ia < cellMap[k].length; ia++) {
-                        var i = cellMap[k][ia];
-                        var jstart = (other === cellMap[k]) ? ia + 1 : 0;
-                        for (var jb = jstart; jb < other.length; jb++) {
-                            var j = other[jb];
-                            var dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
-                            var d2 = dx * dx + dy * dy + 1;
-                            if (d2 > f_BOUND * f_BOUND) continue;
-                            var d = Math.sqrt(d2);
-                            var fRep = (f_REP / d2) * a;
-                            // 固定节点也接收反作用（d3 fx/fy 节点照常受力）
-                            nodes[i].vx += (dx / d) * fRep; nodes[i].vy += (dy / d) * fRep;
-                            nodes[j].vx -= (dx / d) * fRep; nodes[j].vy -= (dy / d) * fRep;
-                            var minDist = (nodes[i].r || 5) + (nodes[j].r || 5) + 2;
-                            if (d < minDist && d > 0.1) {
-                                var fCol = (minDist - d) * 0.5 * a;
-                                nodes[i].vx += (dx / d) * fCol; nodes[i].vy += (dy / d) * fCol;
-                                nodes[j].vx -= (dx / d) * fCol; nodes[j].vy -= (dy / d) * fCol;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // ---- link（弹簧拉到 f_REST）----
-        graphLinks.forEach(function (l) {
-            var an = nodes[l.source], bn = nodes[l.target];
-            if (!an || !bn) return;
-            var dx = bn.x - an.x, dy = bn.y - an.y;
-            var d = Math.sqrt(dx * dx + dy * dy) || 1;
-            var s = f_SPRING * (1 + Math.min(degree[l.source] || 0, degree[l.target] || 0) * 0.04);
-            var f = (d - f_REST) * s * a;
-            if (!an.locked) { an.vx += (dx / d) * f; an.vy += (dy / d) * f; }
-            if (!bn.locked) { bn.vx -= (dx / d) * f; bn.vy -= (dy / d) * f; }
-        });
-        // ---- center（力导向圆形云团：均匀温和向心引力把节点拢成本体圆形，中心有节点实心）。
-        //     不乘 alpha 的替代方案（forceCenter 质心平移）只是整体居中，无向心拉力，散点没有"圆"的轮廓——弃用。----
-        nodes.forEach(function (n) {
-            n.vx += (cx - n.x) * 0.025 * a;
-            n.vy += (cy - n.y) * 0.025 * a;
-        });
-        // ---- 积分（d3：锁定位→位置=锁定坐标但 vx 保留（动量），松手后继续累积力；非锁 x+=vx；vx*=velocityDecay）----
-        nodes.forEach(function (n) {
-            if (n.locked) {
-                n.x = n.lx; n.y = n.ly;   // fx/fy：位置跟随拖拽
-            } else {
-                n.x += n.vx; n.y += n.vy;
-            }
-            n.vx *= f_DECAYv; n.vy *= f_DECAYv;
-            if (!n.locked && Math.abs(n.vx) < 0.02 && Math.abs(n.vy) < 0.02) { n.vx = 0; n.vy = 0; }
-            // 软边界兜底（仅钳坐标，不反弹）
-            if (n.x < -400) n.x = -400; if (n.x > W + 400) n.x = W + 400;
-            if (n.y < -300) n.y = -300; if (n.y > H + 300) n.y = H + 300;
-        });
-        // 位置更新由调用方负责（tick/move 用 updateMovingEls 轻量更新；renderGraph 末尾用 updateEls 全量一次）
-    }
-    function updateMovingEls() {
-        // 增量同步：节点/线位置与上次一致的跳过（力模拟里多数节点静止或微动，DOM 写从 O(N) 降到实际变化的一小撮）
-        if (!graphNodeCache) graphNodeCache = [];
-        if (!graphLinkCache) graphLinkCache = [];
-        for (var i = 0; i < simEls.length; i++) {
-            var n = graphNodes[i];
-            if (!n) continue;
-            var px = graphNodeCache[i], py = graphNodeCache[i + 1];
-            var nxtx = n.x, nxty = n.y;
-            if (px !== nxtx || py !== nxty) {
-                simEls[i].setAttribute('transform', 'translate(' + nxtx.toFixed(1) + ',' + nxty.toFixed(1) + ')');
-                graphNodeCache[i] = nxtx; graphNodeCache[i + 1] = nxty;
-            }
-        }
-        for (var j = 0; j < simLineEls.length; j++) {
-            var l = graphLinks[j];
-            var a = graphNodes[l.source], b = graphNodes[l.target];
-            if (!a || !b) continue;
-            var c4 = j * 4;
-            var c0 = graphLinkCache[c4], c1 = graphLinkCache[c4 + 1], c2 = graphLinkCache[c4 + 2], c3 = graphLinkCache[c4 + 3];
-            if (c0 !== a.x || c1 !== a.y || c2 !== b.x || c3 !== b.y) {
-                simLineEls[j].setAttribute('x1', a.x.toFixed(1));
-                simLineEls[j].setAttribute('y1', a.y.toFixed(1));
-                simLineEls[j].setAttribute('x2', b.x.toFixed(1));
-                simLineEls[j].setAttribute('y2', b.y.toFixed(1));
-                graphLinkCache[c4] = a.x; graphLinkCache[c4 + 1] = a.y;
-                graphLinkCache[c4 + 2] = b.x; graphLinkCache[c4 + 3] = b.y;
-            }
-        }
-    }
-    function updateEls() {
-        // 直接索引：simEls[i] 对应 graphNodes[i]（渲染时同序创建）；线同理
-        for (var i = 0; i < simEls.length; i++) {
-            var n = graphNodes[i];
-            if (!n) continue;
-            simEls[i].setAttribute('transform', 'translate(' + n.x.toFixed(1) + ',' + n.y.toFixed(1) + ')');
-        }
-        for (var j = 0; j < simLineEls.length; j++) {
-            var l = graphLinks[j];
-            var a = graphNodes[l.source], b = graphNodes[l.target];
-            if (!a || !b) continue;
-            simLineEls[j].setAttribute('x1', a.x.toFixed(1));
-            simLineEls[j].setAttribute('y1', a.y.toFixed(1));
-            simLineEls[j].setAttribute('x2', b.x.toFixed(1));
-            simLineEls[j].setAttribute('y2', b.y.toFixed(1));
-        }
-    }
-    function resumeSim() {
-        if (simRaf) return;
-        function tick() {
-            simAlpha += (simAlphaTarget - simAlpha) * ALPHA_DECAY;
-            // 能量自然耗尽 → 停帧（拖拽中 simDragging=true 保持运转）
-            if (!simDragging && simAlphaTarget === 0 && simAlpha < 0.015) {
-                simAlpha = 0;
-                simRaf = null;
-                return;
-            }
-            stepOnce();
-            updateMovingEls();
-            computeHover();   // 节点移动时鼠标不动 → 也要按最新位置判定 hover（幂等，不闪）
-            simRaf = requestAnimationFrame(tick);
-        }
-        simRaf = requestAnimationFrame(tick);
-    }
-    function heatSim(alpha, target) {
-        if (alpha != null && alpha > simAlpha) simAlpha = alpha;
-        if (target != null) simAlphaTarget = target;
-        resumeSim();
-    }
-    function applyGraphTransform() {
-        if (!graphSvgG) return;
-        var k = graphTransform.k;
-        graphSvgG.setAttribute('transform', 'translate(' + graphTransform.x + ',' + graphTransform.y + ') scale(' + k + ')');
-        // 标签三件事（Obsidian 同款）：
-        // ① 屏幕等大——反缩放 1/k（钳制 0.6~2.5），字号缩放时不缩水/爆炸
-        // ② 缩放阈值淡入——k≥1.2 开始显现、k≥1.8 完全显示（默认 fit 无标题，放大到准局部才出现）
-        // ③ 标题都显示、但撞上的让位——节点间距本就够放标题，个别真重叠时低位序节点标签淡出
-        //    （连标题都显示，仅剩极少数重叠），Obsidian 观感：标题全在、不糊成一团
-        var s = Math.min(2.5, Math.max(0.6, 1 / k));
-        var labelOpacity = k < 1.2 ? 0 : Math.min(1, (k - 1.2) / 0.6);
-        var tx = graphTransform.x, ty = graphTransform.y;
-        // 居中优先（后放的需让位）——spatial 序，度数高只作为并列时的优先级
-        var order = graphNodes.map(function (n, i) { return i; });
-        order.sort(function (a, b) {
-            var da = degree[graphNodes[a].id] || 0, db = degree[graphNodes[b].id] || 0;
-            if (da !== db) return db - da;
-            return a - b;
-        });
-        var placed = [];  // 已显示标签的屏幕矩形
-        for (var oi = 0; oi < order.length; oi++) {
-            var i = order[oi];
-            var txt = simEls[i].lastChild;
-            if (!txt) continue;
-            var n = graphNodes[i];
-            txt.setAttribute('transform', 'translate(0,' + ((n.r || 4) + 12) + ') scale(' + s + ')');
-            var isHover = graphHoverNode === n;
-            if (isHover) { txt.setAttribute('opacity', '1'); continue; }
-            if (labelOpacity <= 0) { txt.setAttribute('opacity', '0'); continue; }
-            // 估算标签屏幕包围盒（中文字≈1em、ASCII≈0.55em；屏幕字号恒定≈10px）
-            var fs = 10, tw = 0, cs = txt.textContent || '';
-            for (var ci = 0; ci < cs.length; ci++) {
-                var cc = cs.charCodeAt(ci);
-                tw += (cc >= 0x2E80 ? 1.0 : (cc >= 0x20 && cc <= 0x7E ? 0.55 : 0.9)) * fs;
-            }
-            var r = n.r || 4;
-            var cx = n.x * k + tx;
-            var cy = n.y * k + (r + 12) * k + ty;   // 标签基线屏幕位置
-            var pad = 3;
-            var x0 = cx - tw / 2 - pad, x1 = cx + tw / 2 + pad;
-            var y0 = cy - 12 - pad, y1 = cy + 2 + pad;
-            var collide = false;
-            for (var pi = 0; pi < placed.length; pi++) {
-                var p = placed[pi];
-                if (x0 < p.x1 && x1 > p.x0 && y0 < p.y1 && y1 > p.y0) { collide = true; break; }
-            }
-            if (collide) { txt.setAttribute('opacity', '0'); continue; }
-            placed.push({ x0: x0, y0: y0, x1: x1, y1: y1 });
-            txt.setAttribute('opacity', String(labelOpacity));
-        }
-    }
-    // hover 高亮邻居（class 切换：邻居亮、其余淡化）
-    function highlightNode(id) {
-        // 用缓存数组（simEls/simLineEls 与 graphNodes/graphLinks 同序）——不查 DOM
-        if (!graphSvgG) return;
-        var neighbors = {};
-        if (id >= 0) {
-            // 仅直接相连（Obsidian 行为：选中只高亮与它直接连线的节点/线）
-            graphLinks.forEach(function (l) {
-                if (l.source == id || l.target == id) { neighbors[l.source] = 1; neighbors[l.target] = 1; }
-            });
-        }
-        for (var i = 0; i < simEls.length; i++) {
-            var n = graphNodes[i];
-            if (!n) continue;
-            var on = (id < 0 || n.id == id || neighbors[n.id]);
-            simEls[i].classList.toggle('graph-dim', !on);
-            // hover 当前节点加深（Obsidian color-node-focused 观感）
-            if (id >= 0 && n.id == id) {
-                var fb = simEls[i].querySelector('.graph-node-fill');
-                if (fb) fb.setAttribute('class', 'graph-node-fill graph-node-focused');
-            }
-        }
-        if (id < 0) {
-            for (var f = 0; f < simEls.length; f++) {
-                var fb2 = simEls[f].querySelector('.graph-node-fill.graph-node-focused');
-                if (fb2) fb2.setAttribute('class', 'graph-node-fill');
-            }
-        }
-        for (var j = 0; j < simLineEls.length; j++) {
-            var l = graphLinks[j];
-            // 线高亮：默认仅亮选中节点直接连出的线（Obsidian 行为：1-2、1-3 亮，2-3 不亮）；
-            // 关闭开关时两端都在邻居集合（2-3 也亮）。
-            var on2 = (id < 0);
-            if (!on2) {
-                if (GRAPH_HIGHLIGHT_DIRECT) on2 = (l.source == id || l.target == id);
-                else on2 = (neighbors[l.source] && neighbors[l.target]);
-            }
-            simLineEls[j].classList.toggle('graph-link-dim', !on2);
-            simLineEls[j].classList.toggle('graph-link-hot', id >= 0 && on2);  // hover 相关线变粗变亮
-        }
-    }
-    // SSR 直达：/graph → 直接打开图谱视图（try/catch 防御：任何前置错误不阻塞图谱）
-    if (window.SSR_GRAPH) { try { openGraph(); } catch (e) {} }
-    // SSR 直达：/graph → 直接打开 Graph（?dir= 由 fetch 参数决定）
 
+    // ---- 配置（Quartz D3Config：缺省即 Quartz 默认值，后台 GraphView 配置可覆盖） ----
+    function qzCfg() {
+        var base = { drag: true, zoom: true, depth: 1, scale: 1.1, repelForce: 0.5, centerForce: 0.3, linkDistance: 30, fontSize: 0.6, opacityScale: 1 };
+        var g = window.GRAPH_CONFIG || {};
+        return {
+            drag: true, zoom: true,
+            depth: g.depth != null ? g.depth : base.depth,
+            scale: base.scale,
+            repelForce: g.repel != null ? g.repel : base.repelForce,
+            centerForce: g.center != null ? g.center : base.centerForce,
+            linkDistance: g.linkDistance != null ? g.linkDistance : base.linkDistance,
+            fontSize: g.fontSize != null ? g.fontSize : base.fontSize,
+            opacityScale: g.opacityScale != null ? g.opacityScale : base.opacityScale
+        };
+    }
+
+    // ---- 渲染器：graph.inline.ts「renderGraph」的忠实移植（零依赖） ----
+    // container：绘制容器；cfg：qzCfg(kind)；currentPath：当前文章路径
+    function qzRenderGraph(container, cfg, currentPath) {
+        container.innerHTML = '';
+        if (!lgData || !lgData.nodes || !lgData.nodes.length) return;
+
+        // 节点 id → 记录；全量边（id 对）；完全度数（决定节点半径，Quartz nodeRadius）
+        var byId = {};
+        lgData.nodes.forEach(function (n) { byId[n.id] = n; });
+        var degree = {};
+        lgData.nodes.forEach(function (n) { degree[n.id] = 0; });
+        var fullLinks = [];
+        (lgData.links || []).forEach(function (l) {
+            if (!byId[l.source] || !byId[l.target]) return;
+            fullLinks.push({ source: l.source, target: l.target });
+            degree[l.source]++; degree[l.target]++;
+        });
+
+        // ---- 邻域 BFS（Quartz 同款：双向遍历，depth=0 仅自身；depth<0 → 全图） ----
+        var neighbourhood = new Set();
+        var start = null;
+        if (cfg.depth >= 0) {
+            for (var si = 0; si < lgData.nodes.length; si++) {
+                if (normPath(lgData.nodes[si].path) === normPath(currentPath)) { start = lgData.nodes[si].id; break; }
+            }
+            if (start == null) return;
+            var wl = [start, '__SENTINEL'];
+            var rem = cfg.depth;
+            while (rem >= 0 && wl.length) {
+                var cur = wl.shift();
+                if (cur === '__SENTINEL') { rem--; wl.push('__SENTINEL'); }
+                else {
+                    neighbourhood.add(cur);
+                    fullLinks.forEach(function (l) {
+                        if (l.source === cur) wl.push(l.target);
+                        else if (l.target === cur) wl.push(l.source);
+                    });
+                }
+            }
+        } else {
+            lgData.nodes.forEach(function (n) { neighbourhood.add(n.id); });
+            // 全局图也定位当前文章节点（作中心锚），便于把它软牵引到球心
+            for (var gi = 0; gi < lgData.nodes.length; gi++) {
+                if (normPath(lgData.nodes[gi].path) === normPath(currentPath)) { start = lgData.nodes[gi].id; break; }
+            }
+        }
+
+        // 图数据：边直接引用节点对象（= d3 forceLink 初始化后的形态）
+        var nodeById = {};
+        var nodes = Array.from(neighbourhood).map(function (id) {
+            var rec = byId[id] || {};
+            var d = { id: id, path: rec.path || id, title: rec.name || rec.title || id, x: null, y: null, vx: 0, vy: 0, fx: null, fy: null };
+            nodeById[id] = d;
+            return d;
+        });
+        nodes.forEach(function (n, i) { n.index = i; });
+        var links = fullLinks
+            .filter(function (l) { return neighbourhood.has(l.source) && neighbourhood.has(l.target); })
+            .map(function (l) { return { source: nodeById[l.source], target: nodeById[l.target] }; });
+
+        // 初始位：d3.forceSimulation 默认 phyllotaxis（initialRadius=10、goldenAngle）——与 Quartz 同一开场动画
+        var goldenAngle = Math.PI * (3 - Math.sqrt(5));
+        nodes.forEach(function (d, i) {
+            var rad = 10 * Math.sqrt(0.5 + i);
+            var ang = i * goldenAngle;
+            d.x = Math.cos(ang) * rad;
+            d.y = Math.sin(ang) * rad;
+        });
+
+        // 中心锚点：局部图中把当前文章节点软牵引到原点（邻居围绕它辐射 → Quartz「一个中心发散」观感）。
+        // 全局图同样把当前文章节点牵引到中心，让当前内容成为球心、其余节点绕它铺开——与局部图一致的中心吸附观感。
+        // 用 forceX/forceY 的 strength 访问器实现「软弹簧」而非 fx/fy 硬钉——
+        // 硬钉会与邻居对称力共同把两个邻居钉到一条过原点的直线（等边三角退化成直线，Alpha 收敛即冻结）。
+        // 软牵引与其它力平衡，三角/多边形能找正解，中心感仍在。
+        var centerAnchor = null;
+        if (start != null && nodeById[start]) {
+            centerAnchor = nodeById[start];
+            centerAnchor._isCenter = true;
+        }
+
+        var W = container.clientWidth || 300;
+        var H = Math.max(container.clientHeight || 250, 250);
+
+        // ---- svg：viewBox 原点在盒子中心，scale 控制整体显示大小（Quartz 同款） ----
+        var svg = document.createElementNS(QZG, 'svg');
+        svg.setAttribute('width', W);
+        svg.setAttribute('height', H);
+        svg.setAttribute('viewBox', [-W / 2 / cfg.scale, -H / 2 / cfg.scale, W / cfg.scale, H / cfg.scale].join(' '));
+        container.appendChild(svg);
+
+        var hitEls = [];   // 命中圆（与视觉圆同步移动；承接事件）
+        var lineEls = [], nodeGs = [], circleEls = [], labelEls = [];
+        var currentNorm = normPath(currentPath);
+        // hover/高亮性能：预建「节点 → 直连边索引」映射，避免每次悬停 O(全部边) 遍历
+        var nodeLinks = {};
+        (links || []).forEach(function (l, li) {
+            (nodeLinks[l.source.id] = nodeLinks[l.source.id] || []).push(li);
+            (nodeLinks[l.target.id] = nodeLinks[l.target.id] || []).push(li);
+        });
+
+        function colorOf(d) {
+            if (currentNorm && normPath(d.path) === currentNorm) return 'var(--graph-primary)';   // = Quartz var(--secondary)
+            if (graphVisited.has(normPath(d.path))) return 'var(--graph-visited)';               // = Quartz var(--tertiary)
+            return 'var(--graph-node)';                                                          // = Quartz var(--gray)
+        }
+        var curNeighbours = new Set();
+        if (start != null) {
+            fullLinks.forEach(function (l) {
+                if (l.source === start) curNeighbours.add(l.target);
+                if (l.target === start) curNeighbours.add(l.source);
+            });
+        }
+
+        // ---- 拖拽（d3.drag：fx/fy 钉住 + alphaTarget(1) 加热；对 node 与 label 均可拖动） ----
+        var dragActive = false;
+        function qzDragStart(node, ev) {
+            ev.preventDefault(); ev.stopPropagation();
+            userInteract = true;
+            var rect = svg.getBoundingClientRect();
+            function toLocal(e2) {
+                // pointer → svg viewBox → zoomed 坐标（account for zoom transform）
+                var svgX = ((e2.clientX - rect.left) - W / 2) / cfg.scale;
+                var svgY = ((e2.clientY - rect.top) - H / 2) / cfg.scale;
+                return { x: (svgX - zoomT.x) / zoomT.k, y: (svgY - zoomT.y) / zoomT.k };
+            }
+            node.fx = node.x; node.fy = node.y;
+            node._dragged = false;
+            if (!dragActive && sim) { sim.alphaTarget(1).restart(); }   // 原版 Quartz 手感：拖拽注入高热量，邻域富有弹性跟随
+            var sx0 = ev.clientX, sy0 = ev.clientY;
+            dragActive = true;
+            function mv(e2) {
+                if (!node._dragged && (Math.abs(e2.clientX - sx0) + Math.abs(e2.clientY - sy0) > 5)) node._dragged = true;
+                if (!node._dragged) return;   // 位移未超阈值：视为静止（未拖拽，锁定点击）
+                var p = toLocal(e2);
+                node.fx = p.x; node.fy = p.y;
+            }
+            function up() {
+                dragActive = false;
+                node._dragged = false;
+                node.fx = null; node.fy = null;
+                if (sim) { sim.alphaTarget(0).restart(); }   // 松手后自然回弹收敛（弹性归位）
+                window.removeEventListener('pointermove', mv);
+                window.removeEventListener('pointerup', up);
+            }
+            window.addEventListener('pointermove', mv);
+            window.addEventListener('pointerup', up);
+        }
+
+        // ---- 边（先画边，节点在其上，避免连线盖住节点；line 不响应事件，点击可穿透到节点） ----
+        links.forEach(function (l) {
+            var ln = document.createElementNS(QZG, 'line');
+            ln.setAttribute('class', 'graph-link');
+            ln.setAttribute('stroke', 'var(--graph-line)');
+            ln.setAttribute('stroke-width', 1);
+            ln.style.pointerEvents = 'none';
+            svg.appendChild(ln);
+            lineEls.push(ln);
+        });
+
+        // ---- 节点 + 文本 ----
+        nodes.forEach(function (d) {
+            var r = 2 + Math.sqrt(degree[d.id] || 0);
+            var g = document.createElementNS(QZG, 'g');
+            g.setAttribute('class', 'graph-node');
+            var hit = document.createElementNS(QZG, 'circle');   // 透明命中区：r 更大，方便鼠标/手指选中
+            hit.setAttribute('class', 'node-hit');
+            hit.setAttribute('r', Math.max(r + 6, 16));
+            hit.setAttribute('fill', 'transparent');
+            hit.style.cursor = 'pointer';
+            g.appendChild(hit);
+            hitEls.push(hit);
+            d._hit = hit;
+            var c = document.createElementNS(QZG, 'circle');
+            c.setAttribute('class', 'node');
+            c.setAttribute('id', d.id);
+            c.setAttribute('r', r);
+            c.setAttribute('fill', colorOf(d));
+            c.style.cursor = 'pointer';
+            c.style.pointerEvents = 'none';   // 视觉圆不拦事件，由 hit 区兜底
+            g.appendChild(c);
+            var t = document.createElementNS(QZG, 'text');
+            t.setAttribute('dx', 0);
+            t.setAttribute('dy', (-r) + 'px');
+            t.setAttribute('text-anchor', 'middle');
+            t.textContent = d.title;
+            t.setAttribute('opacity', (cfg.opacityScale - 1) / 3.75);
+            t.style.fontSize = cfg.fontSize + 'em';
+            t.style.pointerEvents = 'none';
+            g.appendChild(t);
+            svg.appendChild(g);
+            nodeGs.push(g); circleEls.push(c); labelEls.push(t);
+            d._circle = c;
+
+            // click → 打开文章（Quartz spaNavigate 对应）
+            hit.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                if (d._dragged) { d._dragged = false; return; }
+                addToVisited(normPath(d.path));
+                selectFile({ path: d.path });
+            });
+
+            // hover（Quartz mouseover/mouseleave：直连边加深，标签升顶放大显示）
+            hit.addEventListener('mouseover', function () {
+                var nbs = nodeLinks[d.id] || [];
+                for (var nbi = 0; nbi < nbs.length; nbi++) lineEls[nbs[nbi]].setAttribute('stroke', 'var(--graph-line-hot)');
+                svg.appendChild(g);                 // .raise()：悬停节点浮到最上层
+                t.setAttribute('data-opacity-old', t.getAttribute('opacity'));
+                t.setAttribute('opacity', 1);
+                t.style.fontSize = (cfg.fontSize * 1.5) + 'em';
+            });
+            hit.addEventListener('mouseleave', function () {
+                var nbs = nodeLinks[d.id] || [];
+                for (var nbi = 0; nbi < nbs.length; nbi++) lineEls[nbs[nbi]].setAttribute('stroke', 'var(--graph-line)');
+                var old = t.getAttribute('data-opacity-old');
+                t.setAttribute('opacity', old != null ? old : (cfg.opacityScale - 1) / 3.75);
+                t.style.fontSize = cfg.fontSize + 'em';
+            });
+
+            if (cfg.drag) {
+                g.addEventListener('pointerdown', function (ev) { qzDragStart(d, ev); });
+                t.addEventListener('pointerdown', function (ev) { qzDragStart(d, ev); });
+            }
+        });
+
+        // ---- 缩放/平移（d3.zoom：scaleExtent [0.25,4]；tag 随缩放渐显 opacity=max((k*opacityScale-1)/3.75,0)） ----
+        var zoomT = { x: 0, y: 0, k: 1 };
+        function applyZoom() {
+            var tr = 'translate(' + zoomT.x + ',' + zoomT.y + ') scale(' + zoomT.k + ')';
+            lineEls.forEach(function (el) { el.setAttribute('transform', tr); });
+            circleEls.forEach(function (el) { el.setAttribute('transform', tr); });
+            (hitEls || []).forEach(function (el) { el.setAttribute('transform', tr); });   // 命中圆必须与视觉同步缩放平移，否则选中错位
+            labelEls.forEach(function (el) {
+                el.setAttribute('transform', tr);
+                el.setAttribute('opacity', Math.max((zoomT.k * cfg.opacityScale - 1) / 3.75, 0));
+            });
+        }
+        if (cfg.zoom) {
+            svg.addEventListener('wheel', function (ev) {
+                ev.preventDefault();
+                userInteract = true;
+                var rect = svg.getBoundingClientRect();
+                var px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+                var ux = ((px - W / 2) / cfg.scale - zoomT.x) / zoomT.k;
+                var uy = ((py - H / 2) / cfg.scale - zoomT.y) / zoomT.k;
+                var k2 = zoomT.k * (ev.deltaY < 0 ? 1.12 : 0.89);
+                k2 = Math.max(0.25, Math.min(4, k2));
+                zoomT.x = (px - W / 2) / cfg.scale - ux * k2;
+                zoomT.y = (py - H / 2) / cfg.scale - uy * k2;
+                zoomT.k = k2;
+                applyZoom();
+            }, { passive: false });
+            var pan = null;
+            svg.addEventListener('pointerdown', function (ev) {
+                if (ev.target !== svg) return;
+                userInteract = true;
+                pan = { x: ev.clientX, y: ev.clientY };
+                svg.style.cursor = 'grabbing';
+            });
+            var panMove = function (ev) {
+                if (!pan) return;
+                zoomT.x += (ev.clientX - pan.x) / cfg.scale;
+                zoomT.y += (ev.clientY - pan.y) / cfg.scale;
+                pan.x = ev.clientX; pan.y = ev.clientY;
+                applyZoom();
+            };
+            var panUp = function () { if (pan) { pan = null; svg.style.cursor = 'default'; } };
+            window.addEventListener('pointermove', panMove);
+            window.addEventListener('pointerup', panUp);
+        }
+
+        // ---- d3-force 模拟（真实 d3-force 引擎，与 Quartz 完全一致） ----
+        // forceManyBody().strength(-100*repelForce)：Barnes-Hut 斥力，重合节点 jiggle 随机扰动
+        // forceLink(links).id(id).distance(linkDistance)：默认强度 1/min(两端度数) + 按度数 bias 分摊；位置+速度双项 + 重合 jiggle
+        // forceCenter().strength(centerForce)：视图原点居中
+        stopCurrentSim();   // 渲染新图前停掉上一张图的模拟（local/global 只保留一张）
+
+        // 自适应缩放：局部图每 tick 跟随布局实时适配 → 打开即整图入框、无需手动缩放；
+        // 全局图在首轮收敛后做一次性全览。用户手动拖拽/缩放后停止自动适配（尊重手动控制）。
+        var sim = null, tickSkip = 0, userInteract = false;
+        var bigGraph = nodes.length > 60;   // 大图（全局 176 节点）每 2 tick 同步一次 DOM → 渲染开销减半
+        function fitGraph() {
+            if (!container || !container.contains(svg)) return;
+            var mnx = Infinity, mxx = -Infinity, mny = Infinity, mxy = -Infinity;
+            nodes.forEach(function (d) {
+                if (d.x < mnx) mnx = d.x; if (d.x > mxx) mxx = d.x;
+                if (d.y < mny) mny = d.y; if (d.y > mxy) mxy = d.y;
+            });
+            var midX = (mnx + mxx) / 2, midY = (mny + mxy) / 2;
+            var pad = 40;   // 边距（单位=viewBox）：留白避免撑满四角，观感更像悬浮圆簇而非拉方块
+            var rx = Math.max((mxx - mnx) / 2 + pad, 10), ry = Math.max((mxy - mny) / 2 + pad, 10);
+            var vbx = W / 2 / cfg.scale, vby = H / 2 / cfg.scale;
+            var k = Math.min(vbx / rx, vby / ry);
+            // 局部图：只缩不放（紧凑圆保持原尺寸）；全局图：可放大到 2.5 倍。
+            // 两者都保证整团完整入框（k 自然 <1 时团会铺满视口，而非压扁成不可读的小点）。
+            var kMax = (cfg.depth < 0) ? 2.5 : 1.0;
+            k = Math.max(0.15, Math.min(k, kMax));
+            zoomT.x = -midX * k; zoomT.y = -midY * k; zoomT.k = k;
+            applyZoom();
+        }
+        if (window.d3 && window.d3.forceSimulation) {
+            sim = d3.forceSimulation(nodes)
+                .force('charge', d3.forceManyBody().strength(-100 * cfg.repelForce))
+                .force('link', d3.forceLink(links).id(function (d) { return d.id; }).distance(cfg.linkDistance))
+                .force('center', d3.forceCenter().strength(cfg.centerForce));
+            if (centerAnchor) {
+                // 软中心牵引：只作用于当前文章节点，力度远小于力链（≈1/min(度)），
+                // 使中心节点留在原点附近但允许让位给三角形/多边形的真实平衡位置。
+                sim.force('centeroff', d3.forceX().x(0).strength(function (d) { return d === centerAnchor ? 0.05 : 0; }));
+                sim.force('centeroff2', d3.forceY().y(0).strength(function (d) { return d === centerAnchor ? 0.05 : 0; }));
+            }
+            sim.on('tick', function () {
+                    if (bigGraph && (++tickSkip % 2)) return;   // 大图隔次同步，减轻积压
+                    updateDOM();
+                    if (cfg.depth >= 0 && !userInteract && (tickSkip % 4 === 0 || !bigGraph)) {
+                        fitGraph();   // 局部图：节流 zoom（每 4 tick 一次），正文流畅，不做无谓重算
+                    }
+                });
+            sim.on('end', function () { updateDOM(); if (!userInteract) fitGraph(); });   // 收敛后兜底一次（含全局图）
+            // forceSimulation 创建即自动起跑（alpha 从 1 自然收敛到 alphaMin 0.001）
+            curSim = sim;
+        } else {
+            updateDOM();
+        }
+
+        function updateDOM() {
+            links.forEach(function (l, li) {
+                var el = lineEls[li];
+                el.setAttribute('x1', l.source.x); el.setAttribute('y1', l.source.y);
+                el.setAttribute('x2', l.target.x); el.setAttribute('y2', l.target.y);
+            });
+            nodes.forEach(function (d, i) {
+                circleEls[i].setAttribute('cx', d.x); circleEls[i].setAttribute('cy', d.y);
+                if (hitEls[i]) { hitEls[i].setAttribute('cx', d.x); hitEls[i].setAttribute('cy', d.y); }   // hit 必须与视觉圆同帧移动，否则事件区停留原点
+                labelEls[i].setAttribute('x', d.x); labelEls[i].setAttribute('y', d.y);
+            });
+        }
+
+        }
+
+    // ---- 局部图入口（showArticle 时调用） ----
+    function lgRender(path) {
+        if (!lgWrap) return;
+        if (!window.GRAPH_ENABLED || !path) { lgWrap.style.display = 'none'; return; }
+        lgLoadData().then(function (data) {
+            if (!data || !data.nodes || !data.nodes.length) { if (lgWrap) lgWrap.style.display = 'none'; return; }
+            lgData = data;
+            refreshVisited();
+            addToVisited(normPath(path));   // Quartz：导航即标记访问（着色用）
+            lgSettleContainer();
+            lgWrap.style.display = '';
+            qzRenderGraph(lgSvg, qzCfg(), path);
+        }).catch(function () { if (lgWrap) lgWrap.style.display = 'none'; });
+    }
+
+    var curSim = null;
+    function stopCurrentSim() { if (curSim) { try { curSim.stop(); } catch (e) {} curSim = null; } }
+
+    // ---- 局部图展开（右上角按钮）：全屏预览层渲染当前文章的邻域图放大版 ----
+    function renderZoomedLocal() {
+        if (!window.GRAPH_ENABLED) return;
+        var overlay = $('graph-preview-outer');
+        if (!overlay) return;
+        try { setTopHidden(false); } catch (e) {}
+        overlay.classList.add('active');
+        lgLoadData().then(function (data) {
+            if (!data) return;
+            lgData = data;
+            refreshVisited();
+            if (state.path) addToVisited(normPath(state.path));
+            var cont = $('graph-preview-container');
+            if (cont) qzRenderGraph(cont, qzCfg(), state.path || '');
+        }).catch(function () {});
+    }
+    function hidePreview() {
+        var overlay = $('graph-preview-outer');
+        if (overlay) overlay.classList.remove('active');
+        var cont = $('graph-preview-container');
+        if (cont && cont.children.length) cont.innerHTML = '';
+        stopCurrentSim();
+    }
+    (function () {
+        var btn = $('graph-local-full');
+        if (btn) btn.addEventListener('click', function () { renderZoomedLocal(); });
+        var overlay = $('graph-preview-outer');
+        if (overlay) overlay.addEventListener('click', function (ev) { if (ev.target === overlay) hidePreview(); });
+        document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' || ev.key === 'Esc') hidePreview(); });
+    })();
+    // 初始化数据预取（首次打开邻域图秒开）
+    if (window.GRAPH_ENABLED) { lgLoadData().catch(function () {}); }
     /* ===== Excalidraw 绘画渲染（.excalidraw.md：lz-string 解码 compressed-json → 官方 exportToSvg 引擎，手写 SVG 兜底） ===== */
     function escapeXml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     var exAscent = 0.9;  // Virgil 字形 ascent 比例（canvas 实测缓存——不依赖 dominant-baseline，所有浏览器一致）
@@ -2157,6 +1968,7 @@ node.addEventListener('pointerdown', function (ev) {
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
         var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
         var ttl = $('doc-title');
+        if (lgWrap) lgWrap.style.display = 'none';   // Excalidraw 全屏不显示局部图
         // 全屏沉浸：隐藏文章标题（.excalidraw 打开无标题栏，画布吃满中+右）
         if (ttl) { ttl.textContent = ''; ttl.style.display = 'none'; }
         // 主题切换重渲染后：新 SVG 节点的 pan/zoom 需重新绑定；
@@ -2304,6 +2116,7 @@ node.addEventListener('pointerdown', function (ev) {
         $('doc-wrap').style.display = 'flex';
         var tp = $('toc-panel'); if (tp) tp.style.display = 'none';
         var mdv = $('md-view'); if (mdv) mdv.style.display = 'none';
+        if (lgWrap) lgWrap.style.display = 'none';   // Canvas 全屏不显示局部图
         // Canvas 全屏沉浸：隐藏文章标题，中+右全部让给画布（Obsidian 打开 .canvas 无标题栏）
         var ttl = $('doc-title');
         if (ttl) { ttl.textContent = ''; ttl.style.display = 'none'; }
@@ -2950,7 +2763,6 @@ node.addEventListener('pointerdown', function (ev) {
                     a.addEventListener('click', function (ev) {
                         ev.preventDefault();
                         var href = a.getAttribute('href') || '';
-                        if (href === '/graph') { openGraph(); setFrontDrawer(false); return; }
                         var h = href.replace(/^#/, '');
                         if (!h) return;
                         setFrontDrawer(false);
@@ -2958,87 +2770,6 @@ node.addEventListener('pointerdown', function (ev) {
                     });
                 })(as[j]);
             }
-            // Graph alias 虚拟条目注入
-            function liName(li) {
-                if (li.dataset && li.dataset.path) return li.dataset.path.split('/').pop();
-                var t = '';
-                for (var i = 0; i < li.childNodes.length; i++) {
-                    var nd = li.childNodes[i];
-                    if (nd.nodeType === 1 && nd.tagName === 'UL') break;
-                    if (nd.nodeType === 3) t += nd.textContent;
-                    else if (nd.nodeType === 1 && (nd.tagName === 'A' || nd.tagName === 'SPAN')) t += nd.textContent;
-                }
-                return t.trim();
-            }
-            function injectAliasEntry(rawPath) {
-                var aliasPath = String(rawPath || '').replace(/^\/+|\/+$/g, '');
-                if (!aliasPath || /\.md$/i.test(aliasPath)) return;
-                var segs = aliasPath.split('/');
-                var parentUl = frontDrawerMd.querySelector('ul');
-                for (var si = 0; si < segs.length && parentUl; si++) {
-                    var want = segs[si];
-                    var found = null;
-                    var items = parentUl.children;
-                    for (var ii = 0; ii < items.length; ii++) {
-                        if (liName(items[ii]) === want) { found = items[ii]; break; }
-                    }
-                    if (si === segs.length - 1) {
-                        if (found) {
-                            var exA = found.querySelector('a');
-                            if (exA && /\.md(\?|#|$)/i.test(exA.getAttribute('href') || '')) return;
-                        }
-                        if (!found) {
-                            var leafLi = document.createElement('li');
-                            var leafA = document.createElement('a');
-                            leafA.setAttribute('href', '/' + aliasPath);
-                            leafA.textContent = want;
-                            leafLi.appendChild(leafA);
-                            parentUl.appendChild(leafLi);
-                            found = leafLi;
-                        } else if (!found.querySelector('a')) {
-                            var wrapA = document.createElement('a');
-                            wrapA.setAttribute('href', '/' + aliasPath);
-                            wrapA.textContent = want;
-                            found.insertBefore(wrapA, found.firstChild);
-                        }
-                        (function (target, url) {
-                            target.addEventListener('click', function (ev) {
-                                ev.preventDefault(); ev.stopPropagation();
-                                setFrontDrawer(false);
-                                window.location.href = url;
-                            });
-                        })(found.querySelector('a'), '/' + aliasPath);
-                    } else {
-                        if (!found) {
-                            var dirLi = document.createElement('li');
-                            var dirTxt = document.createElement('span');
-                            dirTxt.textContent = want;
-                            dirLi.appendChild(dirTxt);
-                            var dirUl = document.createElement('ul');
-                            dirLi.appendChild(dirUl);
-                            parentUl.appendChild(dirLi);
-                            found = dirLi;
-                        }
-                        var nextUl = childUl(found);
-                        if (!nextUl) { nextUl = document.createElement('ul'); found.appendChild(nextUl); }
-                        parentUl = nextUl;
-                    }
-                }
-            }
-            injectAliasEntry(window.GRAPH_ALIAS_PATH);
-            // 根层级虚拟入口标记
-            (function markAliasDirs() {
-                var rootUl = frontDrawerMd.querySelector('ul');
-                if (!rootUl) return;
-                var clean = function (s) { return '/' + String(s || '').replace(/^\/+|\/+$/g, ''); };
-                var aliases = [clean(window.GRAPH_ALIAS_PATH), '/graph'];
-                [].forEach.call(rootUl.children, function (li) {
-                    var a = li.querySelector('a');
-                    if (!a || childUl(li)) return;
-                    var href = (a.getAttribute('href') || '').replace(/#.*$/, '');
-                    if (aliases.indexOf(href) !== -1) li.classList.add('alias-dir');
-                });
-            })();
             // 克隆到左侧常驻栏
             var leftTree = $('left-drawer-md');
             if (leftTree) {
@@ -3071,9 +2802,6 @@ node.addEventListener('pointerdown', function (ev) {
                         if (isParent) return;
                         ev.preventDefault();
                         var href = a.getAttribute('href') || '';
-                        if (href === '/graph') { openGraph(); return; }
-                        var aliasG = String(window.GRAPH_ALIAS_PATH || '').replace(/^\/+|\/+$/g, '');
-                        if (aliasG && href === '/' + aliasG) { window.location.href = href; return; }
                         var h = href.replace(/^#/, '');
                         if (!h) return;
                         selectFile({ path: decPath(h) });
@@ -3145,10 +2873,6 @@ node.addEventListener('pointerdown', function (ev) {
                 if (isParent) return;
                 ev.preventDefault();
                 var href = a.getAttribute('href') || '';
-                if (href === '/graph') { openGraph(); return; }  // Graph 虚拟条目（未配置别名时的树末尾入口）
-                // 别名条目（graph）：整页跳转（服务端 302 到真实路由）
-                var aliasG = String(window.GRAPH_ALIAS_PATH || '').replace(/^\/+|\/+$/g, '');
-                if (aliasG && href === '/' + aliasG) { window.location.href = href; return; }
                 var h = href.replace(/^#/, '');
                 if (!h) return;
                 selectFile({ path: decPath(h) });

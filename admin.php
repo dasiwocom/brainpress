@@ -40,7 +40,12 @@ if (strpos($uri, '/api/admin/') === 0) {
             'ai_mode' => $config['ai_mode'] ?? 'hybrid',
             'ai_enabled' => $config['ai_enabled'] ?? true,
             'graph_highlight_direct' => !isset($config['graph_highlight_direct']) || !empty($config['graph_highlight_direct']),
-            'graph_path' => $config['graph_path'] ?? '',
+            'graph_depth' => (int)($config['graph_depth'] ?? 1),
+            'graph_repel' => (float)($config['graph_repel'] ?? 0.5),
+            'graph_center' => (float)($config['graph_center'] ?? 0.3),
+            'graph_link_distance' => (int)($config['graph_link_distance'] ?? 30),
+            'graph_font_size' => (float)($config['graph_font_size'] ?? 0.6),
+            'graph_opacity_scale' => (float)($config['graph_opacity_scale'] ?? 1.0),
             'render_types' => $config['render_types'] ?? ['markdown' => true, 'pdf' => true, 'html' => true, 'canvas' => true, 'png' => true],
             'article_footer' => $config['article_footer'] ?? true,
             'article_footer_html' => $config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026',
@@ -171,8 +176,13 @@ if (strpos($uri, '/api/admin/') === 0) {
         $config['ai_model'] = trim((string)($body['ai_model'] ?? '')) !== '' ? trim((string)$body['ai_model']) : 'deepseek-chat';
         $config['ai_mode'] = !empty($body['ai_mode']) ? 'hybrid' : 'strict';
         $config['ai_enabled'] = !empty($body['ai_enabled']);
-        $config['graph_path'] = trim((string)($body['graph_path'] ?? ''), "/ \t");
         $config['graph_highlight_direct'] = !empty($body['graph_highlight_direct']);
+        $config['graph_depth'] = max(1, min(5, (int)($body['graph_depth'] ?? 1)));
+        $config['graph_repel'] = max(0.1, min(5, (float)($body['graph_repel'] ?? 0.5)));
+        $config['graph_center'] = max(0.1, min(5, (float)($body['graph_center'] ?? 0.3)));
+        $config['graph_link_distance'] = max(10, min(800, (int)($body['graph_link_distance'] ?? 30)));
+        $config['graph_font_size'] = max(0.4, min(2, (float)($body['graph_font_size'] ?? 0.6)));
+        $config['graph_opacity_scale'] = max(0.2, min(2, (float)($body['graph_opacity_scale'] ?? 1.0)));
         $renderTypes = (array)($body['render_types'] ?? []);
         $config['render_types'] = [
             'markdown' => !isset($renderTypes['markdown']) ? true : !empty($renderTypes['markdown']),
@@ -365,7 +375,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
 <?php endif; ?>
     <script src="/assets/marked.min.js"></script>
     <script src="/assets/purify.min.js?v=20260812o"></script>
-    <link rel="stylesheet" href="/assets/admin.css?v=20260905g">
+    <link rel="stylesheet" href="/assets/admin.css?v=20260905h">
     <style>/* 阅读列宽（同前台）：覆盖 admin.css 的默认值 */
     :root { --vp-content-w:<?php echo max(480, min(1600, (int)($config['content_width'] ?? 840))); ?>px; }
     </style>
@@ -514,11 +524,17 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div class="msg" id="msg-site"></div>
         </div>
 
-        <!-- 视图：Graph（知识图谱设置：访问路径别名） -->
+        <!-- 视图：Graph（知识图谱设置：局部图力导向参数） -->
         <div id="view-graph" style="display:none">
-            <p class="desc">Knowledge graph view settings. Node names are always shown (Obsidian-style).</p>
-            <div class="field-row"><span class="field-label">Graph path alias</span><input type="text" id="graph-path" placeholder="e.g. Visual-Knowledge/graph — tree entry + 302 to /graph; empty = bottom entry"></div>
+            <p class="desc">Knowledge graph view settings. Local graph (current note neighborhood) sits above the Contents panel; the expand button shows a full-screen version of the same local graph.</p>
             <div class="render-row"><span class="render-label">Highlight only direct links <small>(on = pick a node, only its own links light up like Obsidian; off = links between its neighbours also light up)</small></span><button class="switch" id="switch-graph-direct" aria-label="toggle graph direct-link highlight"></button></div>
+            <div class="section-title">Force engine (Quartz d3-force style)</div>
+            <div class="field-row"><span class="field-label">Neighborhood depth</span><input type="number" id="graph-depth" min="1" max="5" placeholder="1 (hops of the local graph around current note)"></div>
+            <div class="field-row"><span class="field-label">Repel force</span><input type="number" id="graph-repel" min="0.1" max="5" step="0.1" placeholder="0.5 (node repulsion multiplier)"></div>
+            <div class="field-row"><span class="field-label">Center force</span><input type="number" id="graph-center" min="0.1" max="5" step="0.1" placeholder="0.3 (centripetal pull — bigger = tighter cluster)"></div>
+            <div class="field-row"><span class="field-label">Link distance</span><input type="number" id="graph-link-distance" min="10" max="800" placeholder="30 (px, link spring rest length)"></div>
+            <div class="field-row"><span class="field-label">Label size</span><input type="number" id="graph-font-size" min="0.4" max="2" step="0.1" placeholder="0.6 (em multiplier)"></div>
+            <div class="field-row"><span class="field-label">Label opacity scale</span><input type="number" id="graph-opacity-scale" min="0.2" max="2" step="0.1" placeholder="1.0 (default label opacity)"></div>
             <div class="msg" id="msg-graph"></div>
         </div>
 
@@ -610,7 +626,7 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     <script>
     window.ADMIN_MENU_MD = <?php echo json_encode($adminMenuMd); ?>;
     </script>
-    <script src="/assets/admin.js?v=20260906g"></script>
+    <script src="/assets/admin.js?v=20260907r"></script>
     </body>
     </html>
     <?php

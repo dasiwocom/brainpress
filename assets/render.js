@@ -266,21 +266,14 @@
     }
 
     /* ===== 代码高亮（按需加载 hljs：首页/无代码文章零开销）=====
-       highlight.min.js + nginx 语言包 + vs 主题 CSS 均在首次遇到代码块时再注入 */
+       highlight.min.js + nginx 语言包在首次遇到代码块时再注入；
+       主题色由 site.css 统一控制（亮/暗两套，注入第三方 vs* 会与 site.css 冲突） */
 
     var _hlPromise = null;
     function loadHighlightLib() {
         if (window.hljs) return Promise.resolve();
         if (_hlPromise) return _hlPromise;
         _hlPromise = new Promise(function (resolve, reject) {
-            try {
-                ['/assets/vs.min.css', '/assets/vs2015.min.css'].forEach(function (href) {
-                    var link = document.createElement('link');
-                    link.rel = 'stylesheet';
-                    link.href = href;
-                    document.head.appendChild(link);
-                });
-            } catch (e) {}
             var s = document.createElement('script');
             s.onload = function () {
                 // highlight.min.js 只带 core；语言包加载失败不阻塞主体可用

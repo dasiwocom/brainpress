@@ -95,10 +95,6 @@ if (strpos($uri, '/vault/') === 0 && $method === 'GET') {
     }
 }
 
-// 虚拟页别名路径：访问配置的别名即渲染图谱页（$ssrGraph 判断，无需 302）。
-// （注意：不再硬编码 /graph——历史 302 会把 /GraphView 这种自定义别名跳转坏）
-$graphAlias = trim((string)($config['graph_path'] ?? ''), "/ \t");
-
 // WebDAV 端点（Obsidian Remotely Save 同步）：实现在 dav.php
 if (strpos($uri, '/dav/') === 0 || $uri === '/dav') {
     handle_webdav($uri, $method, $config);
@@ -199,14 +195,8 @@ if (preg_match('#\.html$#i', $uri)) {
     }
 }
 
-// 服务端渲染 Graph View：/<别名> 或 /<别名>?dir=xxx → 前端渲染知识图谱（虚拟路径，非文件）。
-// Graph 仅在后台配置了路径别名后开启（$graphAlias 非空 = 开启；留空 = 功能关闭，不占用任何资源）
-$graphEnabled = $graphAlias !== '';
-$graphAliasPreg = $graphAlias !== '' ? preg_quote($graphAlias, '#') : '(?!)';
-$ssrGraph = $graphEnabled && preg_match('#^/' . $graphAliasPreg . '(/|\\?|$)#i', $uri) ? true : false;
-
 // RSS 伪路径（rss://…/url/guid）直接访问时无害化：若是索引页则正常渲染；否则重定向回首页（这些路径只作为侧边栏点击由前端/API处理，不建立真实路由）
-if ($uri !== '/' && $uri !== '/index.php' && $ssrArticlePath === '' && $ssrPdfPath === '' && $ssrExcalidrawPath === '' && $ssrCanvasPath === '' && !$ssrGraph) {
+if ($uri !== '/' && $uri !== '/index.php' && $ssrArticlePath === '' && $ssrPdfPath === '' && $ssrExcalidrawPath === '' && $ssrCanvasPath === '') {
     $decodeUri = urldecode(rawurldecode($uri));
     if (preg_match('#^/?rss://#i', $decodeUri)) {
         header('Location: /', true, 302);
@@ -227,11 +217,6 @@ $frontTree = (($config['render_webdav'] ?? false) && is_dir(PANEL_DIR . '/vault'
     ? scan_tree(PANEL_DIR . '/vault', '', $config['exclude_paths'] ?? [], $config['pinned_dirs'] ?? [], $config['pinned_articles'] ?? [], false, true, $config['render_types'] ?? null)
     : [];
 $frontMenuMd = tree_to_md(merge_rss_tree(merge_ima_tree(merge_custom_trees($frontTree, $config), $config), $config));
-// Graph View 虚拟条目：仅在未配置别名路径时放进树末尾（配置了别名则由 JS 注入到目标目录）
-// 留空 = Graph 功能关闭，不注入任何条目
-if ($graphEnabled && trim((string)($config['graph_path'] ?? ''), "/ \t") === '') {
-    $frontMenuMd = rtrim($frontMenuMd) . "\n- [Graph-View](/graph)";
-}
 // 站点设置：标题 / 默认日间 / 前台抽屉默认展开 / 首页文章
 $siteTitle = (string)($config['site_title'] ?? 'BrainPress');
 // 内容区宽度（后台可调，px）：三栏模型的中栏度量，左右轨道 = (视口−内容宽)/2 封顶 600
@@ -302,7 +287,7 @@ var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
 </script>
 
 <script src="/assets/lz-string.min.js" defer></script>
-    <link rel="stylesheet" href="/assets/site.css?v=20260906c">
+    <link rel="stylesheet" href="/assets/site.css?v=20260908j">
 <style>/* 阅读列宽（后台可调）：覆盖 site.css 的默认值 */
 :root { --vp-content-w:<?php echo $contentW; ?>px; }
 </style>
@@ -374,8 +359,6 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
                     <div class="md" id="md-view" style="display:none"></div>
                     <!-- PDF 阅读器（pdf.js 渲染，翻页/缩放/夜间反转） -->
                     <div id="pdf-view" style="display:none"></div>
-                    <!-- 反向链接（被谁引用） -->
-                    <div id="backlinks"></div>
                 </div>
             </div>
             <!-- 标签列表页：#tag/<name> 独立整页（与文章视图平级，避免混入正文容器） -->
@@ -388,14 +371,6 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
             <div id="excalidraw-view" style="display:none"><div class="excalidraw-canvas" id="excalidraw-canvas"></div></div>
             <!-- Obsidian Canvas 白板渲染（.canvas：JSON → SVG 节点/连线画布）与 Graph 同级，同上 -->
             <div id="canvas-view" style="display:none"><div class="canvas-board" id="canvas-board"></div></div>
-            <!-- Graph View：独立图谱页（/graph，铺满内容区，只显示所有文章的关系图） -->
-            <div class="graph-view" id="graph-view" style="display:none">
-                <div class="graph-canvas-wrap" id="graph-canvas-wrap">
-                    <svg id="graph-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-                    <div class="graph-empty" id="graph-empty">No articles with links in this scope.</div>
-                    <span class="graph-info" id="graph-info"></span>
-                </div>
-            </div>
             <div class="empty-state" id="empty-state">Select a note to start reading</div>
         </div>
         <!-- AI 对话面板（顶栏按钮切换：桌面端覆盖左侧目录栏区域，移动端从导航下方弹出；/api/ask） -->
@@ -419,6 +394,16 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
     </div><!-- /#main -->
     <!-- 桌面端右侧常驻 TOC 轨道（与左轨道等宽镜像；无目录时轨道即对称留白） -->
     <aside id="right-sidebar">
+<!-- Local Graph：当前文章邻域图（TOC 上方；Quartz 布局——标题在上、图框在上，右上角展开按钮把局部图放大为全屏视图） -->
+        <div class="graph-local-wrap" id="graph-local-wrap" style="display:none">
+            <div class="graph-local-head">
+                <div class="graph-local-title">Graph View</div>
+            </div>
+            <div class="graph-local-box" id="graph-local-box">
+                <div id="graph-local-svg"></div>
+                <svg version="1.1" class="graph-local-full" id="graph-local-full" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 55 55" fill="currentColor" xml:space="preserve"><path d="M49,0c-3.309,0-6,2.691-6,6c0,1.035,0.263,2.009,0.726,2.86l-9.829,9.829C32.542,17.634,30.846,17,29,17s-3.542,0.634-4.898,1.688l-7.669-7.669C16.785,10.424,17,9.74,17,9c0-2.206-1.794-4-4-4S9,6.794,9,9s1.794,4,4,4c0.74,0,1.424-0.215,2.019-0.567l7.669,7.669C21.634,21.458,21,23.154,21,25s0.634,3.542,1.688,4.897L10.024,42.562C8.958,41.595,7.549,41,6,41c-3.309,0-6,2.691-6,6s2.691,6,6,6s6-2.691,6-6c0-1.035-0.263-2.009-0.726-2.86l12.829-12.829c1.106,0.86,2.44,1.436,3.898,1.619v10.16c-2.833,0.478-5,2.942-5,5.91c0,3.309,2.691,6,6,6s6-2.691,6-6c0-2.967-2.167-5.431-5-5.91v-10.16c1.458-0.183,2.792-0.759,3.898-1.619l7.669,7.669C41.215,39.576,41,40.26,41,41c0,2.206,1.794,4,4,4s4-1.794,4-4s-1.794-4-4-4c-0.74,0-1.424,0.215-2.019,0.567l-7.669-7.669C36.366,28.542,37,26.846,37,25s-0.634-3.542-1.688-4.897l9.665-9.665C46.042,11.405,47.451,12,49,12c3.309,0,6-2.691,6-6S52.309,0,49,0z M11,9c0-1.103,0.897-2,2-2s2,0.897,2,2s-0.897,2-2,2S11,10.103,11,9z M6,51c-2.206,0-4-1.794-4-4s1.794-4,4-4s4,1.794,4,4S8.206,51,6,51z M33,49c0,2.206-1.794,4-4,4s-4-1.794-4-4s1.794-4,4-4S33,46.794,33,49z M29,31c-3.309,0-6-2.691-6-6s2.691-6,6-6s6,2.691,6,6S32.309,31,29,31z M47,41c0,1.103-0.897,2-2,2s-2-0.897-2-2s0.897-2,2-2S47,39.897,47,41z M49,10c-2.206,0-4-1.794-4-4s1.794-4,4-4s4,1.794,4,4S51.206,10,49,10z"/></svg>
+            </div>
+        </div>
         <div class="toc-panel" id="toc-panel">
             <div class="toc-title">Contents</div>
             <div id="toc-list"></div>
@@ -427,6 +412,8 @@ html, body { font-family:"DejaVu Serif","Songti SC","STSong","SimSun","Noto Seri
 </div>
 
 <div id="toast"></div>
+<!-- 图谱全屏预览层（局部图展开用）：固定全屏 + blur 遮罩，内部居中渲染当前文章局部图放大版 -->
+<div id="graph-preview-outer"><div id="graph-preview-container"></div></div>
 
 <script src="/assets/marked.min.js" defer></script>
 <script src="/assets/purify.min.js" defer></script>
@@ -438,11 +425,18 @@ var FRONT_MENU_MD = <?php echo json_encode($frontMenuMd); ?>;
 var FRONT_DRAWER_EXPANDED = <?php echo $frontDrawerExpanded ? 'true' : 'false'; ?>;
 // 强制展开目录（后台目录管理设置，优先级高于默认展开开关）
 var FRONT_EXPANDED_DIRS = <?php echo json_encode(expand_effective_entries($config)); ?>;
-var GRAPH_ALIAS_PATH = <?php echo json_encode($graphAlias); ?>;
-// Graph 功能总开关：后台 graph_path 留空 = 关闭（前端不再请求 /api/graph、不渲染图谱）。
-// 开启（填了别名）时返回 true；开启状态 = graph_path 非空
-var GRAPH_ENABLED = <?php echo $graphEnabled ? 'true' : 'false'; ?>;
+// Graph 功能总开关：图谱（局部图）始终开启，无配置开关
+var GRAPH_ENABLED = true;
 var GRAPH_HIGHLIGHT_DIRECT = <?php echo (!isset($config['graph_highlight_direct']) || !empty($config['graph_highlight_direct'])) ? 'true' : 'false'; ?>;
+// 图谱引擎参数（后台 Graph 视图可配置；与 Quartz d3 力导向同名同义——depth=局部图跳数，repel 斥力、center 向心、linkDistance 边长、fontSize 字号、opacityScale 标签透明度缩放）
+var GRAPH_CONFIG = <?php echo json_encode([
+    'depth' => (int)($config['graph_depth'] ?? 1),
+    'repel' => (float)($config['graph_repel'] ?? 0.5),
+    'center' => (float)($config['graph_center'] ?? 0.3),
+    'linkDistance' => (int)($config['graph_link_distance'] ?? 30),
+    'fontSize' => (float)($config['graph_font_size'] ?? 0.6),
+    'opacityScale' => (float)($config['graph_opacity_scale'] ?? 1.0),
+]); ?>;
 
 // 首页文章（后台站点设置配置，内联零请求；空 = 未配置）
 var HOME_MD = <?php echo json_encode($homeMd); ?>;
@@ -453,8 +447,6 @@ var SSR_PATH = <?php echo json_encode($ssrArticlePath !== '' ? $ssrArticlePath :
 var SSR_PDF = <?php echo json_encode($ssrPdfPath !== '' ? $ssrPdfPath : null); ?>;
 // AI 问答总开关（后台 AI 视图配置）：关闭时隐藏 AI 按钮
 var AI_ENABLED = <?php echo !empty($config['ai_enabled'] ?? true) ? 'true' : 'false'; ?>;
-// Graph View 直达（/graph）：前端渲染知识图谱（?dir= 由 fetch 参数决定）
-var SSR_GRAPH = <?php echo $ssrGraph ? 'true' : 'false'; ?>;
 // 固定顶部栏（后台偏好设置控制）：开启时导航栏不随滚动隐藏
 var PIN_NAVBAR = <?php echo !empty($config['pin_navbar']) ? 'true' : 'false'; ?>;
 // Excalidraw 绘画直达（.excalidraw.md）：内联原文——前端 lz-string 解码 compressed-json → SVG 渲染
@@ -478,7 +470,11 @@ var SITE_TITLE = <?php echo json_encode($siteTitle); ?>;
 var ARTICLE_FOOTER = <?php echo ($config['article_footer'] ?? true) ? 'true' : 'false'; ?>;
 var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] ?? 'Created with <a href="https://github.com/yourorg/brainpress" target="_blank" rel="noopener">BrainPress</a>&nbsp;v3.0.0&nbsp;© 2026'); ?>;
 </script>
-<script src="/assets/render.js?v=20260905s" defer></script>
-<script src="/assets/site.js?v=20260907m" defer></script>
+<script src="/assets/d3/d3-dispatch.min.js" defer></script>
+<script src="/assets/d3/d3-timer.min.js" defer></script>
+<script src="/assets/d3/d3-quadtree.min.js" defer></script>
+<script src="/assets/d3/d3-force.min.js" defer></script>
+<script src="/assets/render.js?v=20260908b" defer></script>
+<script src="/assets/site.js?v=20260908d" defer></script>
 </body>
 </html>

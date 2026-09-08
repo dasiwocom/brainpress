@@ -138,8 +138,13 @@ fetch('/api/admin/config').then(function (r) { return r.json(); }).then(function
     try { if (rt.html !== false) $('switch-rt-html').classList.add('on'); } catch (e) {}
     try { if (rt.canvas !== false) $('switch-rt-canvas').classList.add('on'); } catch (e) {}
     try { if (rt.png !== false) $('switch-rt-png').classList.add('on'); } catch (e) {}
-    try { $('graph-path').value = d.graph_path || ''; } catch (e) {}
     try { if (d.graph_highlight_direct !== false) $('switch-graph-direct').classList.add('on'); } catch (e) {}
+    try { $('graph-depth').value = d.graph_depth || 1; } catch (e) {}
+    try { $('graph-repel').value = d.graph_repel || 0.5; } catch (e) {}
+    try { $('graph-center').value = d.graph_center || 0.3; } catch (e) {}
+    try { $('graph-link-distance').value = d.graph_link_distance || 30; } catch (e) {}
+    try { $('graph-font-size').value = d.graph_font_size || 0.6; } catch (e) {}
+    try { $('graph-opacity-scale').value = d.graph_opacity_scale || 1; } catch (e) {}
     try { $('site-title').value = d.site_title || 'BrainPress'; } catch (e) {}
     try { $('home-article').value = d.home_article || ''; } catch (e) {}
     try { $('content-width').value = d.content_width || 840; } catch (e) {}
@@ -463,8 +468,13 @@ function saveConfig() {
             png: $('switch-rt-png').classList.contains('on')
         },
         pin_navbar: $('switch-pin-nav').classList.contains('on'),
-        graph_path: $('graph-path').value.trim(),
         graph_highlight_direct: $('switch-graph-direct').classList.contains('on'),
+        graph_depth: parseInt($('graph-depth').value, 10) || 1,
+        graph_repel: parseFloat($('graph-repel').value) || 0.5,
+        graph_center: parseFloat($('graph-center').value) || 0.3,
+        graph_link_distance: parseInt($('graph-link-distance').value, 10) || 30,
+        graph_font_size: parseFloat($('graph-font-size').value) || 0.6,
+        graph_opacity_scale: parseFloat($('graph-opacity-scale').value) || 1,
         site_title: $('site-title').value.trim(),
         home_article: $('home-article').value.trim(),
         content_width: parseInt($('content-width').value, 10) || '',
@@ -524,7 +534,7 @@ $('site-password').addEventListener('blur', function () {
     });
 });
 // pinned-dir 已改为列表式（输入框 + Add），无失焦保存逻辑
-var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'ima-client-id', 'ima-api-key', 'site-title', 'home-article', 'content-width', 'footer-html', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-path'];
+var blurIds = ['minio-endpoint', 'minio-access', 'minio-secret', 'minio-bucket', 'ima-client-id', 'ima-api-key', 'site-title', 'home-article', 'content-width', 'footer-html', 'api-token', 'ai-api-base', 'ai-api-key', 'ai-model', 'graph-depth', 'graph-repel', 'graph-center', 'graph-link-distance', 'graph-font-size', 'graph-opacity-scale'];
 for (var bi = 1; bi <= CUSTOM_COUNT; bi++) blurIds.push('custom-path-' + bi);
 for (var bi = 1; bi <= RSS_COUNT; bi++) {
     blurIds.push('rss-feed-' + bi + '-url');
