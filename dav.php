@@ -89,12 +89,17 @@ function handle_webdav(string $uri, string $method, array $config): never
             // href 回显请求路径（保持 /dav/<vault>/... 形式，Obsidian 按此匹配）
             $reqPath = rtrim($uri, '/');
             $base = $reqPath;
+            // 状态时间：存在返回 filemtime，不存在（新目录尚未建立）给当前时间。
+            // filemtime 在路径不存在时返回 false，直接喂 gmdate 会抛 TypeError → 整段 PROPFIND 输出被截断，
+            // Obsidian Remotely Save 解析残破 XML 报「cannot read properties of undefined (reading 'split')」。
+            $mtime = @filemtime($full);
+            if ($mtime === false) $mtime = time();
             echo '<?xml version="1.0" encoding="utf-8"?>';
             echo '<D:multistatus xmlns:D="DAV:">';
-            // 当前项
+            // 当前项（不存在也回 C：collection，Remotely Save 视其为可进入的同步根，触发 MKCOL/PUT 建库）
             echo '<D:response><D:href>' . htmlspecialchars($base . (is_dir($full) ? '/' : '')) . '</D:href>';
-            echo '<D:propstat><D:prop><D:resourcetype>' . (is_dir($full) ? '<D:collection/>' : '') . '</D:resourcetype>';
-            echo '<D:getlastmodified>' . gmdate('D, d M Y H:i:s', filemtime($full)) . ' GMT</D:getlastmodified>';
+            echo '<D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype>';
+            echo '<D:getlastmodified>' . gmdate('D, d M Y H:i:s', $mtime) . ' GMT</D:getlastmodified>';
             if (is_file($full)) echo '<D:getcontentlength>' . filesize($full) . '</D:getcontentlength>';
             echo '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>';
             // 子项（目录时）——href 用请求路径 + 文件名
@@ -105,7 +110,7 @@ function handle_webdav(string $uri, string $method, array $config): never
                     $childHref = $base . '/' . rawurlencode($entry);
                     echo '<D:response><D:href>' . htmlspecialchars($childHref . (is_dir($child) ? '/' : '')) . '</D:href>';
                     echo '<D:propstat><D:prop><D:resourcetype>' . (is_dir($child) ? '<D:collection/>' : '') . '</D:resourcetype>';
-                    echo '<D:getlastmodified>' . gmdate('D, d M Y H:i:s', filemtime($child)) . ' GMT</D:getlastmodified>';
+                    echo '<D:getlastmodified>' . gmdate('D, d M Y H:i:s', $childMtime = @filemtime($child) ?: time()) . ' GMT</D:getlastmodified>';
                     if (is_file($child)) echo '<D:getcontentlength>' . filesize($child) . '</D:getcontentlength>';
                     echo '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>';
                 }

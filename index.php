@@ -287,7 +287,7 @@ var DEFAULT_LIGHT = <?php echo $defaultLight ? 'true' : 'false'; ?>;
 </script>
 
 <script src="/assets/lz-string.min.js" defer></script>
-    <link rel="stylesheet" href="/assets/site.css?v=20260908j">
+    <link rel="stylesheet" href="/assets/site.css?v=20260908l">
 <style>/* 阅读列宽（后台可调）：覆盖 site.css 的默认值 */
 :root { --vp-content-w:<?php echo $contentW; ?>px; }
 </style>
@@ -475,6 +475,6 @@ var ARTICLE_FOOTER_HTML = <?php echo json_encode($config['article_footer_html'] 
 <script src="/assets/d3/d3-quadtree.min.js" defer></script>
 <script src="/assets/d3/d3-force.min.js" defer></script>
 <script src="/assets/render.js?v=20260908b" defer></script>
-<script src="/assets/site.js?v=20260908d" defer></script>
+<script src="/assets/site.js?v=20260908g" defer></script>
 </body>
 </html>

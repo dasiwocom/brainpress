@@ -783,8 +783,10 @@ html.dark .cv-group { stroke:#b8b857; }
 /* 连线（新渲染器：class=graph-link；CSS 变量着色，hover 由 JS inline 设 stroke） */
 .graph-link { stroke-width:1; opacity:1; }
 /* 节点组（g.graph-node；无 will-change/transition——避免 d3 tick 每帧重绘时 GPU 合成层堆积卡顿） */
-.graph-node { cursor:pointer; touch-action:manipulation; }
-.graph-node:hover circle { transform:scale(1.15); transition:transform .12s ease; }
+/* 拖拽/平移一律零浏览器手势干预：manipulation 会放任竖向滚动判定，手机拖动节点时被手势识别抢走 → pointercancel 断触、节点/连线分离 */
+.graph-node { cursor:pointer; touch-action:none; }
+/* 高亮一律不用 CSS transform：会覆盖 applyZoom 写在 SVG 上的 translate/scale 组合变换，
+   导致 circle 偏离 zoom 视图坐标 → 「被按住的节点与它的连线断开」。hover 反馈交由 JS（raise+边加粗+label 放大）承担 */
 
 /* 抽屉固定入口已移除：Graph view 现作为虚拟条目直接进文章树（见 $frontMenuMd 拼接） */
 
@@ -834,6 +836,7 @@ html.dark .cv-group { stroke:#b8b857; }
     display:none; position:fixed; top:0; left:0; width:100vw; height:100%;
     background:transparent; backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
     z-index:10;
+    touch-action:none;
 }
 #graph-preview-outer.active { display:inline-block; }
 #graph-preview-container {
@@ -842,6 +845,7 @@ html.dark .cv-group { stroke:#b8b857; }
     background:var(--vp-c-card); border:1px solid var(--graph-line); border-radius:5px;
     box-sizing:border-box; box-shadow:0 10px 30px rgba(0,0,0,.2);
     overflow:hidden;
+    touch-action:none;
 }
 #graph-preview-container .graph-label { font-size:10px; }
 /* 节点标签（文章标题）随主题变色：亮=深字，暗=白字（对齐 Quartz 用 --dark 着色的行为，默认 SVG 是纯黑会看不清） */

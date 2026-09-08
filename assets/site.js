@@ -1503,6 +1503,11 @@
                 var svgY = ((e2.clientY - rect.top) - H / 2) / cfg.scale;
                 return { x: (svgX - zoomT.x) / zoomT.k, y: (svgY - zoomT.y) / zoomT.k };
             }
+            // 掌上拖拽稳如桌面：setPointerCapture 让 pointermove 全程归属本元素（手指滑出圆外也不丢）
+            // + lostpointercapture/pointercancel（浏览器抢走手势时）必须终结拖拽，否则 fx/fy 永久钉住、alphaTarget 不回零
+            var ptr = ev.pointerId;
+            var capEl = ev.currentTarget && ev.currentTarget.setPointerCapture ? ev.currentTarget : null;
+            if (capEl) { try { capEl.setPointerCapture(ptr); } catch (e) {} }
             node.fx = node.x; node.fy = node.y;
             node._dragged = false;
             if (!dragActive && sim) { sim.alphaTarget(1).restart(); }   // 原版 Quartz 手感：拖拽注入高热量，邻域富有弹性跟随
@@ -1512,18 +1517,27 @@
                 if (!node._dragged && (Math.abs(e2.clientX - sx0) + Math.abs(e2.clientY - sy0) > 5)) node._dragged = true;
                 if (!node._dragged) return;   // 位移未超阈值：视为静止（未拖拽，锁定点击）
                 var p = toLocal(e2);
+                // 即时钉到手指下：fx/fy 只会在下一个 rAF tick 由模拟落实到 x/y，手机掉帧时节点会滞后一拍、
+                // 看起来连线"贴"在节点上而非焊死。这里同步写 x/y 并立刻刷 DOM，节点圆心零延迟跟随手指，连线同帧锁死。
                 node.fx = p.x; node.fy = p.y;
+                node.x = p.x; node.y = p.y;
+                updateDOM();
             }
             function up() {
                 dragActive = false;
                 node._dragged = false;
                 node.fx = null; node.fy = null;
                 if (sim) { sim.alphaTarget(0).restart(); }   // 松手后自然回弹收敛（弹性归位）
+                if (capEl) { try { capEl.releasePointerCapture(ptr); } catch (e) {} }
                 window.removeEventListener('pointermove', mv);
                 window.removeEventListener('pointerup', up);
+                window.removeEventListener('pointercancel', up);
+                window.removeEventListener('lostpointercapture', up);
             }
             window.addEventListener('pointermove', mv);
             window.addEventListener('pointerup', up);
+            window.addEventListener('pointercancel', up);
+            window.addEventListener('lostpointercapture', up);
         }
 
         // ---- 边（先画边，节点在其上，避免连线盖住节点；line 不响应事件，点击可穿透到节点） ----
@@ -1630,10 +1644,14 @@
                 applyZoom();
             }, { passive: false });
             var pan = null;
+            var panCapEl = null, panPtr = null;
             svg.addEventListener('pointerdown', function (ev) {
                 if (ev.target !== svg) return;
                 userInteract = true;
                 pan = { x: ev.clientX, y: ev.clientY };
+                panPtr = ev.pointerId;
+                panCapEl = svg.setPointerCapture ? svg : null;
+                if (panCapEl) { try { panCapEl.setPointerCapture(panPtr); } catch (e) {} }
                 svg.style.cursor = 'grabbing';
             });
             var panMove = function (ev) {
@@ -1643,9 +1661,16 @@
                 pan.x = ev.clientX; pan.y = ev.clientY;
                 applyZoom();
             };
-            var panUp = function () { if (pan) { pan = null; svg.style.cursor = 'default'; } };
+            var panUp = function () {
+                if (!pan) return;
+                pan = null;
+                if (panCapEl) { try { panCapEl.releasePointerCapture(panPtr); } catch (e) {} }
+                svg.style.cursor = 'default';
+            };
             window.addEventListener('pointermove', panMove);
             window.addEventListener('pointerup', panUp);
+            window.addEventListener('pointercancel', panUp);
+            window.addEventListener('lostpointercapture', panUp);
         }
 
         // ---- d3-force 模拟（真实 d3-force 引擎，与 Quartz 完全一致） ----
