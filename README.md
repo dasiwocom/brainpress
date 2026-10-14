@@ -4,10 +4,14 @@ An independently developed, Markdown-native personal publishing app. Content man
 
 ## Features
 
-- One `posts` model, flat categories, and one category per post.
+- One `posts` model, two-level category relationships, and one category per post.
 - Frontend publishing, editing, preview, image uploads, search, and pagination.
-- A responsive forum feed with desktop navigation, content cards, and a sidebar.
-- A mobile header and five bottom navigation entries: Home, AI chat, Publish, Messages, and Profile. AI chat, Messages, and Profile are placeholders.
+- A responsive forum feed with content cards and a sidebar.
+- Desktop header mega panels: second-level headings form columns; each heading accepts plain text or optional links. Mobile navigation retains the same hierarchy.
+- Page layouts with seven widget regions, live preview, save/reset and per-page configuration.
+- A collapsible desktop admin sidebar; mobile administration uses a drawer.
+- English and Simplified Chinese system languages.
+- A mobile header with a left menu drawer, theme switch and search panel below the header. Independently managed bottom tabs support up to five entries.
 - Light and dark themes, remembered locally. The first visit follows the system preference. Theme changes use a circular View Transition when supported, respecting reduced motion.
 - CommonMark plus tables, task lists, strikethrough, automatic links, and footnotes.
 - Mermaid diagrams in fenced `mermaid` blocks.
@@ -126,3 +130,13 @@ Categories now support one parent level. Choose a top-level parent when creating
 Mermaid and KaTeX load only when needed. Mermaid source is masked by a loading placeholder until rendering. Up to eight SVG results are cached per browser tab/session, keyed by exact source, theme and renderer version, and sanitized when restored. Source or theme changes miss the old cache. First renders still require the Mermaid engine; caching does not make all initial diagrams instantaneous.
 
 The footer spans the viewport; category hover movement and frontend category creation controls are removed. The visible Edit layout shortcut is hidden; existing edit_layout URLs and backend page links still work. tests/hierarchy-http.mjs requires a disposable test instance on port 8082.
+
+## Page regions and header panels
+
+Open **Pages → Site layouts** to configure the homepage, article, category-list and archive layouts; custom pages have their own Edit layout links. Regions are top full width, main content top, main content, main content bottom, sidebar, bottom full width and footer. Empty regions take no space. Existing layouts remain valid.
+
+The available widgets remain Post list, Category list, Profile card and Contents. Profile cards may repeat across regions; each list and Contents remains unique. Contents is restricted to article sidebars, and lists are excluded from article pages and sidebars. No Markdown text widget is included.
+
+In **Menus**, create a root item and assign second-level items to it. Each second-level item becomes a column heading. Expand **Submenu text** to add labels and optional URLs. Empty URLs produce plain text; local paths and HTTP(S) URLs produce links. Root items with children open a wide panel without a separate description column. Changes do not modify Mobile tabs.
+
+Deployment packaging is currently deferred. Existing archives do not include the latest changes.

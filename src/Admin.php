@@ -68,17 +68,18 @@ function adminAction(string $action): bool {
         json_response(['ok'=>true,'message'=>'Settings saved.']);
     }
     if ($action==='menu_save') {
-        $labels=$_POST['label']??[]; $urls=$_POST['url']??[]; $enabled=$_POST['enabled']??[];$menuIds=$_POST['menu_id']??[];$parents=$_POST['parent']??[];
-        if (!is_array($labels)||!is_array($urls)||!is_array($enabled)||!is_array($menuIds)||!is_array($parents)||count($labels)>12) json_response(['error'=>'Use up to 12 menu items.'],422);
+        $labels=$_POST['label']??[]; $urls=$_POST['url']??[]; $enabled=$_POST['enabled']??[];$menuIds=$_POST['menu_id']??[];$parents=$_POST['parent']??[];$contents=$_POST['content']??[];
+        if (!is_array($labels)||!is_array($urls)||!is_array($enabled)||!is_array($menuIds)||!is_array($parents)||!is_array($contents)||count($labels)>12) json_response(['error'=>'Use up to 12 menu items.'],422);
         $items=[];
         foreach($labels as $i=>$label) {
             if (!is_string($label)||!is_string($urls[$i]??null)) json_response(['error'=>'Invalid menu item.'],422);
             $label=trim($label);$url=trim($urls[$i]);
             if ($label==='' && $url==='') continue;
-            if ($label==='' || mb_strlen($label)>40 || strlen($url)>1000 || !validMenuUrl($url)) json_response(['error'=>'Each item needs a label and a local path or HTTP(S) URL.'],422);
+            if ($label==='' || mb_strlen($label)>40 || strlen($url)>1000 || ($url!==''&&!validMenuUrl($url))) json_response(['error'=>'Each item needs a label and a local path or HTTP(S) URL.'],422);
             $itemId=(string)($menuIds[$i]??'legacy-'.$i);$parent=(string)($parents[$i]??'');
             if(!preg_match('/^[a-zA-Z0-9-]{1,80}$/',$itemId)||($parent!==''&&!preg_match('/^[a-zA-Z0-9-]{1,80}$/',$parent)))json_response(['error'=>'Invalid menu identifier.'],422);
-            $items[]=['id'=>$itemId,'parent'=>$parent,'label'=>$label,'url'=>$url,'visible'=>in_array((string)$i,$enabled,true)];
+            try{$content=validateMenuContent(json_decode($contents[$i]??'[]',true,16,JSON_THROW_ON_ERROR));}catch(Throwable $error){json_response(['error'=>$error instanceof InvalidArgumentException?$error->getMessage():'Invalid submenu text.'],422);}
+            $items[]=['id'=>$itemId,'parent'=>$parent,'label'=>$label,'url'=>$url,'visible'=>in_array((string)$i,$enabled,true),'content'=>$parent!==''?$content:[]];
         }
         try{$items=validateMenuParents($items);}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
         saveSetting('top_menu',json_encode($items,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));

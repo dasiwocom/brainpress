@@ -171,7 +171,7 @@ require dirname(__DIR__) . '/src/components.php';
 $layout=layoutItems($layoutContext);$scope=get_defined_vars();
 if(isset($previewLayout)&&$previewLayout!==null){
     if(($_POST['context']??'')!==$layoutContext)json_response(['error'=>'Layout context changed.'],422);
-    $out=['main'=>'','sidebar'=>''];foreach(['main','sidebar'] as $zone){ob_start();foreach($previewLayout as $widget)if($widget['zone']===$zone)renderWidget($widget,$scope);$out[$zone]=ob_get_clean();}json_response($out);
+    $out=[];foreach(array_keys(layoutZones()) as $zone){ob_start();foreach($previewLayout as $widget)if($widget['zone']===$zone)renderWidget($widget,$scope);$out[$zone]=ob_get_clean();}json_response($out);
 }
 if($isAdmin) require dirname(__DIR__) . '/src/admin-view.php';
 else require dirname(__DIR__) . '/src/view.php';

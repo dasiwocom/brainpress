@@ -1,4 +1,6 @@
 <?php
+function layoutZones(): array { return ['top_full'=>'Top full width','main_top'=>'Main content top','main'=>'Main content','main_bottom'=>'Main content bottom','sidebar'=>'Sidebar','bottom_full'=>'Bottom full width','footer'=>'Footer']; }
+function widgetTypes(): array { return ['posts'=>'Post list','categories'=>'Category list','profile'=>'Profile card','toc'=>'Contents']; }
 function pageUrl(array $page): string {return '/?page_slug='.rawurlencode($page['slug']);}
 function defaultLayout(string $context): array {
     $main=$context==='categories'?'categories':($context==='article'?null:'posts');
@@ -8,20 +10,38 @@ function defaultLayout(string $context): array {
     return $items;
 }
 function layoutItems(string $context): array {
-    $raw=setting('layout:'.$context);
-    if($raw==='')return defaultLayout($context);
-    $data=json_decode($raw,true);
-    if(!is_array($data)||!array_is_list($data))return defaultLayout($context);
-    return array_values(array_filter($data,fn($row)=>is_array($row)&&in_array($row['type']??'',['posts','categories','profile','toc'],true)&&in_array($row['zone']??'',['main','sidebar'],true))); 
+    $raw=setting('layout:'.$context);if($raw==='')return defaultLayout($context);
+    $data=json_decode($raw,true);if(!is_array($data)||!array_is_list($data))return defaultLayout($context);
+    return array_values(array_filter($data,fn($row)=>is_array($row)&&isset(widgetTypes()[$row['type']??''])&&isset(layoutZones()[$row['zone']??''])));
 }
 function validLayoutContext(string $context): bool {
     if(in_array($context,['home','article','categories','archive'],true))return true;
     return preg_match('/^page:(\d+)$/',$context,$m) && query('SELECT id FROM pages WHERE id=?',[(int)$m[1]])->fetchColumn();
 }
 function layoutLink(bool $edit=true): string {
-    $params=array_intersect_key($_GET,array_flip(['post','category','tag','q','page_slug','page']));
-    if($edit)$params['edit_layout']=1;
+    $params=array_intersect_key($_GET,array_flip(['post','category','tag','q','page_slug','page']));if($edit)$params['edit_layout']=1;
     return '/'.($params?'?'.http_build_query($params):'');
+}
+function validateLayout(array $items,string $context): array {
+    if(!array_is_list($items)||count($items)>30)throw new InvalidArgumentException('Use up to 30 widgets.');
+    $clean=[];$seen=[];
+    foreach($items as $item){
+        if(!is_array($item))throw new InvalidArgumentException('Invalid widgets.');
+        $type=$item['type']??'';$zone=$item['zone']??'';
+        if(!is_string($type)||!is_string($zone)||!isset(widgetTypes()[$type])||!isset(layoutZones()[$zone]))throw new InvalidArgumentException('Invalid widget or region.');
+        if(in_array($type,['posts','categories'],true)&&($zone==='sidebar'||$context==='article'))throw new InvalidArgumentException('Lists belong outside article pages and sidebars.');
+        if($type==='toc'&&($context!=='article'||$zone!=='sidebar'))throw new InvalidArgumentException('Contents belongs in article sidebars.');
+        if(in_array($type,['posts','categories','toc'],true)&&isset($seen[$type]))throw new InvalidArgumentException('Use one instance of each list or contents widget.');$seen[$type]=true;
+        $row=['type'=>$type,'zone'=>$zone];
+        foreach(['name','bio','avatar','cover'] as $field){
+            if(!is_string($item[$field]??''))throw new InvalidArgumentException('Invalid widget text.');
+            $value=trim($item[$field]??'');
+            if(mb_strlen($value)>500)throw new InvalidArgumentException('Widget text is too long.');
+            if(in_array($field,['avatar','cover'],true)&&$value!==''&&!validMenuUrl($value))throw new InvalidArgumentException('Use a local path or HTTP(S) URL.');$row[$field]=$value;
+        }
+        $clean[]=$row;
+    }
+    return $clean;
 }
 function pagesAction(string $action): ?array {
     if($action==='page_save') {
@@ -37,31 +57,16 @@ function pagesAction(string $action): ?array {
         json_response(['ok'=>true,'url'=>'/admin/pages']);
     }
     if(in_array($action,['layout_save','layout_preview'],true)) {
-        $context=(string)($_POST['context']??'');
-        if(!validLayoutContext($context))json_response(['error'=>'Invalid layout context.'],422);
+        $context=(string)($_POST['context']??'');if(!validLayoutContext($context))json_response(['error'=>'Invalid layout context.'],422);
         if(isset($_POST['reset'])){query('DELETE FROM settings WHERE setting_key=?',['layout:'.$context]);json_response(['ok'=>true]);}
-        try{$items=json_decode((string)($_POST['widgets']??'[]'),true,32,JSON_THROW_ON_ERROR);}catch(Throwable){json_response(['error'=>'Invalid widgets.'],422);}
-        if(!is_array($items)||!array_is_list($items)||count($items)>10)json_response(['error'=>'Use up to 10 widgets.'],422);
-        $clean=[];$seen=[];
-        foreach($items as $item){
-            if(!is_array($item))json_response(['error'=>'Invalid widgets.'],422);
-            $type=$item['type']??'';$zone=$item['zone']??'';
-            if(!in_array($type,['posts','categories','profile','toc'],true)||!in_array($zone,['main','sidebar'],true))json_response(['error'=>'Invalid widget or region.'],422);
-            if(in_array($type,['posts','categories'],true)&&($zone!=='main'||$context==='article'))json_response(['error'=>'Lists belong in the main region outside article pages.'],422);
-            if($type==='toc'&&($context!=='article'||$zone!=='sidebar'))json_response(['error'=>'Contents belongs in article sidebars.'],422);
-            if(isset($seen[$type]))json_response(['error'=>'Use one instance of each widget in this version.'],422);$seen[$type]=true;
-            $row=['type'=>$type,'zone'=>$zone];
-            foreach(['name','bio','avatar','cover'] as $field){$value=trim((string)($item[$field]??''));if(mb_strlen($value)>500)json_response(['error'=>'Widget text is too long.'],422);if(in_array($field,['avatar','cover'],true)&&$value!==''&&!validMenuUrl($value))json_response(['error'=>'Use a local path or HTTP(S) URL.'],422);$row[$field]=$value;}
-            $clean[]=$row;
-        }
+        try{$items=json_decode((string)($_POST['widgets']??'[]'),true,32,JSON_THROW_ON_ERROR);if(!is_array($items))throw new InvalidArgumentException('Invalid widgets.');$clean=validateLayout($items,$context);}catch(Throwable $error){json_response(['error'=>$error instanceof InvalidArgumentException?$error->getMessage():'Invalid widgets.'],422);}
         if($action==='layout_preview')return $clean;
         saveSetting('layout:'.$context,json_encode($clean,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));json_response(['ok'=>true]);
     }
     return null;
 }
 function renderWidget(array $widget,array $scope): void {
-    extract($scope);$type=$widget['type']??'';
-    if(!in_array($type,['posts','categories','profile','toc'],true))return;
-    if($type==='toc'&&!$post)return;
+    extract($scope);$type=$widget['type']??'';if(!isset(widgetTypes()[$type]))return;if($type==='toc'&&!$post)return;
     require __DIR__.'/widgets/'.$type.'.php';
 }
+function renderRegion(string $zone,array $layout,array $scope): void {foreach($layout as $widget)if($widget['zone']===$zone)renderWidget($widget,$scope);}

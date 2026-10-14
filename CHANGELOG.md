@@ -69,3 +69,14 @@ Verification: PHP/JavaScript syntax checks; mobile 402px layout without horizont
 - Add a left mobile menu drawer below the header; move the theme control beside search.
 - Keep existing search content and styling, open below the header, and toggle the header search button into a close control.
 - Keep the background inert while panels are open; support Escape and backdrop dismissal.
+
+## 2026-10-14 — Layout regions and header panels
+
+- Save the previous working version as Git baseline 2935ffa.
+- Add all seven page layout regions, preserve existing configurations, and preview every region before saving.
+- Keep the four existing widget types; allow repeated profile cards while retaining one paginated post list.
+- Add header mega panels with second-level column headings and optional linked text. No description column or Markdown text widget.
+- Add management links for home, article, category and archive layouts.
+- Defer deployment package generation.
+
+Validation: isolated database requests verify region preview/save/reset, menu hierarchy and optional links; PHP/JavaScript checks and regression tests pass. Browser visual acceptance remains pending.

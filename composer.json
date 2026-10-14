@@ -17,7 +17,8 @@
             "php tests/extensions.php",
             "php tests/frontmatter.php",
             "php tests/admin.php",
-            "php tests/i18n.php"
+            "php tests/i18n.php",
+            "php tests/layout-menu.php"
         ]
     }
 }

@@ -79,3 +79,5 @@ require __DIR__.'/Pages.php';
 require __DIR__.'/Hierarchy.php';
 
 require __DIR__.'/Navigation.php';
+
+require __DIR__.'/MegaMenu.php';
