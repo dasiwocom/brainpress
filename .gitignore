@@ -1,0 +1,8 @@
+/vendor/
+/storage/*
+!/storage/.gitkeep
+/public/uploads/*
+!/public/uploads/.gitkeep
+/config.php
+/.runtime/
+/node_modules/

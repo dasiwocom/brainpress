@@ -1,0 +1,1 @@
+{"name":"brainpress-assets","private":true,"scripts":{"build":"node scripts/build.mjs"},"dependencies":{"mermaid":"^11.0.0","katex":"^0.16.0"},"devDependencies":{"esbuild":"^0.25.0"}}

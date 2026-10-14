@@ -1,0 +1,19 @@
+{
+    "name":  "brainpress/brainpress",
+    "description":  "A small Markdown-native publishing app",
+    "type":  "project",
+    "require":  {
+                    "php":  "^8.2",
+                    "ext-pdo":  "*",
+                    "ext-mbstring":  "*",
+                    "ext-fileinfo":  "*",
+                    "league/commonmark":  "^2.7"
+                },
+    "scripts":  {
+                    "serve":  "php -S 127.0.0.1:8080 -t public public/router.php",
+                    "test":  [
+                                 "php tests/smoke.php",
+                                 "php tests/extensions.php"
+                             ]
+                }
+}
