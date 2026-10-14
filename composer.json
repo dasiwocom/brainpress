@@ -16,7 +16,8 @@
             "php tests/smoke.php",
             "php tests/extensions.php",
             "php tests/frontmatter.php",
-            "php tests/admin.php"
+            "php tests/admin.php",
+            "php tests/i18n.php"
         ]
     }
 }

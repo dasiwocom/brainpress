@@ -1,0 +1,1 @@
+<section class="panel article-toc" hidden><h3><?=e(t('Contents'))?></h3><nav aria-label="<?=e(t('Table of contents'))?>" data-toc></nav></section>

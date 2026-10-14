@@ -6,12 +6,15 @@ function setting(string $key, string $default = ''): string {
     return $value === false ? $default : (string)$value;
 }
 function saveSetting(string $key, string $value): void {
+    if($key==='language')unset($GLOBALS['brainpress_locale']);
     if (query('SELECT setting_key FROM settings WHERE setting_key=?', [$key])->fetchColumn() !== false) query('UPDATE settings SET value=? WHERE setting_key=?', [$value,$key]);
     else query('INSERT INTO settings(setting_key,value) VALUES(?,?)', [$key,$value]);
 }
 function topMenu(bool $includeHidden = false): array {
     $value = setting('top_menu');
-    $items = $value === '' ? [['label'=>'Home','url'=>'/'],['label'=>'AI chat','url'=>'/?view=ai'],['label'=>'Messages','url'=>'/?view=messages'],['label'=>'Profile','url'=>'/?view=profile']] : (json_decode($value,true) ?: []);
+    $items = $value === '' ? [['label'=>'Home','url'=>'/'],['label'=>'Categories','url'=>'/?categories']] : (json_decode($value,true) ?: []);
+    foreach($items as $i=>&$entry){$entry['id']??='legacy-'.$i;$entry['parent']??='';}unset($entry);
+    $items=array_values(array_filter($items,fn($item)=>!in_array($item['url']??'', ['/?view=ai','/?view=messages','/?view=profile'],true)));
     return $includeHidden ? $items : array_values(array_filter($items,fn($item)=>$item['visible']??true));
 }
 function validMenuUrl(string $url): bool {
@@ -44,25 +47,40 @@ function mediaLibrary(string $status='active'): array {
     return query('SELECT * FROM media WHERE status=? ORDER BY id DESC',[$status])->fetchAll();
 }
 function adminAction(string $action): bool {
+    if ($action==='tabs_save') {
+        $labels=$_POST['label']??[];$urls=$_POST['url']??[];$icons=$_POST['icon']??[];$enabled=$_POST['enabled']??[];$featured=$_POST['prominent']??[];
+        if(!is_array($labels)||!is_array($urls)||!is_array($icons)||!is_array($enabled)||!is_array($featured)||count($labels)>5)json_response(['error'=>'Use up to 5 mobile tabs.'],422);
+        $items=[];foreach($labels as $i=>$label)$items[]=['label'=>$label,'url'=>$urls[$i]??null,'icon'=>$icons[$i]??null,'visible'=>in_array((string)$i,$enabled,true),'prominent'=>in_array((string)$i,$featured,true)];
+        try{$items=validateTabs($items);}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
+        saveSetting('mobile_tabs',json_encode($items,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
+        json_response(['ok'=>true,'message'=>'Tabs saved.']);
+    }
     if ($action==='settings_save') {
         $name=trim((string)($_POST['site_name']??'')); $description=trim((string)($_POST['description']??''));
         if ($name==='' || mb_strlen($name)>60 || mb_strlen($description)>200) json_response(['error'=>'Use a site name up to 60 characters and a description up to 200.'],422);
         $logo=trim((string)($_POST['logo_url']??setting('logo_url','/assets/site-logo.svg')));
         if($logo!=='' && (!validMenuUrl($logo)||strlen($logo)>1000)) json_response(['error'=>'Use a local path or HTTP(S) URL for the logo.'],422);
-        db()->beginTransaction();saveSetting('logo_url',$logo);saveSetting('site_name',$name);saveSetting('description',$description);db()->commit();
+        $locale=(string)($_POST['language']??language());
+        if(!in_array($locale,['en','zh-CN'],true)) json_response(['error'=>'Unsupported language.'],422);
+        $home=(int)($_POST['homepage']??setting('homepage','0'));
+        if($home && !query("SELECT id FROM pages WHERE id=? AND status='published'",[$home])->fetchColumn())json_response(['error'=>'Select a published homepage.'],422);
+        db()->beginTransaction();saveSetting('homepage',(string)$home);saveSetting('language',$locale);saveSetting('logo_url',$logo);saveSetting('site_name',$name);saveSetting('description',$description);db()->commit();
         json_response(['ok'=>true,'message'=>'Settings saved.']);
     }
     if ($action==='menu_save') {
-        $labels=$_POST['label']??[]; $urls=$_POST['url']??[]; $enabled=$_POST['enabled']??[];
-        if (!is_array($labels)||!is_array($urls)||!is_array($enabled)||count($labels)>12) json_response(['error'=>'Use up to 12 menu items.'],422);
+        $labels=$_POST['label']??[]; $urls=$_POST['url']??[]; $enabled=$_POST['enabled']??[];$menuIds=$_POST['menu_id']??[];$parents=$_POST['parent']??[];
+        if (!is_array($labels)||!is_array($urls)||!is_array($enabled)||!is_array($menuIds)||!is_array($parents)||count($labels)>12) json_response(['error'=>'Use up to 12 menu items.'],422);
         $items=[];
         foreach($labels as $i=>$label) {
             if (!is_string($label)||!is_string($urls[$i]??null)) json_response(['error'=>'Invalid menu item.'],422);
             $label=trim($label);$url=trim($urls[$i]);
             if ($label==='' && $url==='') continue;
             if ($label==='' || mb_strlen($label)>40 || strlen($url)>1000 || !validMenuUrl($url)) json_response(['error'=>'Each item needs a label and a local path or HTTP(S) URL.'],422);
-            $items[]=['label'=>$label,'url'=>$url,'visible'=>in_array((string)$i,$enabled,true)];
+            $itemId=(string)($menuIds[$i]??'legacy-'.$i);$parent=(string)($parents[$i]??'');
+            if(!preg_match('/^[a-zA-Z0-9-]{1,80}$/',$itemId)||($parent!==''&&!preg_match('/^[a-zA-Z0-9-]{1,80}$/',$parent)))json_response(['error'=>'Invalid menu identifier.'],422);
+            $items[]=['id'=>$itemId,'parent'=>$parent,'label'=>$label,'url'=>$url,'visible'=>in_array((string)$i,$enabled,true)];
         }
+        try{$items=validateMenuParents($items);}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
         saveSetting('top_menu',json_encode($items,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
         json_response(['ok'=>true,'message'=>'Menu saved.']);
     }

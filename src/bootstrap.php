@@ -25,6 +25,13 @@ function db(): PDO {
     $db->exec("CREATE TABLE IF NOT EXISTS tags (id $id, name VARCHAR(80) NOT NULL UNIQUE)$suffix");
     $db->exec("CREATE TABLE IF NOT EXISTS post_tags (post_id INT NOT NULL, tag_id INT NOT NULL, PRIMARY KEY(post_id,tag_id), FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE, FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE)$suffix");
     $db->exec("CREATE TABLE IF NOT EXISTS media (id $id, filename VARCHAR(100) NOT NULL UNIQUE, title VARCHAR(200) NOT NULL, alt VARCHAR(500) NOT NULL, created_at VARCHAR(19) NOT NULL, status VARCHAR(12) NOT NULL DEFAULT 'active')$suffix");
+    $db->exec("CREATE TABLE IF NOT EXISTS pages (id $id, title VARCHAR(200) NOT NULL, slug VARCHAR(80) NOT NULL UNIQUE, status VARCHAR(12) NOT NULL, kind VARCHAR(20) NOT NULL)$suffix");
+    foreach ([['Home','home','home'],['Categories','categories','categories']] as $seed) {
+        $exists=$db->prepare('SELECT id FROM pages WHERE kind=?');$exists->execute([$seed[2]]);
+        if(!$exists->fetchColumn()){$insert=$db->prepare('INSERT INTO pages(title,slug,status,kind) VALUES(?,?,?,?)');$insert->execute([$seed[0],$seed[1],'published',$seed[2]]);}
+    }
+    $categoryColumns=$mysql?$db->query('SHOW COLUMNS FROM categories')->fetchAll(PDO::FETCH_COLUMN):array_column($db->query('PRAGMA table_info(categories)')->fetchAll(),'name');
+    if(!in_array('parent_id',$categoryColumns,true))$db->exec('ALTER TABLE categories ADD COLUMN parent_id INT NULL');
     return $db;
 }
 function query(string $sql, array $params = []): PDOStatement {
@@ -59,7 +66,16 @@ function excerpt(string $source): string {
     return mb_strimwidth(trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8'))), 0, 220, '…', 'UTF-8');
 }
 function json_response(mixed $data, int $status = 200): never {
+    if(is_array($data)){foreach(['error','message'] as $key)if(isset($data[$key])&&is_string($data[$key]))$data[$key]=t($data[$key]);}
     http_response_code($status); header('Content-Type: application/json; charset=utf-8'); echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR); exit;
 }
 
 require __DIR__ . '/Admin.php';
+
+require __DIR__ . '/I18n.php';
+
+require __DIR__.'/Pages.php';
+
+require __DIR__.'/Hierarchy.php';
+
+require __DIR__.'/Navigation.php';

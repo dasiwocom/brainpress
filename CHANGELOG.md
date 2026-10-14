@@ -36,3 +36,36 @@ Verification: PHP/JavaScript syntax checks; mobile 402px layout without horizont
 - Install supplied SVG branding and expose Logo URL in System settings.
 - Default desktop menu matches Home, AI chat, Messages and Profile; hide header menus on mobile.
 - Keep only All posts and Categories in frontend navigation; remove notice bars.
+
+## System language
+
+- Remove feed quick publishing while keeping dedicated editor entry points.
+- Add English/Simplified Chinese system language, persisted in System settings; translate interface templates, common feedback and client controls without translating user content.
+- Include language catalogs in deployment packages. Keep existing colors.
+
+## Pages and contextual widgets
+
+- Add page title/slug/status management and a published-page homepage setting.
+- Edit frontend layouts in current-page context with scoped live preview, save and reset.
+- Extract post list, categories, profile and contents into widget renderers; keep article core content fixed.
+- Retire AI/messages/profile placeholders, defer left navigation and simplify mobile navigation.
+- Preserve current colors, article data and shared system language.
+
+## Stable feed refresh
+
+- Remove desktop post-card entrance animation.
+- Emit intrinsic dimensions for local feed images to reserve space before loading.
+
+## Footer, rendering and two-level organization
+
+- Full-width footer with aligned inner content; remove category-card movement, frontend category creation and visible layout-edit shortcut.
+- Lazy-load Mermaid/KaTeX; mask source while loading; reuse sanitized, source/theme-versioned session SVG cache.
+- Add parent category and stable parent menu IDs with two-level validation, cycle protection and parent removal handling. Defer frontend nested presentation.
+
+### Mobile navigation and panels
+
+- Add independent mobile bottom navigation management at /admin/tabs with labels, URLs, icons, ordering, visibility and an optional prominent action.
+- Align the full-width footer with the fixed bottom bar and safe area on short and long pages.
+- Add a left mobile menu drawer below the header; move the theme control beside search.
+- Keep existing search content and styling, open below the header, and toggle the header search button into a close control.
+- Keep the background inert while panels are open; support Escape and backdrop dismissal.

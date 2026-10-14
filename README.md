@@ -104,3 +104,25 @@ Build a clean runtime package with node scripts/package.mjs /absolute/new/output
 HTTP integration checks in tests/admin-http.mjs require a separate running instance with a disposable database (default URL http://127.0.0.1:8082). They create test content and an image; never point them at your personal or production instance. Normal composer test uses in-memory databases.
 
 System settings include Logo URL. The supplied logo is bundled at /assets/site-logo.svg (source license comment preserved). Empty Logo URL uses the site name. Desktop defaults to Home, AI chat, Messages and Profile; mobile uses bottom navigation without a duplicate header menu.
+
+## System language
+
+Administration → System → Language provides English and Simplified Chinese. The persisted setting applies site-wide to interface labels and common feedback; saving reloads the settings page. Markdown, post titles, category/tag names, site description and custom menu labels are not translated. Edit custom menus separately if needed. The default locale on a new installation is English. Translation catalogs are included in runtime packages. The feed has no quick-publishing form; use dedicated publishing links.
+
+## Pages and contextual layout editing
+
+Open a frontend page and choose Edit layout. Configure the current route context, move widgets between allowed regions, reorder/remove them and preview changes without saving. Save layout publishes the configuration; Restore default resets that context. Article layout applies to all article details, category-index layout to the category list, and archive layout to category/tag/search results. Custom pages have their own layouts. The editor displays this scope explicitly.
+
+Administration → Pages manages title, URL slug and Draft/Published state. System → Homepage selects a published page; choose Home for the standard feed. Built-in Home and Categories pages remain published. A selected homepage cannot be unpublished until another homepage is chosen. Draft custom pages can be opened in layout editing mode; editing is not access controlled in this personal prototype.
+
+Widgets: Post list and Category list in main content, Profile card in main or sidebar, Contents in article sidebars. Each type has at most one instance in this initial version. Profile name, introduction, avatar and cover are configurable. Article body remains a fixed core region. List widgets inherit route filters and use one main pagination stream. Widgets do not execute user-supplied code. No freeform nested canvas or drag-and-drop is implemented.
+
+AI, Messages and Profile placeholder routes are retired; their old menu links are hidden. Mobile navigation now contains Home, Publish and Categories. Frontend left navigation is deferred. Colors are unchanged. tests/pages-http.mjs uses the disposable local test instance on port 8082 and must not target a personal or production database.
+
+## Hierarchy and diagram loading
+
+Categories now support one parent level. Choose a top-level parent when creating or updating a category; self-links, cycles and third levels are rejected. Deleting a parent promotes its child categories to top level and retains the existing post reassignment requirement. Menus store stable IDs and parent IDs; the editor preserves relationships while reordering and promotes children when their parent row is removed. Frontend dropdown/tree presentation is deferred: existing flat display is retained.
+
+Mermaid and KaTeX load only when needed. Mermaid source is masked by a loading placeholder until rendering. Up to eight SVG results are cached per browser tab/session, keyed by exact source, theme and renderer version, and sanitized when restored. Source or theme changes miss the old cache. First renders still require the Mermaid engine; caching does not make all initial diagrams instantaneous.
+
+The footer spans the viewport; category hover movement and frontend category creation controls are removed. The visible Edit layout shortcut is hidden; existing edit_layout URLs and backend page links still work. tests/hierarchy-http.mjs requires a disposable test instance on port 8082.

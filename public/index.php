@@ -14,6 +14,7 @@ try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) json_response(['error' => 'This page expired. Refresh and try again.'], 403);
         $action = $_POST['action'] ?? '';
+        $previewLayout=pagesAction($action);
         adminAction($action);
         if (in_array($action, ['trash', 'restore'], true)) {
             $id = (int)($_POST['id'] ?? 0);
@@ -30,13 +31,14 @@ try {
                 $name = trim((string)($_POST['name'] ?? ''));
                 if ($name === '' || mb_strlen($name)>40) json_response(['error'=>'Use 1–40 characters.'],422);
                 if (query('SELECT id FROM categories WHERE name=? AND id<>?',[$name,$id])->fetch()) json_response(['error'=>'Category name already exists.'],422);
-                query('UPDATE categories SET name=? WHERE id=?',[$name,$id]);
+                try{$parent=categoryParent($id,(int)($_POST['parent_id']??0));}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
+                query('UPDATE categories SET name=?,parent_id=? WHERE id=?',[$name,$parent,$id]);
             } else {
                 $target = (int)($_POST['target'] ?? 0);
                 $count = (int)query('SELECT COUNT(*) FROM posts WHERE category_id=?',[$id])->fetchColumn();
                 if ($count && ($target === $id || !query('SELECT id FROM categories WHERE id=?',[$target])->fetch())) json_response(['error'=>'Choose another category to receive all posts, including drafts and trash.'],422);
                 db()->beginTransaction();
-                try { if ($count) query('UPDATE posts SET category_id=? WHERE category_id=?',[$target,$id]); query('DELETE FROM categories WHERE id=?',[$id]); db()->commit(); }
+                try { if ($count) query('UPDATE posts SET category_id=? WHERE category_id=?',[$target,$id]); query('UPDATE categories SET parent_id=NULL WHERE parent_id=?',[$id]); query('DELETE FROM categories WHERE id=?',[$id]); db()->commit(); }
                 catch (Throwable $error) { db()->rollBack(); throw $error; }
             }
             json_response(['ok'=>true]);
@@ -47,7 +49,8 @@ try {
             if ($name === '' || mb_strlen($name) > 40) json_response(['error' => 'Use 1–40 characters for the category name.'], 422);
             $existing = query('SELECT id FROM categories WHERE name = ?', [$name])->fetchColumn();
             if ($existing) json_response(['error' => 'This category already exists.'], 422);
-            query('INSERT INTO categories (name) VALUES (?)', [$name]);
+            try{$parent=categoryParent(0,(int)($_POST['parent_id']??0));}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
+            query('INSERT INTO categories (name,parent_id) VALUES (?,?)', [$name,$parent]);
             json_response(['id' => (int)db()->lastInsertId(), 'name' => $name]);
         }
         if ($action === 'upload') {
@@ -111,12 +114,29 @@ try {
             db()->commit();
             json_response(['url' => isset($_POST['admin_editor']) ? '/admin/posts?edit=' . $id : ($status === 'draft' ? '/?edit=' : '/?post=') . $id]);
         }
-        json_response(['error' => 'Unknown action.'], 400);
+        if($previewLayout===null)json_response(['error' => 'Unknown action.'], 400);
+        parse_str(ltrim((string)($_POST['route']??''),'?'),$previewRoute);
+        $_GET=array_intersect_key($previewRoute,array_flip(['post','category','tag','q','page_slug','page'])); $_GET['edit_layout']=1;
     }
 
+    $customPage=null;$layoutContext='home';
+    if(isset($_GET['view'])){http_response_code(404);exit(e(t('Page not found')));}
+    if(!$isAdmin){
+        if(isset($_GET['page_slug'])){
+            $customPage=query("SELECT * FROM pages WHERE slug=?" . (isset($_GET['edit_layout'])?'':" AND status='published'"),[(string)$_GET['page_slug']])->fetch();
+            if(!$customPage){http_response_code(404);exit(e(t('Page not found')));}
+        } elseif(!array_intersect(['post','edit','write','categories','category','tag','q','drafts'],array_keys($_GET))){
+            $home=(int)setting('homepage','0');
+            if($home)$customPage=query("SELECT * FROM pages WHERE id=? AND status='published'",[$home])->fetch();
+        }
+        if($customPage){$layoutContext=$customPage['kind']==='custom'?'page:'.$customPage['id']:$customPage['kind'];if($layoutContext==='categories')$_GET['categories']='';}
+        if(isset($_GET['post']))$layoutContext='article';
+        elseif(isset($_GET['categories']))$layoutContext='categories';
+        elseif(array_intersect(['category','tag','q','drafts'],array_keys($_GET)))$layoutContext='archive';
+    }
     $manageView = false;
     $managedPosts = $manageView ? query('SELECT p.*,c.name AS category_name FROM posts p JOIN categories c ON c.id=p.category_id ORDER BY p.updated_at DESC,p.id DESC')->fetchAll() : [];
-    $categories = query('SELECT c.id,c.name,COUNT(p.id) AS total FROM categories c LEFT JOIN posts p ON p.category_id=c.id AND p.status=\'published\' GROUP BY c.id,c.name ORDER BY c.id')->fetchAll();
+    $categories = query('SELECT c.id,c.name,c.parent_id,COUNT(p.id) AS total FROM categories c LEFT JOIN posts p ON p.category_id=c.id AND p.status=\'published\' GROUP BY c.id,c.name,c.parent_id ORDER BY c.id')->fetchAll();
     $total = (int)query("SELECT COUNT(*) FROM posts WHERE status='published'")->fetchColumn();
     $categoryId = (int)($_GET['category'] ?? 0);
     $categoryName = 'All posts';
@@ -148,5 +168,10 @@ try {
     http_response_code(500); exit('Brainpress cannot read the database. Check your configuration.');
 }
 require dirname(__DIR__) . '/src/components.php';
+$layout=layoutItems($layoutContext);$scope=get_defined_vars();
+if(isset($previewLayout)&&$previewLayout!==null){
+    if(($_POST['context']??'')!==$layoutContext)json_response(['error'=>'Layout context changed.'],422);
+    $out=['main'=>'','sidebar'=>''];foreach(['main','sidebar'] as $zone){ob_start();foreach($previewLayout as $widget)if($widget['zone']===$zone)renderWidget($widget,$scope);$out[$zone]=ob_get_clean();}json_response($out);
+}
 if($isAdmin) require dirname(__DIR__) . '/src/admin-view.php';
 else require dirname(__DIR__) . '/src/view.php';
