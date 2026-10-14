@@ -282,5 +282,14 @@
   "Invalid submenu text.": "二级菜单内容无效。",
   "Text needs a label and an optional valid URL.": "请输入文字；链接可留空，填写时需使用有效地址。",
   "Top-level items open a wide panel. Second-level items form columns, with optional linked text beneath each heading.": "一级菜单展开宽面板，二级菜单作为各列标题，下方可添加文字或链接。",
-  "Site layouts": "站点布局"
+  "Site layouts": "站点布局",
+  "Choose cover image": "设置文章封面",
+  "Post cover": "文章封面",
+  "Change cover": "更换封面",
+  "Cover image URL": "封面图片地址",
+  "Cover image URL (optional)": "封面图片地址（可选，支持外链或上传）",
+  "Remove cover": "移除封面",
+  "Uploading cover…": "正在上传封面…",
+  "Use a local image path or HTTP(S) URL for the cover.": "封面请使用本地图片路径或 HTTP(S) 图片地址。",
+  "Could not preview this image. Check the URL or choose another cover.": "图片暂时无法预览，请检查地址或更换封面。"
 }

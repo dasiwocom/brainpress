@@ -102,12 +102,16 @@ try {
             } catch (InvalidArgumentException $error) { json_response(['error'=>$error->getMessage()],422); }
             $id = (int)($_POST['id'] ?? 0); $now = date('Y-m-d H:i:s');
             if ($id && !query("SELECT id FROM posts WHERE id=? AND status<>'trash'",[$id])->fetch()) json_response(['error'=>'Post not found.'],404);
+            $coverInput=$_POST['cover_url']??null;
+            if($coverInput!==null&&!is_string($coverInput))json_response(['error'=>'Use a local image path or HTTP(S) URL for the cover.'],422);
+            $cover=$coverInput===null?($id?(string)query('SELECT cover_url FROM posts WHERE id=?',[$id])->fetchColumn():''):trim($coverInput);
+            if(!validCoverUrl($cover))json_response(['error'=>'Use a local image path or HTTP(S) URL for the cover.'],422);
             db()->beginTransaction();
             if ($id) {
                 if (!query("SELECT id FROM posts WHERE id = ? AND status<>'trash'", [$id])->fetch()) json_response(['error' => 'Post not found.'], 404);
-                query('UPDATE posts SET title=?, markdown=?, category_id=?, updated_at=?, status=?, created_at=COALESCE(?,created_at) WHERE id=?', [$title, $source, $category, $now, $status, $date, $id]);
+                query('UPDATE posts SET title=?, markdown=?, category_id=?, updated_at=?, status=?, created_at=COALESCE(?,created_at), cover_url=? WHERE id=?', [$title, $source, $category, $now, $status, $date, $cover, $id]);
             } else {
-                query('INSERT INTO posts (title,markdown,category_id,created_at,updated_at,status) VALUES (?,?,?,?,?,?)', [$title, $source, $category, $date ?? $now, $now, $status]);
+                query('INSERT INTO posts (title,markdown,category_id,created_at,updated_at,status,cover_url) VALUES (?,?,?,?,?,?,?)', [$title, $source, $category, $date ?? $now, $now, $status, $cover]);
                 $id = (int)db()->lastInsertId();
             }
             savePostTags($id,$tagNames);

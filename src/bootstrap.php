@@ -20,6 +20,7 @@ function db(): PDO {
     $db->exec("CREATE TABLE IF NOT EXISTS posts (id $id, category_id INT NOT NULL, title VARCHAR(200) NOT NULL, markdown " . ($mysql ? 'MEDIUMTEXT' : 'TEXT') . " NOT NULL, created_at VARCHAR(19) NOT NULL, updated_at VARCHAR(19) NOT NULL, FOREIGN KEY(category_id) REFERENCES categories(id))$suffix");
     $columns = $mysql ? $db->query('SHOW COLUMNS FROM posts')->fetchAll(PDO::FETCH_COLUMN) : array_column($db->query('PRAGMA table_info(posts)')->fetchAll(), 'name');
     if (!in_array('status', $columns, true)) $db->exec("ALTER TABLE posts ADD COLUMN status VARCHAR(12) NOT NULL DEFAULT 'published'");
+    if (!in_array('cover_url', $columns, true)) $db->exec("ALTER TABLE posts ADD COLUMN cover_url VARCHAR(1000) NOT NULL DEFAULT ''");
     if (!in_array('previous_status', $columns, true)) $db->exec("ALTER TABLE posts ADD COLUMN previous_status VARCHAR(12) NOT NULL DEFAULT 'published'");
     $db->exec("CREATE TABLE IF NOT EXISTS settings (setting_key VARCHAR(80) PRIMARY KEY, value TEXT NOT NULL)$suffix");
     $db->exec("CREATE TABLE IF NOT EXISTS tags (id $id, name VARCHAR(80) NOT NULL UNIQUE)$suffix");
@@ -81,3 +82,5 @@ require __DIR__.'/Hierarchy.php';
 require __DIR__.'/Navigation.php';
 
 require __DIR__.'/MegaMenu.php';
+
+require __DIR__.'/PostCover.php';

@@ -140,3 +140,9 @@ The available widgets remain Post list, Category list, Profile card and Contents
 In **Menus**, create a root item and assign second-level items to it. Each second-level item becomes a column heading. Expand **Submenu text** to add labels and optional URLs. Empty URLs produce plain text; local paths and HTTP(S) URLs produce links. Root items with children open a wide panel without a separate description column. Changes do not modify Mobile tabs.
 
 Deployment packaging is currently deferred. Existing archives do not include the latest changes.
+
+## Post cover images
+
+The top editor image area sets an optional cover, stored separately in `posts.cover_url`. Paste a local image path or HTTP(S) image URL, or upload an image using the existing media pipeline. Covers can be changed or removed; toolbar image uploads still insert Markdown body images. External cover URLs are loaded by the browser and are not downloaded or inspected by the server.
+
+Feed cards prefer the explicit cover and otherwise use the first supported Markdown body image. Article pages show an explicitly configured cover above the title. Omitting `cover_url` from an update preserves the existing value; sending an empty string removes it. Existing databases gain the new column without rewriting article Markdown.

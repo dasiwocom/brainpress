@@ -80,3 +80,13 @@ Verification: PHP/JavaScript syntax checks; mobile 402px layout without horizont
 - Defer deployment package generation.
 
 Validation: isolated database requests verify region preview/save/reset, menu hierarchy and optional links; PHP/JavaScript checks and regression tests pass. Browser visual acceptance remains pending.
+
+## 2026-10-14 — Independent post covers
+
+- Replace the top body-image picker with optional cover metadata: local paths, external HTTP(S) URLs, upload, preview, change and remove.
+- Preserve body image insertion in the editor toolbar; cover changes never modify Markdown.
+- Prefer covers on feed cards, fall back to the first body image, and show explicit covers on article pages.
+- Add the cover URL column compatibly and retain existing covers when older save requests omit the field.
+- Include the preceding quiet input-focus and consistent publication-field styling.
+
+Validation: isolated post create/edit/draft/removal requests, cover URL safety, raw Markdown preservation, fallback rendering, PHP/JavaScript checks and regression tests.
