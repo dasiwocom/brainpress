@@ -5,8 +5,8 @@ const dialog=document.querySelector('#category-dialog');
 let toastTimer;
 function toast(text){const box=document.querySelector('#toast');box.textContent=text;box.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.hidden=true,2600);}
 document.querySelectorAll('[data-add-category]').forEach(button=>button.addEventListener('click',()=>dialog.showModal()));
-document.querySelector('#close-dialog').addEventListener('click',()=>dialog.close());
-document.querySelector('#category-form').addEventListener('submit',async event=>{event.preventDefault();const button=event.target.querySelector('button[type=submit]');button.disabled=true;try{const category=await request('category',new FormData(event.target));const select=document.querySelector('#category');if(select){select.add(new Option(category.name,category.id,true,true));dialog.close();event.target.reset();document.querySelector('#category-error').textContent='';toast('Category created.')}else location.reload();}catch(error){document.querySelector('#category-error').textContent=error.message;}finally{button.disabled=false;}});
+document.querySelector('#close-dialog')?.addEventListener('click',()=>dialog.close());
+document.querySelector('#category-form')?.addEventListener('submit',async event=>{event.preventDefault();const button=event.target.querySelector('button[type=submit]');button.disabled=true;try{const category=await request('category',new FormData(event.target));const select=document.querySelector('#category');if(select){select.add(new Option(category.name,category.id,true,true));dialog.close();event.target.reset();document.querySelector('#category-error').textContent='';toast('Category created.')}else location.reload();}catch(error){document.querySelector('#category-error').textContent=error.message;}finally{button.disabled=false;}});
 function updateThemeButtons(){const dark=document.documentElement.dataset.theme==='dark';document.querySelectorAll('.theme-toggle[aria-label]').forEach(button=>button.setAttribute('aria-label',dark?'Switch to light mode':'Switch to dark mode'));document.querySelector('meta[name=theme-color]').content=dark?'#2b2e32':'#ffffff';}
 updateThemeButtons();
 document.querySelectorAll('.theme-toggle').forEach(button=>button.addEventListener('click',async event=>{const toggle=()=>{const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;try{localStorage.setItem('brainpress-theme',theme)}catch{}updateThemeButtons();};if(document.startViewTransition&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches){const transition=document.startViewTransition(toggle);try{await transition.ready;const rect=button.getBoundingClientRect(),x=event.clientX||rect.x+rect.width/2,y=event.clientY||rect.y+rect.height/2;document.documentElement.animate({clipPath:[`circle(0px at ${x}px ${y}px)`,`circle(${Math.hypot(Math.max(x,innerWidth-x),Math.max(y,innerHeight-y))}px at ${x}px ${y}px)`]},{duration:500,easing:'ease-out',pseudoElement:'::view-transition-new(root)'});await transition.finished;}catch{}}else toggle();document.dispatchEvent(new Event('brainpress:theme'));}));
@@ -14,14 +14,14 @@ const searchDrawer=document.querySelector('#search-drawer');
 const searchInput=document.querySelector('#drawer-query');
 let previousFocus;
 function closeSearch(){searchDrawer.close();document.body.classList.remove('search-is-open');previousFocus?.focus();}
-document.querySelector('.mobile-search').addEventListener('click',()=>{previousFocus=document.activeElement;renderSearchHistory();searchDrawer.showModal();document.body.classList.add('search-is-open');searchInput.focus();});
-document.querySelector('#close-search').addEventListener('click',closeSearch);
-searchDrawer.addEventListener('cancel',event=>{event.preventDefault();closeSearch();});
-searchDrawer.addEventListener('click',event=>{const rect=searchDrawer.getBoundingClientRect();if(event.clientY>rect.bottom||event.clientY<rect.top||event.clientX<rect.left||event.clientX>rect.right)closeSearch();});
+document.querySelector('.mobile-search')?.addEventListener('click',()=>{previousFocus=document.activeElement;renderSearchHistory();searchDrawer.showModal();document.body.classList.add('search-is-open');searchInput.focus();});
+document.querySelector('#close-search')?.addEventListener('click',closeSearch);
+searchDrawer?.addEventListener('cancel',event=>{event.preventDefault();closeSearch();});
+searchDrawer?.addEventListener('click',event=>{const rect=searchDrawer.getBoundingClientRect();if(event.clientY>rect.bottom||event.clientY<rect.top||event.clientX<rect.left||event.clientX>rect.right)closeSearch();});
 function getSearchHistory(){try{const data=JSON.parse(localStorage.getItem('brainpress-search-history')||'[]');return Array.isArray(data)?data.filter(item=>typeof item==='string').slice(0,8):[];}catch{return [];}}
-function renderSearchHistory(){const history=getSearchHistory();document.querySelectorAll('[data-search-history]').forEach(container=>{container.replaceChildren();container.classList.add('search-chips');if(!history.length){const empty=document.createElement('p');empty.className='search-history-empty';empty.textContent='Your recent searches will appear here.';container.append(empty);}for(const term of history){const link=document.createElement('a');link.href='/?q='+encodeURIComponent(term);link.textContent=term;container.append(link);}});document.querySelector('#clear-search-history').hidden=!history.length;}
+function renderSearchHistory(){const history=getSearchHistory();document.querySelectorAll('[data-search-history]').forEach(container=>{container.replaceChildren();container.classList.add('search-chips');if(!history.length){const empty=document.createElement('p');empty.className='search-history-empty';empty.textContent='Your recent searches will appear here.';container.append(empty);}for(const term of history){const link=document.createElement('a');link.href='/?q='+encodeURIComponent(term);link.textContent=term;container.append(link);}});const clear=document.querySelector('#clear-search-history');if(clear)clear.hidden=!history.length;}
 document.querySelectorAll('[data-search-form]').forEach(form=>form.addEventListener('submit',event=>{const input=form.querySelector('[name=q]');const term=input.value.trim();if(!term){event.preventDefault();input.focus();return;}input.value=term;try{localStorage.setItem('brainpress-search-history',JSON.stringify([term,...getSearchHistory().filter(item=>item!==term)].slice(0,8)));}catch{}}));
-document.querySelector('#clear-search-history').addEventListener('click',()=>{try{localStorage.removeItem('brainpress-search-history');}catch{}renderSearchHistory();});
+document.querySelector('#clear-search-history')?.addEventListener('click',()=>{try{localStorage.removeItem('brainpress-search-history');}catch{}renderSearchHistory();});
 renderSearchHistory();
 document.querySelectorAll('[data-share]').forEach(button=>button.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(new URL(button.dataset.share,location.origin).href);toast('Link copied.');}catch{toast('Could not copy. Copy the address from your browser.');}}));
 const form=document.querySelector('#post-form');
@@ -33,3 +33,23 @@ document.querySelectorAll('[data-insert]').forEach(button=>button.addEventListen
 document.querySelector('#image-upload').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;event.target.disabled=true;message.textContent='Uploading image…';try{const data=new FormData();data.set('image',file);const result=await request('upload',data);showSource();source.setRangeText(`\n![Image](${result.url})\n`,source.selectionStart,source.selectionEnd,'end');dirty=true;count();source.focus();message.textContent='';}catch(error){message.textContent=error.message;}finally{event.target.disabled=false;event.target.value='';}});
 form.addEventListener('submit',async event=>{event.preventDefault();const button=form.querySelector('button[type=submit]');button.disabled=true;message.textContent='Saving…';try{const result=await request('save',new FormData(form));dirty=false;location.href=result.url;}catch(error){message.textContent=error.message;button.disabled=false;showSource();}});
 }
+
+const articleBody=document.querySelector('.article-body');
+if(articleBody){
+  const headings=[...articleBody.querySelectorAll('h1,h2,h3,h4,h5,h6')],links=[],used=new Set();
+  const minLevel=Math.min(...headings.map(h=>Number(h.tagName[1])));
+  headings.forEach((heading,index)=>{let base=heading.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu,'-').replace(/^-|-$/g,'')||'section';let id=base,n=1;while(used.has(id)||document.getElementById(id))id=base+'-'+(++n);used.add(id);heading.id=id;
+    document.querySelectorAll('[data-toc]').forEach(nav=>{const a=document.createElement('a');a.href='#'+id;a.textContent=heading.textContent;a.style.paddingLeft=(10+(Number(heading.tagName[1])-minLevel)*12)+'px';nav.append(a);links.push(a);});
+  });
+  if(headings.length){document.querySelectorAll('.article-toc,.mobile-toc').forEach(el=>el.hidden=false);
+    let scheduled=false;const update=()=>{scheduled=false;let active=headings[0];for(const h of headings){if(h.getBoundingClientRect().top<=125)active=h;else break;}links.forEach(a=>{const selected=a.hash==='#'+encodeURIComponent(active.id)||decodeURIComponent(a.hash)==='#'+active.id;a.classList.toggle('active',selected);if(selected)a.setAttribute('aria-current','location');else a.removeAttribute('aria-current');});};
+    addEventListener('scroll',()=>{if(!scheduled){scheduled=true;requestAnimationFrame(update);}},{passive:true});update();
+  }
+}
+const statusSelect=document.querySelector('#post-status');
+if(statusSelect){const update=()=>{const button=document.querySelector('.publish-button');button.lastChild.textContent=statusSelect.value==='draft'?' Save draft':' Publish';};statusSelect.addEventListener('change',update);update();}
+
+if(statusSelect){const source=document.querySelector('#markdown');source.addEventListener('input',()=>{const header=source.value.match(/^---\s*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)/);const draft=header?.[1].match(/^draft\s*:\s*(true|false)\s*(?:#.*)?$/m);if(draft){statusSelect.value=draft[1]==='true'?'draft':'published';statusSelect.dispatchEvent(new Event('change'));}});}
+
+document.querySelectorAll('[data-post-action]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{const data=new FormData();data.set('id',button.dataset.id);await request(button.dataset.postAction,data);location.reload();}catch(error){toast(error.message);button.disabled=false;}}));
+for(const [selector,action] of [['[data-category-rename]','category_rename'],['[data-category-delete]','category_delete']])document.querySelectorAll(selector).forEach(form=>form.addEventListener('submit',async event=>{event.preventDefault();const button=form.querySelector('button');button.disabled=true;try{await request(action,new FormData(form));location.reload();}catch(error){toast(error.message);button.disabled=false;}}));

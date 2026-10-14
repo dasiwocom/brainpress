@@ -6,3 +6,6 @@
 /config.php
 /.runtime/
 /node_modules/
+!/public/uploads/.htaccess
+
+/dist/

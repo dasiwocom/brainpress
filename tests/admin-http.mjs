@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+const base=process.env.BRAINPRESS_TEST_URL||'http://127.0.0.1:8082';
+let response=await fetch(base+'/admin');let html=await response.text();assert.equal(response.status,200);
+const cookie=response.headers.get('set-cookie').split(';')[0],csrf=html.match(/name="csrf" content="([^"]+)/)[1],stamp=Date.now();
+async function send(action,fields={}){const body=new URLSearchParams({csrf,action});for(const [key,value]of Object.entries(fields)){if(Array.isArray(value))value.forEach(v=>body.append(key+'[]',v));else body.set(key,String(value));}const r=await fetch(base,{method:'POST',headers:{cookie},body});return [r.status,await r.json()];}
+for(const section of ['posts','media','categories','system','tags','menus']){response=await fetch(base+'/admin/'+section);html=await response.text();assert.equal(response.status,200);assert.ok(html.includes('aria-label="Administration"'));assert.ok(!html.includes('PHP Warning'));}
+assert.equal((await fetch(base+'/admin/unknown')).status,404);
+assert.equal((await fetch(base+'/?manage',{redirect:'manual'})).status,302);
+let [code,category]=await send('category',{name:'Admin QA '+stamp});assert.equal(code,200);
+const source='---\nauthor: Ada\ndraft: true\n---\n'+Array.from({length:32},(_,i)=>`## Heading ${i}\n\nParagraph ${'content '.repeat(60)}\n\n### Detail ${i}\n\nText.\n`).join('');
+let result=await send('save',{title:'Admin article '+stamp,markdown:source,category_id:category.id,status:'draft',tags:'alpha-'+stamp+', beta-'+stamp,admin_editor:1});assert.equal(result[0],200);const id=result[1].url.match(/edit=(\d+)/)[1];assert.ok(result[1].url.startsWith('/admin/posts'));
+html=await (await fetch(base+'/admin/posts?edit='+id)).text();assert.ok(html.includes('alpha-'+stamp));assert.ok(html.includes('name="admin_editor"'));
+html=await (await fetch(base+'/?drafts')).text();assert.ok(html.includes(`href="/?edit=${id}">Admin article`));assert.equal((await fetch(base+'/?post='+id)).status,404);
+result=await send('save',{id,title:'Admin article '+stamp,markdown:source,category_id:category.id,status:'published',tags:'alpha-'+stamp,admin_editor:1});assert.equal(result[0],200);
+html=await (await fetch(base+'/?post='+id)).text();assert.ok(html.includes('#alpha-'+stamp));assert.ok(!html.includes('category-summary'));assert.ok(!html.includes('sidebar-links'));assert.ok(html.indexOf('profile-card')<html.indexOf('article-toc'));
+const tagsHtml=await (await fetch(base+'/admin/tags')).text();const tagId=tagsHtml.match(new RegExp('name="id" value="(\\d+)"><label class="sr-only" for="tag-\\d+">Tag name</label><input id="tag-\\d+" name="name" maxlength="40" value="alpha-'+stamp+'"'))[1];
+assert.equal((await send('tag_rename',{id:tagId,name:'renamed-'+stamp}))[0],200);assert.ok((await (await fetch(base+'/?tag='+tagId)).text()).includes('Admin article '+stamp));
+assert.equal((await send('tag_delete',{id:tagId}))[0],200);assert.equal((await fetch(base+'/?post='+id)).status,200);
+assert.equal((await send('menu_save',{'label':['Notes','Hidden'],'url':['/','/?categories'],'enabled':['0']}))[0],200);
+html=await (await fetch(base)).text();assert.ok(html.includes('>Notes</a>'));assert.ok(!html.includes('>Hidden</a>'));
+html=await (await fetch(base+'/admin/menus')).text();assert.ok(html.includes('value="Hidden"'));
+for(const url of ['javascript:alert(1)','//evil.test','/\\evil.test','data:text/html,foo'])assert.equal((await send('menu_save',{'label':['Bad'],'url':[url],'enabled':['0']}))[0],422);
+assert.equal((await send('settings_save',{site_name:'QA site',description:'A Markdown site'}))[0],200);html=await(await fetch(base)).text();assert.ok(html.includes('>QA site</a>'));assert.ok(html.includes('A Markdown site'));
+const image=new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7ioAAAAASUVORK5CYII=','base64')],{type:'image/png'});const upload=new FormData();upload.set('action','upload');upload.set('csrf',csrf);upload.set('image',image,'qa-image.png');response=await fetch(base,{method:'POST',headers:{cookie},body:upload});const uploaded=await response.json();assert.equal(response.status,200);
+html=await(await fetch(base+'/admin/media')).text();const filename=uploaded.url.split('/').pop();const card=html.slice(html.indexOf('href="'+uploaded.url+'"'));const mediaId=card.match(/name="id" value="(\d+)"/)[1];
+assert.equal((await send('media_update',{id:mediaId,title:'QA image',alt:'Alternative'}))[0],200);assert.equal((await send('media_trash',{id:mediaId}))[0],200);assert.equal((await fetch(base+uploaded.url)).status,200);assert.equal((await send('media_restore',{id:mediaId}))[0],200);
+assert.equal((await send('trash',{id}))[0],200);assert.equal((await fetch(base+'/?post='+id)).status,404);assert.equal((await send('restore',{id}))[0],200);assert.equal((await fetch(base+'/?post='+id)).status,200);
+const denied=await fetch(base,{method:'POST',body:new URLSearchParams({action:'settings_save',site_name:'No CSRF'})});assert.equal(denied.status,403);
+console.log('PASS six admin routes, editor round-trip, tags, post trash/restore, sidebar structure, menu persistence and URL validation, system settings, media upload/update/trash/restore, CSRF');
+console.log(JSON.stringify({postId:id,mediaFile:filename}));

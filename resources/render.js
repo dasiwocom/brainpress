@@ -5,6 +5,12 @@ let queue = Promise.resolve();
 const configure = () => mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',suppressErrorRendering:true,maxTextSize:50000,flowchart:{htmlLabels:false},fontFamily:'Arial, sans-serif'});
 async function render(root) {
   configure();
+  for(const code of root.querySelectorAll('pre > code:not(.language-mermaid)')) {
+    const pre=code.parentElement;if(pre.parentElement.classList.contains('code-container'))continue;
+    const wrapper=document.createElement('div');wrapper.className='code-container';pre.before(wrapper);wrapper.append(pre);
+    const button=document.createElement('button');button.type='button';button.className='code-copy';button.textContent='Copy';button.setAttribute('aria-label','Copy code');
+    button.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(code.textContent);button.textContent='Copied';}catch{button.textContent='Copy failed';}setTimeout(()=>button.textContent='Copy',1800);});wrapper.append(button);
+  }
   for (const element of root.querySelectorAll('.math-source:not([data-rendered])')) {
     try { katex.render(element.textContent,element,{displayMode:element.dataset.display==='true',throwOnError:true,trust:false,maxExpand:1000}); element.dataset.rendered='true'; }
     catch { element.classList.add('render-error'); element.title='Invalid or unsupported LaTeX. Source is preserved.'; }
