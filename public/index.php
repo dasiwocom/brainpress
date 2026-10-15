@@ -1,19 +1,35 @@
 <?php
 declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
+ini_set('session.use_strict_mode','1');ini_set('session.use_only_cookies','1');
+session_set_cookie_params(['httponly'=>true,'secure'=>!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off','samesite'=>'Lax','path'=>'/']);
 session_start();
 $_SESSION['csrf'] ??= bin2hex(random_bytes(24));
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
+header('Cache-Control: private, no-store');
 header("Content-Security-Policy: default-src 'self'; img-src 'self' https: http:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
 
 $requestPath = rtrim(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/') ?: '/';
 $isAdmin = $requestPath === '/admin' || str_starts_with($requestPath, '/admin/');
 if (!$isAdmin && isset($_GET['manage'])) { header('Location: /admin/posts'); exit; }
 try {
+    if($isAdmin&&!isAdministrator()){
+        if($_SERVER['REQUEST_METHOD']==='POST')requireUser(true);
+        if(!currentUser()){header('Location: /login?next='.rawurlencode($_SERVER['REQUEST_URI']));exit;}
+        http_response_code(403);require dirname(__DIR__).'/src/components.php';$authPage='forbidden';require dirname(__DIR__).'/src/auth-view.php';exit;
+    }
+    if($_SERVER['REQUEST_METHOD']==='GET'&&!$isAdmin&&array_intersect(['write','edit','drafts'],array_keys($_GET))&&!currentUser()){header('Location: /login?next='.rawurlencode($_SERVER['REQUEST_URI']));exit;}
+    if($_SERVER['REQUEST_METHOD']==='GET'&&in_array($requestPath,['/login','/register','/setup','/account'],true)){
+        if($requestPath==='/account'&&!currentUser()){header('Location: /login?next=/account');exit;}
+        if($requestPath==='/setup'&&!setupAvailable()){header('Location: /login');exit;}
+        if($requestPath==='/setup')setupToken();
+        require dirname(__DIR__).'/src/components.php';$authPage=substr($requestPath,1);require dirname(__DIR__).'/src/auth-view.php';exit;
+    }
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        if (!hash_equals($_SESSION['csrf'], $_POST['csrf'] ?? '')) json_response(['error' => 'This page expired. Refresh and try again.'], 403);
-        $action = $_POST['action'] ?? '';
+        if (!is_string($_POST['csrf']??null)||!hash_equals($_SESSION['csrf'], $_POST['csrf'])) json_response(['error' => 'This page expired. Refresh and try again.'], 403);
+        $action = is_string($_POST['action']??null)?$_POST['action']:'';
+        authorizeAction($action);authAction($action);
         $previewLayout=pagesAction($action);
         adminAction($action);
         if (in_array($action, ['trash', 'restore'], true)) {
@@ -61,7 +77,7 @@ try {
             if (!$ext || !getimagesize($file['tmp_name'])) json_response(['error' => 'Supported images: JPG, PNG, GIF and WebP.'], 422);
             $name = bin2hex(random_bytes(16)) . '.' . $ext;
             if (!move_uploaded_file($file['tmp_name'], __DIR__ . '/uploads/' . $name)) throw new RuntimeException('Upload failed');
-            query('INSERT INTO media(filename,title,alt,created_at,status) VALUES(?,?,?,?,?)', [$name,mb_substr(pathinfo(basename($file['name']),PATHINFO_FILENAME),0,200),'',date('Y-m-d H:i:s'),'active']);
+            query('INSERT INTO media(filename,title,alt,created_at,status,user_id) VALUES(?,?,?,?,?,?)', [$name,mb_substr(pathinfo(basename($file['name']),PATHINFO_FILENAME),0,200),'',date('Y-m-d H:i:s'),'active',currentUser()['id']]);
             json_response(['url' => '/uploads/' . $name]);
         }
         if ($action === 'save') {
@@ -101,6 +117,8 @@ try {
                 $tagNames = tagNames($tagInput);
             } catch (InvalidArgumentException $error) { json_response(['error'=>$error->getMessage()],422); }
             $id = (int)($_POST['id'] ?? 0); $now = date('Y-m-d H:i:s');
+            if($id){$owned=query('SELECT user_id FROM posts WHERE id=?',[$id])->fetch();if(!$owned||!ownsContent($owned))json_response(['error'=>'You cannot edit this post.'],403);}
+            if(!isAdministrator())unset($_POST['admin_editor']);
             if ($id && !query("SELECT id FROM posts WHERE id=? AND status<>'trash'",[$id])->fetch()) json_response(['error'=>'Post not found.'],404);
             $coverInput=$_POST['cover_url']??null;
             if($coverInput!==null&&!is_string($coverInput))json_response(['error'=>'Use a local image path or HTTP(S) URL for the cover.'],422);
@@ -111,7 +129,7 @@ try {
                 if (!query("SELECT id FROM posts WHERE id = ? AND status<>'trash'", [$id])->fetch()) json_response(['error' => 'Post not found.'], 404);
                 query('UPDATE posts SET title=?, markdown=?, category_id=?, updated_at=?, status=?, created_at=COALESCE(?,created_at), cover_url=? WHERE id=?', [$title, $source, $category, $now, $status, $date, $cover, $id]);
             } else {
-                query('INSERT INTO posts (title,markdown,category_id,created_at,updated_at,status,cover_url) VALUES (?,?,?,?,?,?,?)', [$title, $source, $category, $date ?? $now, $now, $status, $cover]);
+                query('INSERT INTO posts (title,markdown,category_id,created_at,updated_at,status,cover_url,user_id) VALUES (?,?,?,?,?,?,?,?)', [$title, $source, $category, $date ?? $now, $now, $status, $cover,currentUser()['id']]);
                 $id = (int)db()->lastInsertId();
             }
             savePostTags($id,$tagNames);
@@ -127,7 +145,7 @@ try {
     if(isset($_GET['view'])){http_response_code(404);exit(e(t('Page not found')));}
     if(!$isAdmin){
         if(isset($_GET['page_slug'])){
-            $customPage=query("SELECT * FROM pages WHERE slug=?" . (isset($_GET['edit_layout'])?'':" AND status='published'"),[(string)$_GET['page_slug']])->fetch();
+            $customPage=query("SELECT * FROM pages WHERE slug=?" . (isAdministrator()&&isset($_GET['edit_layout'])?'':" AND status='published'"),[(string)$_GET['page_slug']])->fetch();
             if(!$customPage){http_response_code(404);exit(e(t('Page not found')));}
         } elseif(!array_intersect(['post','edit','write','categories','category','tag','q','drafts'],array_keys($_GET))){
             $home=(int)setting('homepage','0');
@@ -148,6 +166,7 @@ try {
     $post = null; $missing = false;
     if (isset($_GET['post']) || isset($_GET['edit'])) {
         $post = query('SELECT p.*,c.name AS category_name FROM posts p JOIN categories c ON c.id=p.category_id WHERE p.id=?', [(int)($_GET['post'] ?? $_GET['edit'])])->fetch();
+        if ($post && isset($_GET['edit'])&&!ownsContent($post)){http_response_code(403);exit(e(t('You cannot edit this post.')));}
         if ($post && $post['status'] === 'trash') $post = false;
         if ($post && isset($_GET['post']) && $post['status'] !== 'published') $post = false;
         if (!$post) { http_response_code(404); $missing = true; }
@@ -157,6 +176,7 @@ try {
     $page = max(1, (int)($_GET['page'] ?? 1)); $limit = 12; $offset = ($page - 1) * $limit;
     $draftView = isset($_GET['drafts']);
     $where = ' WHERE p.status=?'; $params = [$draftView ? 'draft' : 'published'];
+    if($draftView&&!isAdministrator()){$where.=' AND p.user_id=?';$params[]=currentUser()['id'];}
     if ($categoryId) { $where .= ' AND p.category_id=?'; $params[] = $categoryId; }
     $tagId = max(0,(int)($_GET['tag']??0));
     $tagName = $tagId ? query('SELECT name FROM tags WHERE id=?',[$tagId])->fetchColumn() : '';

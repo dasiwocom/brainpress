@@ -127,3 +127,48 @@ Validation: isolated post create/edit/draft/removal requests, cover URL safety, 
 - Revert the root-canvas/theme initialization experiment while preserving the existing theme switch.
 - Remove the public header Publish shortcut and desktop admin sidebar collapsing.
 - Keep the image picker, editor controls, contextual customizer, footer settings and simplified link manager.
+
+### Management navigation preview
+
+- Push the prior baseline as ffa1564 before refactoring navigation.
+- Group article list/categories and link list/categories under native expandable management headings; open the current group and select only its matching child.
+- Share navigation rendering between desktop and mobile. This preview remains uncommitted for review.
+
+### Admin page organization
+
+- Remove repeated top-level admin H1 headings while retaining section labels and the article creation action.
+- Split Media management into Library and Trash, with separate routes and accurate selection.
+- Split System management into Site information and Footer settings; keep site environment details with site information.
+
+### Backend page layout configuration
+
+- Group page list and page layout under Page management.
+- Replace the frontend customizer with a backend scope selector, seven-region diagram and widget configuration panel. Preserve existing layouts and remove frontend editing controls.
+
+### Mobile interaction fixes
+
+- Suppress default touch tap highlights and keep mobile editable controls at 16px.
+- Open search and image dialogs without focusing text inputs on mobile; restore focus without scrolling.
+- Freeze and restore the background scroll position while panels are open; constrain horizontal overflow.
+- Share the square two-level navigation styles between public mobile and administration menus.
+
+### Accounts and navigation permissions
+
+- Add token-protected first administrator setup, member registration, login/logout, account posts and password change.
+- Restrict administration to active administrators; protect every write using server-side session, CSRF and role/ownership checks.
+- Track post and media ownership; migrate legacy ownership on first setup; isolate member media selectors.
+- Add user administration, session revocation, last-administrator protection and authentication rate limits.
+- Make all mobile tabs standard, add signed-in visibility and protect publishing tabs. Move Tags into Article management and Header menu/Mobile tabs into System management.
+- Unify active navigation surfaces without shadows.
+
+### Shared account navigation
+
+- Share the public header, search/menu panels and bottom navigation across account and authentication pages.
+- Keep mobile header menus strictly limited to configured menu entries.
+- Add the desktop administration shortcut and align account/theme/destination glyph sizes and spacing across frontend/backend.
+- Add a configurable mobile Account tab once; preserve later removal and existing five-item/disabled configurations. Migrate the publishing plus to the writing icon.
+
+### Administration readability
+
+- Give all inactive management entries the same text contrast.
+- Keep mobile administration table columns readable with a minimum table width and horizontal scrolling; categories no longer wrap character by character.

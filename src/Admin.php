@@ -56,9 +56,9 @@ function adminAction(string $action): bool {
         saveSetting('footer_settings',json_encode($footer,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));json_response(['ok'=>true,'message'=>'Footer saved.']);
     }
     if ($action==='tabs_save') {
-        $labels=$_POST['label']??[];$urls=$_POST['url']??[];$icons=$_POST['icon']??[];$enabled=$_POST['enabled']??[];$featured=$_POST['prominent']??[];
+        $labels=$_POST['label']??[];$urls=$_POST['url']??[];$icons=$_POST['icon']??[];$enabled=$_POST['enabled']??[];$featured=$_POST['login_only']??[];
         if(!is_array($labels)||!is_array($urls)||!is_array($icons)||!is_array($enabled)||!is_array($featured)||count($labels)>5)json_response(['error'=>'Use up to 5 mobile tabs.'],422);
-        $items=[];foreach($labels as $i=>$label)$items[]=['label'=>$label,'url'=>$urls[$i]??null,'icon'=>$icons[$i]??null,'visible'=>in_array((string)$i,$enabled,true),'prominent'=>in_array((string)$i,$featured,true)];
+        $items=[];foreach($labels as $i=>$label)$items[]=['label'=>$label,'url'=>$urls[$i]??null,'icon'=>$icons[$i]??null,'visible'=>in_array((string)$i,$enabled,true),'login_only'=>in_array((string)$i,$featured,true)];
         try{$items=validateTabs($items);}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
         saveSetting('mobile_tabs',json_encode($items,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));
         json_response(['ok'=>true,'message'=>'Tabs saved.']);

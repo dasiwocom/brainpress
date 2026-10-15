@@ -27,5 +27,10 @@ function renderHeaderMenu(): void {
     <?php }
 }
 function renderMobileMenu(): void {
-    foreach(menuGroups() as $root){?><div class="mobile-menu-group"><?php menuText($root,'mobile-root-link');foreach($root['children'] as $child):?><section class="mobile-submenu"><h3><?php menuText($child);?></h3><div class="mega-items"><?php foreach($child['content']??[] as $entry)menuText($entry);?></div></section><?php endforeach;?></div><?php }
+    foreach(menuGroups() as $root){
+        $active=navigationActive($root['url']??'');foreach($root['children'] as $child){if(navigationActive($child['url']??''))$active=true;foreach($child['content']??[] as $entry)if(($entry['url']??'')!==''&&navigationActive($entry['url']))$active=true;}
+        $icon=($root['url']??'')==='/'?'home':'grid';
+        if(!$root['children']){if($root['url']!==''){?><a href="<?=e($root['url'])?>" class="<?=$active?'active':''?>" <?=$active?'aria-current="page"':''?>><?=icon($icon)?><span><?=e($root['label'])?></span></a><?php }else{?><span class="mobile-nav-text"><?=icon($icon)?><span><?=e($root['label'])?></span></span><?php }continue;}
+        ?><details class="admin-nav-group" <?=$active?'open':''?>><summary class="<?=$active?'group-current':''?>"><?=icon($icon)?><span class="admin-nav-label"><?=e($root['label'])?></span><span class="admin-nav-chevron" aria-hidden="true"><?=icon('arrow')?></span></summary><div class="admin-nav-children"><?php if($root['url']!=='')menuText($root);foreach($root['children'] as $child){menuText($child);foreach($child['content']??[] as $entry)menuText($entry,'mobile-menu-text');}?></div></details><?php
+    }
 }

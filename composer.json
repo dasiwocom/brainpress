@@ -21,7 +21,9 @@
             "php tests/layout-menu.php",
             "php tests/post-cover.php",
             "php tests/footer.php",
-            "php tests/links.php"
+            "php tests/links.php",
+            "php tests/admin-navigation.php",
+            "php tests/navigation-account.php"
         ]
     }
 }

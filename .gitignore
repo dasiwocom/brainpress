@@ -9,3 +9,5 @@
 !/public/uploads/.htaccess
 
 /dist/
+
+/brainpress*.zip

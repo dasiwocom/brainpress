@@ -32,3 +32,20 @@
 .links-table td:first-child{min-width:62px;width:62px}.links-table td:nth-child(2){min-width:140px}.links-table td:nth-child(3){max-width:300px}.links-table td:nth-child(4){max-width:260px}
 
 .tab-item>.menu-visible,.menu-item>.menu-visible{align-self:end;min-height:40px;align-items:center}
+
+/* Two-level management navigation, shared by desktop and mobile. */
+/* Management navigation styles are shared in app.css. */
+
+.admin-page-actions{display:flex;justify-content:flex-end;margin-bottom:18px}.admin-message:empty{display:none}
+
+/* Backend layout diagram and region configuration. */
+.layout-context-label{display:block;margin:16px 0 8px;color:var(--muted);font-size:12px}#layout-context{width:min(100%,420px);padding:10px;background:var(--input);color:var(--text);border:1px solid var(--line);border-radius:5px}.backend-layout-editor{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}.layout-diagram{padding:20px}.diagram-fixed{text-align:center;padding:18px;background:var(--input);border-radius:6px;color:var(--muted);font-size:12px}.layout-diagram #layout-regions{display:grid;grid-template-columns:minmax(0,1fr) 30%;grid-template-areas:'top top' 'before side' 'main side' 'after side' 'bottom bottom' 'footer footer';gap:12px;margin:16px 0}.layout-diagram .region-button{min-height:85px;background:var(--input);border:1px dashed var(--line);text-align:center}.layout-diagram .region-button.selected{background:var(--focus-soft);border:1px solid var(--blue)}.region-button[data-zone=top_full]{grid-area:top}.region-button[data-zone=main_top]{grid-area:before}.region-button[data-zone=main]{grid-area:main;min-height:210px}.region-button[data-zone=main_bottom]{grid-area:after}.region-button[data-zone=sidebar]{grid-area:side}.region-button[data-zone=bottom_full]{grid-area:bottom}.region-button[data-zone=footer]{grid-area:footer}.diagram-widgets{display:block;margin-top:12px;font-size:11px;color:var(--muted);line-height:1.8}.layout-configuration>h2{padding:18px 16px 0;font-size:16px}.layout-configuration .customizer-actions{position:static}.backend-layout-editor #layout-rows{padding:16px}@media(max-width:1050px){.backend-layout-editor{grid-template-columns:1fr}.layout-diagram{padding:12px}}
+
+
+
+@media(min-width:641px){.admin-topbar .header-actions{display:flex;align-items:center;gap:10px;position:static;margin-left:auto}.admin-topbar .header-actions>.icon-button{position:static;inset:auto;transform:none;margin:0;flex:0 0 34px;width:34px;height:34px;padding:7px;background:transparent;border-radius:6px}.admin-topbar .header-actions .icon{width:20px;height:20px;stroke-width:1.8}.admin-topbar .admin-account .icon{width:22px;height:22px}}
+
+/* Equal contrast for every idle management entry; blue is reserved for selection. */
+.admin-body .drawer-menu-links a,.admin-body .drawer-menu-links .admin-nav-group>summary{color:var(--text)}
+/* Preserve readable table columns and scroll the table rather than squeezing words. */
+@media(max-width:760px){.admin-table-wrap{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}.admin-table{min-width:760px;table-layout:auto}.admin-table th,.admin-table td{white-space:nowrap}.admin-table td:first-child{white-space:normal;min-width:220px;max-width:340px}.admin-table td:not(:first-child){min-width:96px}.admin-table td:last-child{min-width:150px}.admin-table .admin-row-actions{flex-wrap:nowrap;white-space:nowrap}}

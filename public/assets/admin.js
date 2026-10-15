@@ -2,7 +2,7 @@
 document.querySelectorAll('[data-admin-action]').forEach(form=>form.addEventListener('submit',async event=>{
   event.preventDefault(); const button=event.submitter||form.querySelector('button[type=submit]');if(button)button.disabled=true;
   const message=form.querySelector('[role=status]')||document.querySelector('#admin-message');message.textContent=tr('Saving…');
-  try{const data=new FormData(form);const action=button?.dataset.action||form.dataset.adminAction;const result=await request(action,data);if(action==='link_save'){location.href=result.url;return;}if(action==='settings_save'){location.reload();return;}if(form.hasAttribute('data-stay')){message.textContent=result.message||tr('Saved.');}else location.reload();}
+  try{const data=new FormData(form);const action=button?.dataset.action||form.dataset.adminAction;const result=await request(action,data);if(action==='link_save'||action==='user_save'){location.href=result.url;return;}if(action==='settings_save'){location.reload();return;}if(form.hasAttribute('data-stay')){message.textContent=result.message||tr('Saved.');}else location.reload();}
   catch(error){message.textContent=error.message;}finally{if(button)button.disabled=false;}
 }));
 const menuEditor=document.querySelector('#menu-editor');
@@ -20,7 +20,7 @@ if(mediaUpload)mediaUpload.addEventListener('change',async()=>{if(!mediaUpload.f
 
 const tabEditor=document.querySelector('#tab-editor');
 function reindexTabs(){tabEditor.querySelectorAll('.tab-item').forEach((row,index)=>{row.querySelectorAll('input[type=checkbox]').forEach(input=>input.value=index);});}
-function wireTabRow(row){row.querySelector('[data-remove]').addEventListener('click',()=>{row.remove();reindexTabs();});for(const dir of ['up','down'])row.querySelector('[data-'+dir+']').addEventListener('click',()=>{const sibling=dir==='up'?row.previousElementSibling:row.nextElementSibling;if(sibling){if(dir==='up')sibling.before(row);else sibling.after(row);reindexTabs();}});row.querySelector('[name="prominent[]"]').addEventListener('change',event=>{if(event.target.checked)tabEditor.querySelectorAll('[name="prominent[]"]').forEach(input=>{if(input!==event.target)input.checked=false;});});}
+function wireTabRow(row){row.querySelector('[data-remove]').addEventListener('click',()=>{row.remove();reindexTabs();});for(const dir of ['up','down'])row.querySelector('[data-'+dir+']').addEventListener('click',()=>{const sibling=dir==='up'?row.previousElementSibling:row.nextElementSibling;if(sibling){if(dir==='up')sibling.before(row);else sibling.after(row);reindexTabs();}});}
 if(tabEditor){tabEditor.querySelectorAll('.tab-item').forEach(wireTabRow);document.querySelector('#add-tab-item').addEventListener('click',()=>{if(tabEditor.children.length>=5){toast(tr('Use up to 5 mobile tabs.'));return;}const row=document.querySelector('#tab-template').content.firstElementChild.cloneNode(true);tabEditor.append(row);wireTabRow(row);reindexTabs();row.querySelector('[name="label[]"]').focus();});tabEditor.closest('form').addEventListener('submit',reindexTabs,{capture:true});}
 
 

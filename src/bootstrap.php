@@ -38,6 +38,9 @@ function db(): PDO {
     $db->exec("CREATE TABLE IF NOT EXISTS link_category_relations (link_id INT NOT NULL,category_id INT NOT NULL,PRIMARY KEY(link_id,category_id),FOREIGN KEY(link_id) REFERENCES links(id) ON DELETE CASCADE,FOREIGN KEY(category_id) REFERENCES link_categories(id) ON DELETE CASCADE)$suffix");
     $linkColumns=$mysql?$db->query('SHOW COLUMNS FROM links')->fetchAll(PDO::FETCH_COLUMN):array_column($db->query('PRAGMA table_info(links)')->fetchAll(),'name');
     if(!in_array('logo_url',$linkColumns,true))$db->exec("ALTER TABLE links ADD COLUMN logo_url VARCHAR(1000) NOT NULL DEFAULT ''");
+    $db->exec("CREATE TABLE IF NOT EXISTS users (id $id, username VARCHAR(40) NOT NULL UNIQUE, display_name VARCHAR(80) NOT NULL, password_hash VARCHAR(255) NOT NULL, role VARCHAR(12) NOT NULL, status VARCHAR(12) NOT NULL, session_version INT NOT NULL DEFAULT 1, created_at VARCHAR(19) NOT NULL)$suffix");
+    $db->exec("CREATE TABLE IF NOT EXISTS auth_attempts (id $id, scope VARCHAR(20) NOT NULL, attempt_key VARCHAR(64) NOT NULL, ip_key VARCHAR(64) NOT NULL, created_at BIGINT NOT NULL)$suffix");
+    foreach(['posts','media'] as $table){$ownerColumns=$mysql?$db->query('SHOW COLUMNS FROM '.$table)->fetchAll(PDO::FETCH_COLUMN):array_column($db->query('PRAGMA table_info('.$table.')')->fetchAll(),'name');if(!in_array('user_id',$ownerColumns,true))$db->exec('ALTER TABLE '.$table.' ADD COLUMN user_id INT NULL');}
     return $db;
 }
 function query(string $sql, array $params = []): PDOStatement {
@@ -93,3 +96,5 @@ require __DIR__.'/PostCover.php';
 require __DIR__.'/Footer.php';
 
 require __DIR__.'/Links.php';
+
+require __DIR__.'/Auth.php';

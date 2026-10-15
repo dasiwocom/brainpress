@@ -1,9 +1,0 @@
-<?php $widgetNames=array_map('t',widgetTypes());?>
-<section class="layout-editor" id="layout-editor" data-context="<?=e($layoutContext)?>" aria-label="<?=e(t('Widgets'))?>">
-<div class="customizer-heading"><h2><?=e(t('Widgets'))?></h2><a class="icon-button" data-layout-exit href="<?=e(layoutLink(false))?>" aria-label="<?=e(t('Exit editing'))?>"><?=icon('close')?></a></div>
-<p class="customizer-scope"><?=e(t('Scope'))?>: <strong><?=e(t(['home'=>'Home','article'=>'All article pages','categories'=>'Category list page','archive'=>'Archive pages'][$layoutContext]??'This page'))?></strong></p>
-<p class="customizer-note"><?=e(t('Changes are previewed here and apply publicly only after saving.'))?></p>
-<div class="customizer-regions" id="layout-regions"></div><div id="layout-rows"></div>
-<div class="customizer-add"><label for="widget-type"><?=e(t('Widget'))?></label><select id="widget-type"><?php foreach($widgetNames as $key=>$label):if(($key==='toc'&&$layoutContext!=='article')||($layoutContext==='article'&&in_array($key,['posts','categories'],true)))continue;?><option value="<?=$key?>"><?=e($label)?></option><?php endforeach;?></select><button type="button" class="text-button" id="add-widget"><?=e(t('Add widget'))?></button></div>
-<div class="customizer-actions"><p role="status" id="layout-message"></p><button type="button" class="button" id="save-layout"><?=e(t('Save and apply'))?></button><button type="button" class="text-button" id="reset-layout"><?=e(t('Restore default'))?></button></div>
-<script type="application/json" id="layout-data"><?=json_encode($layout,JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_UNESCAPED_UNICODE)?></script><script type="application/json" id="layout-zones"><?=json_encode(array_map('t',layoutZones()),JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_UNESCAPED_UNICODE)?></script></section>
