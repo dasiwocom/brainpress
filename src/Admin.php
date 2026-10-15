@@ -68,11 +68,13 @@ function adminAction(string $action): bool {
         if ($name==='' || mb_strlen($name)>60 || mb_strlen($description)>200) json_response(['error'=>'Use a site name up to 60 characters and a description up to 200.'],422);
         $logo=trim((string)($_POST['logo_url']??setting('logo_url','/assets/site-logo.svg')));
         if($logo!=='' && (!validMenuUrl($logo)||strlen($logo)>1000)) json_response(['error'=>'Use a local path or HTTP(S) URL for the logo.'],422);
+        $siteAddress=$_POST['site_url']??setting('site_url');if(!is_string($siteAddress))json_response(['error'=>'Use a complete HTTP(S) site address without a path, query or credentials.'],422);
+        try{$siteAddress=normalizeSiteUrl($siteAddress);}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
         $locale=(string)($_POST['language']??language());
         if(!in_array($locale,['en','zh-CN'],true)) json_response(['error'=>'Unsupported language.'],422);
         $home=(int)($_POST['homepage']??setting('homepage','0'));
         if($home && !query("SELECT id FROM pages WHERE id=? AND status='published'",[$home])->fetchColumn())json_response(['error'=>'Select a published homepage.'],422);
-        db()->beginTransaction();saveSetting('homepage',(string)$home);saveSetting('language',$locale);saveSetting('logo_url',$logo);saveSetting('site_name',$name);saveSetting('description',$description);db()->commit();
+        db()->beginTransaction();saveSetting('site_url',$siteAddress);saveSetting('homepage',(string)$home);saveSetting('language',$locale);saveSetting('logo_url',$logo);saveSetting('site_name',$name);saveSetting('description',$description);db()->commit();
         json_response(['ok'=>true,'message'=>'Settings saved.']);
     }
     if ($action==='menu_save') {

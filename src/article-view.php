@@ -1,0 +1,13 @@
+<?php $social=postSocial((int)$post['id']);$reader=currentUser();$postId=(int)$post['id']; ?>
+<article class="panel article" data-social-post="<?=$postId?>" data-signed-in="<?=$reader?'true':'false'?>">
+<h1><?=e($post['title'])?></h1>
+<div class="author-row"><span class="avatar"><?=e(mb_strtoupper(mb_substr(contentAuthor($post),0,1)))?></span><div><strong><?=e(contentAuthor($post))?></strong><div class="muted"><?=e(substr($post['created_at'],0,16))?></div></div></div>
+<div class="article-meta-line"><div class="article-statistics"><a href="#comments" aria-label="<?=e(t('Comments'))?>"><?=icon('chat')?><span><?=$social['comments']?></span></a><span aria-label="<?=e(t('Views'))?>"><?=icon('eye')?><?=$post['views']?></span><button type="button" data-social="like" aria-label="<?=e(t('Like'))?>" aria-pressed="<?=$social['liked']?'true':'false'?>"><?=icon('thumb')?><span data-like-count><?=$social['likes']?></span></button></div><?php if(ownsContent($post)):?><a class="article-edit-icon" href="/?edit=<?=$postId?>" aria-label="<?=e(t('Edit'))?>" title="<?=e(t('Edit'))?>"><?=icon('edit')?></a><?php endif;?></div>
+<?php if(!empty($post['cover_url'])):?><div class="article-cover"><img src="<?=e($post['cover_url'])?>" alt="<?=e(t('Post cover'))?>" width="1200" height="675"></div><?php endif;?>
+<details class="mobile-toc" data-enabled="<?=array_filter($layout,fn($w)=>$w['type']==='toc')?'true':'false'?>" hidden><summary><?=e(t('Contents'))?></summary><nav aria-label="<?=e(t('Table of contents'))?>" data-toc></nav></details>
+<div class="prose article-body"><?=markdown($post['markdown'])?></div>
+<div class="post-tag-list"><?php foreach(postTags($postId) as $tag):?><a href="/?tag=<?=$tag['id']?>">#<?=e($tag['name'])?></a><?php endforeach;?></div>
+<div class="article-the-end"><span>THE END</span></div><footer class="article-end"><a class="category-badge" href="/?category=<?=$post['category_id']?>"><?=icon('grid')?> <?=e($post['category_name'])?> ›</a></footer>
+<div class="article-support"><p class="muted"><?=e(t('Enjoyed this post? Show your support.'))?></p><div class="article-social-actions"><button type="button" data-social="like" aria-pressed="<?=$social['liked']?'true':'false'?>"><?=icon('thumb')?><span><?=e(t('Like'))?> <span data-like-count><?=$social['likes']?></span></span></button><button type="button" data-share="/?post=<?=$postId?>"><?=icon('share')?><span><?=e(t('Share'))?></span></button><button type="button" data-social="bookmark" aria-pressed="<?=$social['bookmarked']?'true':'false'?>"><?=icon('star')?><span data-bookmark-label><?=e(t($social['bookmarked']?'Saved':'Save'))?></span></button></div></div>
+</article>
+<?php require __DIR__.'/comments-view.php';?>

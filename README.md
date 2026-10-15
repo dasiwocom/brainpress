@@ -180,3 +180,11 @@ Sessions use HttpOnly/SameSite cookies (Secure over HTTPS), rotate on sign-in, e
 Run node tests/auth-http.mjs (or npm run test:auth) for isolated authentication integration checks. PHP_BIN can select the PHP executable. The test starts a temporary localhost server/database and cleans its generated uploads; it never targets an existing site.
 
 Account and authentication routes share the standard public header, menu/search panels and bottom navigation. Desktop actions are Account, Theme and Administration; mobile Account access is a configurable bottom tab. Header menus contain exactly the configured menu entries, with no automatic account or administration links. Existing standard publishing tabs migrate from a bare plus to the writing icon once.
+
+Site information includes an optional Site address (HTTP(S) origin without a subdirectory). Leave it blank to infer the current host and port. Configure the public HTTPS origin behind reverse proxies. Page addresses, media Copy link and copied media Markdown include this origin; internal navigation and stored article Markdown are preserved.
+
+### Article interactions and bulk management
+
+Published articles include view, comment and like counts. Views are deduplicated per session for 30 minutes. Signing in enables likes, bookmarks and comments; bookmarks appear in Account. Comments support replies, 20 entries per page, a 2000-character limit and a 15-second posting interval. Authors can delete their own comments; administrators can delete any comment. Deleted comments retain a placeholder for reply context.
+
+Admin content lists have per-page selection and bulk actions. Article category/status changes and trash/restore are transactional. Categories containing any posts (including drafts/trash) cannot be deleted: move those posts from the post list first. Built-in pages, the selected homepage and the last active administrator retain their existing safeguards. No database reset is needed when upgrading.

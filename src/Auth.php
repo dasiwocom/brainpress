@@ -98,7 +98,7 @@ function authAction(string $action): void {
 function authorizeAction(string $action): void {
     if(in_array($action,['login','register','setup'],true))return;
     $user=requireUser();
-    if(in_array($action,['logout','password_change','save','upload','preview','media_list'],true))return;
+    if(in_array($action,['logout','password_change','save','upload','preview','media_list','post_like','post_bookmark','comment_create','comment_delete'],true))return;
     if(in_array($action,['trash','restore'],true)){$post=query('SELECT user_id FROM posts WHERE id=?',[(int)($_POST['id']??0)])->fetch();if(!$post||!ownsContent($post))json_response(['error'=>'You cannot edit this post.'],403);return;}
     if($user['role']!=='admin')json_response(['error'=>'Administrator access required.'],403);
 }

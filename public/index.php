@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require dirname(__DIR__) . '/src/bootstrap.php';
 ini_set('session.use_strict_mode','1');ini_set('session.use_only_cookies','1');
+if(getenv('BRAINPRESS_AUTH_DIR'))session_name('brainpress_'.substr(hash('sha256',getenv('BRAINPRESS_AUTH_DIR')),0,16));
 session_set_cookie_params(['httponly'=>true,'secure'=>!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off','samesite'=>'Lax','path'=>'/']);
 session_start();
 $_SESSION['csrf'] ??= bin2hex(random_bytes(24));
@@ -29,7 +30,7 @@ try {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!is_string($_POST['csrf']??null)||!hash_equals($_SESSION['csrf'], $_POST['csrf'])) json_response(['error' => 'This page expired. Refresh and try again.'], 403);
         $action = is_string($_POST['action']??null)?$_POST['action']:'';
-        authorizeAction($action);authAction($action);
+        authorizeAction($action);authAction($action);bulkAction($action);socialAction($action);
         $previewLayout=pagesAction($action);
         adminAction($action);
         if (in_array($action, ['trash', 'restore'], true)) {
@@ -50,12 +51,8 @@ try {
                 try{$parent=categoryParent($id,(int)($_POST['parent_id']??0));}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
                 query('UPDATE categories SET name=?,parent_id=? WHERE id=?',[$name,$parent,$id]);
             } else {
-                $target = (int)($_POST['target'] ?? 0);
-                $count = (int)query('SELECT COUNT(*) FROM posts WHERE category_id=?',[$id])->fetchColumn();
-                if ($count && ($target === $id || !query('SELECT id FROM categories WHERE id=?',[$target])->fetch())) json_response(['error'=>'Choose another category to receive all posts, including drafts and trash.'],422);
-                db()->beginTransaction();
-                try { if ($count) query('UPDATE posts SET category_id=? WHERE category_id=?',[$target,$id]); query('UPDATE categories SET parent_id=NULL WHERE parent_id=?',[$id]); query('DELETE FROM categories WHERE id=?',[$id]); db()->commit(); }
-                catch (Throwable $error) { db()->rollBack(); throw $error; }
+                try { deleteEmptyCategories([$id]); }
+                catch (InvalidArgumentException $error) { json_response(['error'=>$error->getMessage()],422); }
             }
             json_response(['ok'=>true]);
         }
@@ -171,6 +168,7 @@ try {
         if ($post && isset($_GET['post']) && $post['status'] !== 'published') $post = false;
         if (!$post) { http_response_code(404); $missing = true; }
     }
+    if ($post && isset($_GET['post']) && $_SERVER['REQUEST_METHOD']==='GET') recordPostView($post);
     if ($post) $post['tags_text'] = implode(', ',array_column(postTags((int)$post['id']),'name'));
     $editor = isset($_GET['write']) || (isset($_GET['edit']) && !$missing);
     $page = max(1, (int)($_GET['page'] ?? 1)); $limit = 12; $offset = ($page - 1) * $limit;

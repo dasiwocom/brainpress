@@ -41,6 +41,9 @@ function db(): PDO {
     $db->exec("CREATE TABLE IF NOT EXISTS users (id $id, username VARCHAR(40) NOT NULL UNIQUE, display_name VARCHAR(80) NOT NULL, password_hash VARCHAR(255) NOT NULL, role VARCHAR(12) NOT NULL, status VARCHAR(12) NOT NULL, session_version INT NOT NULL DEFAULT 1, created_at VARCHAR(19) NOT NULL)$suffix");
     $db->exec("CREATE TABLE IF NOT EXISTS auth_attempts (id $id, scope VARCHAR(20) NOT NULL, attempt_key VARCHAR(64) NOT NULL, ip_key VARCHAR(64) NOT NULL, created_at BIGINT NOT NULL)$suffix");
     foreach(['posts','media'] as $table){$ownerColumns=$mysql?$db->query('SHOW COLUMNS FROM '.$table)->fetchAll(PDO::FETCH_COLUMN):array_column($db->query('PRAGMA table_info('.$table.')')->fetchAll(),'name');if(!in_array('user_id',$ownerColumns,true))$db->exec('ALTER TABLE '.$table.' ADD COLUMN user_id INT NULL');}
+    if (!in_array('views', $columns, true)) $db->exec("ALTER TABLE posts ADD COLUMN views INT NOT NULL DEFAULT 0");
+    foreach(['post_likes','post_bookmarks'] as $table) $db->exec("CREATE TABLE IF NOT EXISTS $table (post_id INT NOT NULL,user_id INT NOT NULL,PRIMARY KEY(post_id,user_id),FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)$suffix");
+    $db->exec("CREATE TABLE IF NOT EXISTS comments (id $id,post_id INT NOT NULL,user_id INT NOT NULL,parent_id INT NULL,body TEXT NOT NULL,status VARCHAR(12) NOT NULL DEFAULT 'published',created_at VARCHAR(19) NOT NULL,FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE,FOREIGN KEY(user_id) REFERENCES users(id),FOREIGN KEY(parent_id) REFERENCES comments(id))$suffix");
     return $db;
 }
 function query(string $sql, array $params = []): PDOStatement {
@@ -98,3 +101,8 @@ require __DIR__.'/Footer.php';
 require __DIR__.'/Links.php';
 
 require __DIR__.'/Auth.php';
+
+require __DIR__.'/Urls.php';
+
+require __DIR__.'/Bulk.php';
+require __DIR__.'/Social.php';

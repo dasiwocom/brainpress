@@ -172,3 +172,16 @@ Validation: isolated post create/edit/draft/removal requests, cover URL safety, 
 
 - Give all inactive management entries the same text contrast.
 - Keep mobile administration table columns readable with a minimum table width and horizontal scrolling; categories no longer wrap character by character.
+
+### Mobile panel motion
+
+- Give mobile search and image panels synchronized entrance/exit motion and scrim fading, using non-spring easing inspired by the supplied Zibll mobile sheet.
+- Cancel superseded motion safely; defer focus/scroll restoration until exit completes and respect reduced motion.
+- Reserve image picker loading/pagination space to prevent geometry jumps while images arrive. Desktop and hover movement are unchanged.
+- Isolate test-instance session cookies when authentication storage is explicitly configured.
+
+### Complete administration addresses
+
+- Add a configurable public site origin, falling back to the current HTTP(S) request host and port.
+- Show complete page addresses and media URLs; add media Copy link and include the public origin in copied Markdown.
+- Preserve root-relative internal navigation, original article source and external URLs.

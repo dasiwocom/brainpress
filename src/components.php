@@ -1,6 +1,10 @@
 <?php
 function icon(string $name): string {
     $paths = [
+        'trash'=>'<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+        'eye'=>'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+        'thumb'=>'<path d="M7 10v11H3V10h4ZM7 20h11a2 2 0 0 0 2-2l1-7a2 2 0 0 0-2-2h-6l1-5c0-3-3-3-3-1L7 10"/>',
+        'star'=>'<path d="m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1Z"/>',
         'home'=>'<path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/>',
         'chat'=>'<path d="M21 11a8 8 0 0 1-8 8H6l-4 3V11a9 9 0 0 1 19 0Z"/><path d="M7 9h10M7 13h6"/>',
         'plus'=>'<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 7v10M7 12h10"/>',

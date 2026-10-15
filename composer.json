@@ -23,7 +23,8 @@
             "php tests/footer.php",
             "php tests/links.php",
             "php tests/admin-navigation.php",
-            "php tests/navigation-account.php"
+            "php tests/navigation-account.php",
+            "php tests/urls.php"
         ]
     }
 }
