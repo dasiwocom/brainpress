@@ -19,7 +19,7 @@ function validLayoutContext(string $context): bool {
     return preg_match('/^page:(\d+)$/',$context,$m) && query('SELECT id FROM pages WHERE id=?',[(int)$m[1]])->fetchColumn();
 }
 function layoutLink(bool $edit=true): string {
-    $params=array_intersect_key($_GET,array_flip(['post','category','tag','q','page_slug','page']));if($edit)$params['edit_layout']=1;
+    $params=array_intersect_key($_GET,array_flip(['post','category','categories','tag','q','page_slug','page','drafts']));if($edit)$params['edit_layout']=1;
     return '/'.($params?'?'.http_build_query($params):'');
 }
 function validateLayout(array $items,string $context): array {

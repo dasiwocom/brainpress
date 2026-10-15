@@ -19,7 +19,9 @@
             "php tests/admin.php",
             "php tests/i18n.php",
             "php tests/layout-menu.php",
-            "php tests/post-cover.php"
+            "php tests/post-cover.php",
+            "php tests/footer.php",
+            "php tests/links.php"
         ]
     }
 }

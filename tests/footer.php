@@ -1,0 +1,9 @@
+<?php
+putenv('BRAINPRESS_DSN=sqlite::memory:');require dirname(__DIR__).'/src/bootstrap.php';
+function footerCheck(bool $ok,string $label): void {if(!$ok)throw new RuntimeException($label);echo "PASS $label\n";}
+$default=footerSettings();footerCheck($default['show_name']&&$default['show_description']&&$default['links']===[],'Default footer preserves site information');
+$data=validateFooter(['show_name'=>false,'show_description'=>true,'copyright'=>'Copyright <script>test</script>','links'=>[['label'=>'Docs','url'=>'https://example.com/docs'],['label'=>'Plain text','url'=>'']]]);saveSetting('footer_settings',json_encode($data));footerCheck(footerSettings()===$data,'Footer settings persist independently');
+ob_start();renderFooterInfo('Site');$html=ob_get_clean();footerCheck(str_contains($html,'&lt;script&gt;')&&!str_contains($html,'<script>'),'Footer copyright is safely escaped');footerCheck(str_contains($html,'href="https://example.com/docs"')&&str_contains($html,'Plain text</span>'),'Footer supports links and plain text');footerCheck(!str_contains($html,'<strong>Site</strong>'),'Site name can be hidden independently');
+foreach(['javascript:alert(1)','//evil.test',"/bad\nheader"] as $url){try{validateFooter(['links'=>[['label'=>'Bad','url'=>$url]]]);throw new RuntimeException('Unsafe footer URL accepted');}catch(InvalidArgumentException){echo "PASS Unsafe footer URL rejected\n";}}
+try{validateFooter(['copyright'=>str_repeat('a',501)]);throw new RuntimeException('Text limit ignored');}catch(InvalidArgumentException){echo "PASS Copyright length limit enforced\n";}
+saveSetting('footer_settings',json_encode(validateFooter([])));ob_start();renderFooterInfo('Site');$html=ob_get_clean();footerCheck(str_contains($html,'footer-settings-inner" hidden'),'Empty global footer information is hidden');

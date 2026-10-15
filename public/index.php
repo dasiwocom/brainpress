@@ -120,7 +120,7 @@ try {
         }
         if($previewLayout===null)json_response(['error' => 'Unknown action.'], 400);
         parse_str(ltrim((string)($_POST['route']??''),'?'),$previewRoute);
-        $_GET=array_intersect_key($previewRoute,array_flip(['post','category','tag','q','page_slug','page'])); $_GET['edit_layout']=1;
+        $_GET=array_intersect_key($previewRoute,array_flip(['post','category','categories','tag','q','page_slug','page','drafts'])); $_GET['edit_layout']=1;
     }
 
     $customPage=null;$layoutContext='home';

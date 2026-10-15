@@ -47,6 +47,14 @@ function mediaLibrary(string $status='active'): array {
     return query('SELECT * FROM media WHERE status=? ORDER BY id DESC',[$status])->fetchAll();
 }
 function adminAction(string $action): bool {
+    linksAction($action);
+    if($action==='footer_save'){
+        $labels=$_POST['footer_label']??[];$urls=$_POST['footer_url']??[];
+        if(!is_array($labels)||!is_array($urls)||count($labels)>12)json_response(['error'=>'Use up to 12 footer links.'],422);
+        $links=[];foreach($labels as $i=>$label)$links[]=['label'=>$label,'url'=>$urls[$i]??''];
+        try{$footer=validateFooter(['show_name'=>isset($_POST['show_name']),'show_description'=>isset($_POST['show_description']),'copyright'=>$_POST['copyright']??'','links'=>$links]);}catch(InvalidArgumentException $error){json_response(['error'=>$error->getMessage()],422);}
+        saveSetting('footer_settings',json_encode($footer,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR));json_response(['ok'=>true,'message'=>'Footer saved.']);
+    }
     if ($action==='tabs_save') {
         $labels=$_POST['label']??[];$urls=$_POST['url']??[];$icons=$_POST['icon']??[];$enabled=$_POST['enabled']??[];$featured=$_POST['prominent']??[];
         if(!is_array($labels)||!is_array($urls)||!is_array($icons)||!is_array($enabled)||!is_array($featured)||count($labels)>5)json_response(['error'=>'Use up to 5 mobile tabs.'],422);

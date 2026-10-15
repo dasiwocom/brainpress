@@ -146,3 +146,17 @@ Deployment packaging is currently deferred. Existing archives do not include the
 The top editor image area sets an optional cover, stored separately in `posts.cover_url`. Paste a local image path or HTTP(S) image URL, or upload an image using the existing media pipeline. Covers can be changed or removed; toolbar image uploads still insert Markdown body images. External cover URLs are loaded by the browser and are not downloaded or inspected by the server.
 
 Feed cards prefer the explicit cover and otherwise use the first supported Markdown body image. Article pages show an explicitly configured cover above the title. Omitting `cover_url` from an update preserves the existing value; sending an empty string removes it. Existing databases gain the new column without rewriting article Markdown.
+
+## Layout customizer and footer settings
+
+Use **Edit layout** in the public header to customize the current page scope. Desktop displays a fixed left panel beside the page preview. On mobile, the existing menu drawer contains the widget panel while editing. Choose one of seven regions, add a supported widget, expand its settings, reorder or move it, and click **Save and apply**. Preview requests do not persist changes; leaving with unsaved changes requires confirmation. The scope label distinguishes a single custom page from shared article or archive layouts.
+
+**System → Footer settings** independently controls site-name and description visibility, copyright text, and up to twelve ordered text/link items. An empty URL produces plain text. Footer widgets retain their existing layout region. No extra Markdown widget is introduced.
+
+## Link management and image selection
+
+**Links** is an independent bookmark manager with only name, address, description, Logo URL and link categories. Add, edit, search, filter and delete links; link categories are separate from article categories, and deleting a link category preserves its links. Navigation menus are unaffected.
+
+The editor image toolbar opens a chooser with **My images** and **External images** tabs. Search and page through active media, select multiple images, upload, or enter one external URL per line. Desktop uses a centered modal and mobile uses a bottom sheet. Confirming inserts Markdown at the saved caret position; choosing a cover uses the same picker in single-image mode and keeps cover metadata separate. Trashed media is excluded.
+
+The desktop administration media library displays four cards per row, with narrower-screen fallbacks.

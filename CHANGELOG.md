@@ -90,3 +90,40 @@ Validation: isolated database requests verify region preview/save/reset, menu hi
 - Include the preceding quiet input-focus and consistent publication-field styling.
 
 Validation: isolated post create/edit/draft/removal requests, cover URL safety, raw Markdown preservation, fallback rendering, PHP/JavaScript checks and regression tests.
+
+## 2026-10-15 — Contextual customizer and footer settings
+
+- Add a public-header layout editing entry, desktop fixed widget panel and mobile menu-drawer widget controls.
+- Group controls by region and support widget configuration, region moves, ordering, live preview, save/apply, reset confirmation and unsaved-change protection.
+- Preserve category-list parameters on editor entry, preview and exit.
+- Add independent footer settings for site information visibility, copyright and ordered optional links.
+- Verify footer persistence and safe rendering, contextual editor output, preview isolation, layout persistence and existing regressions. Windows browser visual automation was stopped because URL-policy enforcement is unsupported for the current Firefox browser; visual and interaction acceptance remains pending.
+
+## 2026-10-15 — Media picker and links
+
+- Display four media-library cards per desktop row.
+- Add a simplified independent link manager: categories, name, address, description and logo; no advanced WordPress fields.
+- Add a Zibll-inspired My images / External images chooser, centered on desktop and presented as a mobile bottom sheet.
+- Support paged active-media search, upload, multi-selection and batch external URLs; cover selection remains single-image metadata.
+- Verify link CRUD/category retention/search/URL checks, media pagination/trash exclusion, editor markup, cover persistence and existing customizer/footer regressions.
+
+### Image chooser correction
+
+- Prevent internal tab clicks from dismissing the dialog after its size changes; require a pointer gesture that starts and ends on the backdrop.
+- Override the generic dialog button width and margin so search and upload retain the reference arrangement.
+- Use reference-style numbered selection corner badges, renumber after deselection, and insert in selection order; keep single-cover checks.
+- Add `node tests/image-picker.mjs` regression coverage for selection order and tab-resize dismissal. These are event/DOM-model tests, not browser visual acceptance.
+
+### Editor controls and navigation canvas
+
+- Hide the standalone cover URL field; retain cover metadata through the image chooser and keep removal available.
+- Replace mixed toolbar glyphs with the shared SVG icon system.
+- Normalize checkbox and radio rendering, including keyboard focus and forced-colors fallback.
+- Set the root canvas background and color scheme synchronously with theme initialization and manual changes; add early fallback styles to both page shells.
+- Verify cover persistence, picker behavior and theme initialization; actual navigation-flash acceptance remains pending.
+
+### Requested rollback and navigation cleanup
+
+- Revert the root-canvas/theme initialization experiment while preserving the existing theme switch.
+- Remove the public header Publish shortcut and desktop admin sidebar collapsing.
+- Keep the image picker, editor controls, contextual customizer, footer settings and simplified link manager.

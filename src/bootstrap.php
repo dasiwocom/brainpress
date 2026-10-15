@@ -33,6 +33,11 @@ function db(): PDO {
     }
     $categoryColumns=$mysql?$db->query('SHOW COLUMNS FROM categories')->fetchAll(PDO::FETCH_COLUMN):array_column($db->query('PRAGMA table_info(categories)')->fetchAll(),'name');
     if(!in_array('parent_id',$categoryColumns,true))$db->exec('ALTER TABLE categories ADD COLUMN parent_id INT NULL');
+    $db->exec("CREATE TABLE IF NOT EXISTS links (id $id, name VARCHAR(200) NOT NULL, url VARCHAR(1000) NOT NULL, description VARCHAR(500) NOT NULL, logo_url VARCHAR(1000) NOT NULL, created_at VARCHAR(19) NOT NULL, updated_at VARCHAR(19) NOT NULL)$suffix");
+    $db->exec("CREATE TABLE IF NOT EXISTS link_categories (id $id, name VARCHAR(80) NOT NULL UNIQUE, description VARCHAR(500) NOT NULL)$suffix");
+    $db->exec("CREATE TABLE IF NOT EXISTS link_category_relations (link_id INT NOT NULL,category_id INT NOT NULL,PRIMARY KEY(link_id,category_id),FOREIGN KEY(link_id) REFERENCES links(id) ON DELETE CASCADE,FOREIGN KEY(category_id) REFERENCES link_categories(id) ON DELETE CASCADE)$suffix");
+    $linkColumns=$mysql?$db->query('SHOW COLUMNS FROM links')->fetchAll(PDO::FETCH_COLUMN):array_column($db->query('PRAGMA table_info(links)')->fetchAll(),'name');
+    if(!in_array('logo_url',$linkColumns,true))$db->exec("ALTER TABLE links ADD COLUMN logo_url VARCHAR(1000) NOT NULL DEFAULT ''");
     return $db;
 }
 function query(string $sql, array $params = []): PDOStatement {
@@ -84,3 +89,7 @@ require __DIR__.'/Navigation.php';
 require __DIR__.'/MegaMenu.php';
 
 require __DIR__.'/PostCover.php';
+
+require __DIR__.'/Footer.php';
+
+require __DIR__.'/Links.php';
